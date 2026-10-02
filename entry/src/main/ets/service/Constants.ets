@@ -63,6 +63,8 @@ export class Constants {
   static readonly AS_SHOW_SLEEP_TIMER_PICKER: string = 'showSleepTimerPicker';
   static readonly AS_SHOW_SEARCH: string = 'showSearch';
   static readonly AS_SHOW_PLAY_HISTORY: string = 'showPlayHistory';
+  static readonly AS_SHOW_PLAYER_OVERLAY: string = 'showPlayerOverlay';
+  static readonly AS_SHOW_QUEUE_SHEET: string = 'showQueueSheet';
 
   // —— 受限色值（窗口层 API / Canvas 2D 不接受颜色资源引用，只能写字面量） ——
   // 仅能在此唯一定义，禁止其他文件重复声明
