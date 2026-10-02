@@ -1,6 +1,6 @@
 # BiliRadio
 
-> 🎨 **Vibecoding 作品** — 本项目主要由 AI 辅助（vibe-based）开发完成，是人类意图与 AI 协作的产物。
+> 🎨 **Vibecoding 作品** — 本项目完全由 AI 生成代码，开发者仅负责需求描述与测试迭代。
 
 一个运行在鸿蒙（HarmonyOS NEXT）上的 B 站音频播客应用——长期定位是「收听我关注的内容」。当前版本由 [taotie256 的 BiliMusic](https://github.com/taotie256/BiliMusic)（Apache 2.0）复制创建，功能与其保持一致：把 B 站视频当成「播客/歌」来听，支持后台播放、锁屏/实况窗控制、收藏夹同步。
 
