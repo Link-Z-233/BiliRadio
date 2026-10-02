@@ -68,11 +68,18 @@ export class Constants {
   // 仅能在此唯一定义，禁止其他文件重复声明
   static readonly QR_FG_COLOR: string = '#000000';
   static readonly QR_BG_COLOR: string = '#FFFFFF';
-  static readonly WIN_BG_DARK: string = '#1A1A3E';
+  static readonly WIN_BG_DARK: string = '#121214';
   static readonly WIN_BG_LIGHT: string = '#F6F6FA';
   static readonly BAR_CONTENT_DARK: string = '#FFFFFF';
   static readonly BAR_CONTENT_LIGHT: string = '#1A1A1A';
-  static readonly PROBE_DARK_RGB: number = 0x1A1A3E;
+  static readonly PROBE_DARK_RGB: number = 0x121214;
+
+  // —— 主题色（accent）：预设色板，深浅两态下均已校验对比度；仅接受色板内取值 ——
+  static readonly KEY_ACCENT_COLOR: string = 'accentColor';
+  static readonly AS_ACCENT_COLOR: string = 'accentColor';
+  static readonly ACCENT_DEFAULT: string = '#FB7299';
+  static readonly ACCENT_PRESETS: string[] =
+    ['#FB7299', '#4C8DFF', '#9C6BFF', '#2EC8B4', '#FF9F43', '#5FBF6B'];
 
   // —— 魔法数字 ——
   static readonly HISTORY_MAX: number = 200;

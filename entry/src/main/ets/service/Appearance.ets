@@ -15,10 +15,12 @@ import { Constants } from './Constants';
  * - 启动阶段（EntryAbility.onCreate）自行 getPreferencesSync 读取，不依赖 PlayerController 里的 AppStore.init 时机。
  * - 应用层通过 getApplicationContext().setColorMode() 生效，base/dark 资源目录自动匹配。
  * - 窗口层（窗口背景、状态栏/导航栏前景）按生效外观手动映射色值。
- * - AppStorage 同步：colorModeSetting（用户选择）、colorModeResolved（生效深浅）、coverBrightness（封面滤镜亮度）。
+ * - AppStorage 同步：colorModeSetting（用户选择）、colorModeResolved（生效深浅）、coverBrightness（封面滤镜亮度）、
+ *   accentColor（主题色，限预设色板，默认 B 站粉）。
  */
 export class Appearance {
   static readonly KEY_COLOR_MODE: string = Constants.KEY_COLOR_MODE;
+  static readonly KEY_ACCENT_COLOR: string = Constants.KEY_ACCENT_COLOR;
   static readonly MODE_FOLLOW_SYSTEM: number = 0;
   static readonly MODE_LIGHT: number = 1;
   static readonly MODE_DARK: number = 2;
@@ -47,6 +49,7 @@ export class Appearance {
       // 跟随系统：NOT_SET 下资源按系统当前模式解析，探测准确
       Appearance.refreshResolved(context, true);
     }
+    AppStorage.setOrCreate<string>(Constants.AS_ACCENT_COLOR, Appearance.readAccentColor(context));
     Appearance.syncAppStorage();
   }
 
@@ -126,6 +129,43 @@ export class Appearance {
     } catch (err) {
       hilog.error(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'applyWindowColors failed');
     }
+  }
+
+  // 设置页选择主题色：持久化 + AppStorage 即时生效（仅接受预设色板内取值）
+  static setAccentColor(color: string, context: common.Context): void {
+    if (!Appearance.isValidAccent(color)) {
+      return;
+    }
+    try {
+      const options: preferences.Options = { name: Constants.STORE_NAME };
+      const prefs: preferences.Preferences = preferences.getPreferencesSync(context, options);
+      prefs.putSync(Appearance.KEY_ACCENT_COLOR, color);
+      prefs.flushSync();
+    } catch (err) {
+      hilog.warn(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'persist accentColor failed');
+    }
+    AppStorage.setOrCreate<string>(Constants.AS_ACCENT_COLOR, color);
+  }
+
+  private static readAccentColor(context: common.Context): string {
+    try {
+      const options: preferences.Options = { name: Constants.STORE_NAME };
+      const prefs: preferences.Preferences = preferences.getPreferencesSync(context, options);
+      const value: preferences.ValueType =
+        prefs.getSync(Appearance.KEY_ACCENT_COLOR, Constants.ACCENT_DEFAULT);
+      const color: string = value as string;
+      if (Appearance.isValidAccent(color)) {
+        return color;
+      }
+      return Constants.ACCENT_DEFAULT;
+    } catch (err) {
+      // 首次安装（无值）或存储不可用：回退默认 B 站粉
+      return Constants.ACCENT_DEFAULT;
+    }
+  }
+
+  private static isValidAccent(color: string): boolean {
+    return typeof color === 'string' && Constants.ACCENT_PRESETS.indexOf(color) >= 0;
   }
 
   private static readUserMode(context: common.Context): number {
