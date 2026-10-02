@@ -8,7 +8,7 @@
       {
         "name": "default",
         "targetSdkVersion": "26.0.0",
-        "compatibleSdkVersion": "24",
+        "compatibleSdkVersion": "6.1.1(24)",
         "runtimeOS": "HarmonyOS",
         "buildOption": {
           "strictMode": {
