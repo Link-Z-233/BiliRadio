@@ -125,6 +125,9 @@ export class SubscriptionStore {
   }
 
   // 刷新单个订阅：按类型分发拉取，统一存为新集在前，并更新刷新时间与最新发布时间
+  // ponytail: 契约——四类源统一「近期一页」语义（up=30/fav=20/season=20/series=30），
+  // saveEpisodes 整体覆盖写，sub_cache 只存近期条目；单集播放按需 fetchVideoInfo+取流；
+  // 超过页大小的新集会少计（播客语义可接受）；SourcePage 滚动追加更老条目时只进内存不写缓存
   static async refreshSubscription(sub: Subscription): Promise<BiliVideo[]> {
     let items: BiliVideo[] = [];
     if (sub.type === Subscription.TYPE_UP) {
@@ -134,9 +137,10 @@ export class SubscriptionStore {
       const result: FolderFetchResult = await BiliService.fetchFolderVideos(sub.sourceId, 0, undefined, 1);
       items = result.items;
     } else if (sub.type === Subscription.TYPE_SEASON) {
-      items = await BiliService.fetchSeasonVideos(sub.ownerMid, sub.sourceId);
+      // 倒序取最新一页；sort_reverse=true 行为需冒烟确认，若不被支持回退末页策略
+      items = await BiliService.fetchSeasonVideos(sub.ownerMid, sub.sourceId, 1, true);
     } else if (sub.type === Subscription.TYPE_SERIES) {
-      items = await BiliService.fetchSeriesVideos(sub.ownerMid, sub.sourceId);
+      items = await BiliService.fetchSeriesVideos(sub.ownerMid, sub.sourceId, 1, true);
     } else {
       throw new Error(`未知订阅类型: ${sub.type}`);
     }

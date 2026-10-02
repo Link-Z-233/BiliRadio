@@ -439,17 +439,18 @@ export class BiliService {
     return items;
   }
 
-  static async fetchSeasonVideos(mid: number, seasonId: number): Promise<BiliVideo[]> {
+  // maxPages/sortReverse：默认值保持旧行为（全量、正序）；订阅刷新传 (1, true) 只取最新一页
+  static async fetchSeasonVideos(mid: number, seasonId: number,
+    maxPages: number = 200, sortReverse: boolean = false): Promise<BiliVideo[]> {
     const items: BiliVideo[] = [];
     const ps: number = 20;
-    const maxPages: number = 200;
     let pn: number = 1;
     while (pn <= maxPages) {
       const mixinKey: string = await BiliService.fetchMixinKey();
       const params: Record<string, string> = {
         'mid': mid.toString(),
         'season_id': seasonId.toString(),
-        'sort_reverse': 'false',
+        'sort_reverse': sortReverse ? 'true' : 'false',
         'page_num': pn.toString(),
         'page_size': ps.toString(),
       };
@@ -481,15 +482,18 @@ export class BiliService {
         break;
       }
       pn++;
-      await sleep(1500);
+      if (pn <= maxPages) {
+        await sleep(1500);
+      }
     }
     return items;
   }
 
-  static async fetchSeriesVideos(mid: number, seriesId: number): Promise<BiliVideo[]> {
+  // maxPages/sortReverse：默认值保持旧行为（全量、正序）；订阅刷新传 (1, true) 只取最新一页
+  static async fetchSeriesVideos(mid: number, seriesId: number,
+    maxPages: number = 200, sortReverse: boolean = false): Promise<BiliVideo[]> {
     const items: BiliVideo[] = [];
     const ps: number = 30;
-    const maxPages: number = 200;
     let pn: number = 1;
     while (pn <= maxPages) {
       const mixinKey: string = await BiliService.fetchMixinKey();
@@ -497,7 +501,7 @@ export class BiliService {
         'mid': mid.toString(),
         'series_id': seriesId.toString(),
         'only_mid': 'true',
-        'sort_reverse': 'false',
+        'sort_reverse': sortReverse ? 'true' : 'false',
         'pn': pn.toString(),
         'ps': ps.toString(),
       };
@@ -529,7 +533,9 @@ export class BiliService {
         break;
       }
       pn++;
-      await sleep(1500);
+      if (pn <= maxPages) {
+        await sleep(1500);
+      }
     }
     return items;
   }
@@ -745,7 +751,9 @@ export class BiliService {
         emptyRounds = 0;
       }
       pn++;
-      await sleep(1500);
+      if (pn <= maxPages) {
+        await sleep(1500);
+      }
     }
     return result;
   }

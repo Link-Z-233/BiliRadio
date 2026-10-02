@@ -27,7 +27,11 @@ export class Subscription {
   }
 
   // 新集计数：pubdate 晚于 lastSeenAt 的剧集数（纯函数，可独立运行验证）
+  // lastSeenAt=0 表示从未进入过源详情，全部视为旧内容，不显示 NEW
   static countNew(items: BiliVideo[], lastSeenAt: number): number {
+    if (lastSeenAt === 0) {
+      return 0;
+    }
     let count: number = 0;
     for (let i = 0; i < items.length; i++) {
       if (items[i].pubdate > lastSeenAt) {
