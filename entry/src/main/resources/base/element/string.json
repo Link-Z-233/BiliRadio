@@ -1,0 +1,20 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "module description"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "description"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "BiliRadio"
+    },
+    {
+      "name": "reason_background",
+      "value": "音乐在后台或锁屏时继续播放"
+    }
+  ]
+}

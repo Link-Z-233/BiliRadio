@@ -1,0 +1,42 @@
+/node_modules
+/oh_modules
+/local.properties
+/.idea
+**/build
+/.hvigor
+/.cache
+/.qoder
+/.arts
+/.codegenie
+/.appanalyzer
+/.merkle-snapshot.json
+.cxx
+/.clangd
+/.clang-format
+/.clang-tidy
+**/.test
+
+# 签名材料与证书（严禁提交到版本控制）
+*.p12
+*.cer
+*.p7b
+*.jks
+*.keystore
+signing/
+*.local
+*.local.json5
+
+# 根 build-profile.json5 为 git 追踪文件（signingConfigs 恒为空数组）：
+# 签名材料只写入被上方 *.local.json5 规则忽略的外置文件（signing.local.json5 /
+# build-profile.local.json5），由 hvigorfile.ts 构建时动态加载；
+# .git/hooks/pre-commit 会拦截任何把签名材料写入根文件的提交。
+
+# 本地配置与敏感环境变量
+.env
+.env.*
+
+# IDE / 系统临时文件
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db

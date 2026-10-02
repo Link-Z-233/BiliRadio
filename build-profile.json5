@@ -1,0 +1,44 @@
+// 工程级构建配置（git 追踪文件）：signingConfigs 恒为空数组，严禁写入任何签名材料。
+// 签名材料只存放于被 .gitignore 忽略的外置文件（signing.local.json5 / build-profile.local.json5），
+// 由 hvigorfile.ts 构建时动态加载（官方签名服务 FAQ 方式二）；.git/hooks/pre-commit 会拦截含签名材料的提交。
+{
+  "app": {
+    "signingConfigs": [],
+    "products": [
+      {
+        "name": "default",
+        "targetSdkVersion": "26.0.0",
+        "compatibleSdkVersion": "24",
+        "runtimeOS": "HarmonyOS",
+        "buildOption": {
+          "strictMode": {
+            "caseSensitiveCheck": true,
+            "useNormalizedOHMUrl": true
+          }
+        }
+      }
+    ],
+    "buildModeSet": [
+      {
+        "name": "debug"
+      },
+      {
+        "name": "release"
+      }
+    ]
+  },
+  "modules": [
+    {
+      "name": "entry",
+      "srcPath": "./entry",
+      "targets": [
+        {
+          "name": "default",
+          "applyToProducts": [
+            "default"
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,1376 @@
+import { AudioPlayer } from './AudioPlayer';
+import { BiliService, DownloadProgressCallback, FolderFetchResult } from './BiliService';
+import { DownloadManager } from './DownloadManager';
+import { BiliSession } from './BiliSession';
+import { SecureStore } from './SecureStore';
+import { AppStore, PlaylistSnapshot } from './AppStore';
+import { MediaSession } from './MediaSession';
+import { BiliVideo } from '../model/BiliVideo';
+import { UnfavoriteRecord } from '../model/UnfavoriteRecord';
+import { PlayHistoryItem } from '../model/PlayHistoryItem';
+
+import { FavFolder } from '../model/FavFolder';
+import { SelectedSeason } from '../model/SelectedSeason';
+import { BusinessError } from '@kit.BasicServicesKit';
+import { hilog } from '@kit.PerformanceAnalysisKit';
+import { Constants } from './Constants';
+import { NetUtil } from './NetUtil';
+
+export enum PlayMode {
+  SEQUENTIAL = 0,
+  RANDOM = 1,
+  REPEAT_ONE = 2,
+  REVERSE = 3
+}
+
+export const PLAYBACK_RATES: number[] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
+
+export const PLAY_MODES: PlayMode[] = [
+  PlayMode.SEQUENTIAL,
+  PlayMode.RANDOM,
+  PlayMode.REPEAT_ONE,
+  PlayMode.REVERSE
+];
+
+export class PlayerController {
+  private static instance: PlayerController | undefined = undefined;
+
+  static getInstance(): PlayerController {
+    if (PlayerController.instance === undefined) {
+      PlayerController.instance = new PlayerController();
+    }
+    return PlayerController.instance;
+  }
+
+  playlist: BiliVideo[] = [];
+  playlistVersion: number = 0;
+  currentIndex: number = -1;
+  playMode: PlayMode = PlayMode.SEQUENTIAL;
+  playbackRate: number = 1.0;
+  isPreparing: boolean = false;
+  isPlaying: boolean = false;
+  isPrepared: boolean = false;
+  currentTime: number = 0;
+  duration: number = 0;
+  statusMsg: string = '登录后在"歌曲源"页选择文件夹生成歌单';
+  pendingSeekMs: number = 0;
+  playWhenReady: boolean = true;
+  private pausedByUser: boolean = false;
+  // 打断前是否处于播放意图：audioInterrupt INTERRUPT 时记录，END_INTERRUPT 时据此决定是否续播，仅播放会话内有效
+  private resumeAfterInterrupt: boolean = false;
+
+  private player: AudioPlayer = new AudioPlayer();
+  private mediaSession: MediaSession = MediaSession.getInstance();
+  private inited: boolean = false;
+  private lastSaveTime: number = 0;
+  // 上次向 UI 广播进度时所在的秒数，用于进度 tick 秒级节流
+  private lastEmittedSec: number = -1;
+  private uiListeners: Array<() => void> = [];
+  unfavoriteHistory: UnfavoriteRecord[] = [];
+  historyVersion: number = 0;
+  playHistory: PlayHistoryItem[] = [];
+  playHistoryVersion: number = 0;
+  goToPlayerTab: (() => void) | undefined = undefined;
+  confirmCellularDownload: (() => Promise<boolean>) | undefined = undefined;
+  private syncing: boolean = false;
+  private loadToken: number = 0;
+
+  static modeLabel(mode: PlayMode): string {
+    if (mode === PlayMode.SEQUENTIAL) {
+      return '顺序播放';
+    }
+    if (mode === PlayMode.RANDOM) {
+      return '随机播放';
+    }
+    if (mode === PlayMode.REPEAT_ONE) {
+      return '单曲循环';
+    }
+    return '倒序播放';
+  }
+
+  static rateLabel(rate: number): string {
+    let label: string = rate.toFixed(2);
+    if (label.endsWith('0')) {
+      label = label.slice(0, -1);
+    }
+    return `${label}x`;
+  }
+
+  subscribe(fn: () => void): void {
+    if (this.uiListeners.indexOf(fn) < 0) {
+      this.uiListeners.push(fn);
+    }
+  }
+
+  private emitUi(): void {
+    for (let i = 0; i < this.uiListeners.length; i++) {
+      this.uiListeners[i]();
+    }
+  }
+
+  // 供 UI 层主动请求刷新（如设置开关切换后即时作用于封面/头像等渲染入口）
+  refreshUi(): void {
+    this.emitUi();
+  }
+
+  async init(): Promise<void> {
+    if (this.inited) {
+      return;
+    }
+    this.inited = true;
+    try {
+      await AppStore.init();
+
+      this.unfavoriteHistory = AppStore.loadUnfavoriteHistory();
+      this.historyVersion++;
+
+      this.playHistory = AppStore.loadPlayHistoryFile();
+      this.playHistoryVersion++;
+
+      BiliService.ensureBuvid().catch((): void => {});
+
+      const cookie: string = await SecureStore.load(Constants.COOKIE_ALIAS);
+      if (cookie !== '') {
+        BiliSession.getInstance().setCookieString(cookie);
+        BiliService.fetchNav().catch((): void => {
+          hilog.warn(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'nav verify failed on restore');
+        });
+      }
+
+      const modeNum: number = AppStore.getNumber(Constants.KEY_PLAY_MODE, 0);
+      if (modeNum === 1) {
+        this.playMode = PlayMode.RANDOM;
+      } else if (modeNum === 2) {
+        this.playMode = PlayMode.REPEAT_ONE;
+      } else if (modeNum === 3) {
+        this.playMode = PlayMode.REVERSE;
+      } else {
+        this.playMode = PlayMode.SEQUENTIAL;
+      }
+
+      const savedRate: number = AppStore.getNumber(Constants.KEY_PLAYBACK_RATE, 1.0);
+      if (PLAYBACK_RATES.indexOf(savedRate) >= 0) {
+        this.playbackRate = savedRate;
+      }
+      this.player.setRate(this.playbackRate);
+
+      const snapshot: PlaylistSnapshot = AppStore.loadPlaylistFile();
+      let autoStartIndex: number = -1;
+      let autoStartPos: number = 0;
+      if (snapshot.items.length > 0) {
+        this.playlist = snapshot.items;
+        this.playlistVersion++;
+        const restoreIndex: number = AppStore.getNumber(Constants.KEY_LAST_INDEX, snapshot.lastIndex);
+        const restorePos: number = AppStore.getNumber(Constants.KEY_LAST_POS_MS, snapshot.lastPosMs);
+        if (restoreIndex >= 0 && restoreIndex < snapshot.items.length) {
+          this.currentIndex = restoreIndex;
+          this.pendingSeekMs = restorePos;
+          this.currentTime = restorePos;
+          const item: BiliVideo = snapshot.items[restoreIndex];
+          this.duration = item.duration > 0 ? item.duration * 1000 : 0;
+          this.statusMsg = '已恢复上次进度，点击播放继续';
+          autoStartIndex = restoreIndex;
+          autoStartPos = restorePos;
+        }
+      }
+
+      this.player.onStateChange = (state: string): void => {
+        this.onPlayerState(state);
+      };
+      this.player.onTimeUpdate = (time: number): void => {
+        if (this.isPreparing) {
+          return;
+        }
+        this.onPlayerTime(time);
+      };
+      this.player.onError = (msg: string): void => {
+        this.isPreparing = false;
+        this.isPrepared = false;
+        this.isPlaying = false;
+        this.statusMsg = `播放错误: ${msg}`;
+        this.mediaSession.updateState(false, this.currentTime);
+        this.mediaSession.stopBackground();
+        this.emitUi();
+      };
+      this.player.onAudioInterrupt = (eventType: 'INTERRUPT' | 'END_INTERRUPT'): void => {
+        if (eventType === 'INTERRUPT') {
+          // isPlaying 在打断瞬间可能已被系统先置 false，改判「用户是否主动暂停过」更可靠
+          this.resumeAfterInterrupt = this.isPlaying || !this.pausedByUser;
+          hilog.info(Constants.LOG_DOMAIN, Constants.LOG_TAG,
+            'audioInterrupt INTERRUPT resumeAfterInterrupt=%{public}d', this.resumeAfterInterrupt ? 1 : 0);
+        } else {
+          const resumeEnabled: boolean = AppStore.getNumber(Constants.KEY_INTERRUPT_RESUME, 0) === 1;
+          hilog.info(Constants.LOG_DOMAIN, Constants.LOG_TAG,
+            'audioInterrupt END_INTERRUPT enabled=%{public}d resumeFlag=%{public}d',
+            resumeEnabled ? 1 : 0, this.resumeAfterInterrupt ? 1 : 0);
+          if (resumeEnabled && this.resumeAfterInterrupt) {
+            this.playRequest();
+          }
+          this.resumeAfterInterrupt = false;
+        }
+      };
+
+      this.mediaSession.init(
+        (): void => { this.playRequest(); },
+        (): void => { this.pauseRequest(); },
+        (): void => { this.next(); },
+        (): void => { this.prev(); },
+        (time: number): void => { this.seek(time); },
+      ).catch((): void => {});
+
+      if (autoStartIndex >= 0 && AppStore.getNumber(Constants.KEY_AUTO_PLAY_ON_START, 1) === 1) {
+        this.statusMsg = '自动继续播放上次进度';
+        this.playIndex(autoStartIndex, autoStartPos).catch((): void => {});
+      }
+
+      this.syncWithFolders(false).catch((): void => {});
+
+      BiliService.cleanCache('');
+    } catch (e) {
+      hilog.warn(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'init failed');
+    }
+    this.emitUi();
+  }
+
+  private onPlayerState(state: string): void {
+    hilog.info(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'player state: %{public}s, playWhenReady=%{public}d',
+      state, this.playWhenReady ? 1 : 0);
+    if (state === 'prepared') {
+      this.isPrepared = true;
+      this.isPreparing = false;
+      this.duration = this.player.duration;
+      if (this.playWhenReady) {
+        this.player.play();
+      } else {
+        if (this.pendingSeekMs > 0 && this.pendingSeekMs < this.duration) {
+          this.currentTime = this.pendingSeekMs;
+          this.player.seek(this.pendingSeekMs);
+        }
+        this.pendingSeekMs = 0;
+        this.statusMsg = '已加载完成，处于暂停状态';
+        this.mediaSession.updateState(false, this.currentTime);
+      }
+    } else if (state === 'playing') {
+      this.isPlaying = true;
+      this.isPreparing = false;
+      if (this.pendingSeekMs > 0) {
+        const seekTo: number = this.pendingSeekMs;
+        this.pendingSeekMs = 0;
+        if (seekTo < this.duration) {
+          this.player.seek(seekTo);
+        }
+      }
+      this.statusMsg = '';
+      this.mediaSession.updateState(true, this.currentTime);
+      this.mediaSession.startBackground();
+      // 播放历史：仅在 AVPlayer 真实出声（playing，含暂停后恢复）时记录
+      if (this.currentIndex >= 0 && this.currentIndex < this.playlist.length) {
+        this.recordOnPlaying(this.playlist[this.currentIndex]);
+      }
+    } else if (state === 'paused') {
+      this.isPlaying = false;
+      this.persistProgress();
+      this.mediaSession.updateState(false, this.currentTime);
+    } else if (state === 'completed') {
+      this.isPlaying = false;
+      this.mediaSession.updateState(false, this.currentTime);
+      this.handleCompleted();
+    } else if (state === 'idle' || state === 'stopped') {
+      this.isPrepared = false;
+      this.isPlaying = false;
+      this.mediaSession.updateState(false, this.currentTime);
+      this.mediaSession.stopBackground();
+    }
+    this.emitUi();
+  }
+
+  private handleCompleted(): void {
+    if (this.isPreparing) {
+      return;
+    }
+    if (this.pausedByUser) {
+      this.statusMsg = '播放结束';
+      return;
+    }
+    if (this.playMode === PlayMode.REPEAT_ONE) {
+      this.player.play();
+      return;
+    }
+    this.next();
+  }
+
+  private onPlayerTime(time: number): void {
+    this.currentTime = time;
+    const now: number = Date.now();
+    if (now - this.lastSaveTime > Constants.PROGRESS_SAVE_INTERVAL_MS) {
+      this.lastSaveTime = now;
+      this.persistProgress();
+      this.mediaSession.updateState(this.isPlaying, time);
+    }
+    // 进度 UI（时间文本/进度条）只需秒级刷新：仅秒变化时广播，
+    // 避免 100ms 级播放 tick 每次全量通知 4 个订阅页面
+    const sec: number = Math.floor(time / 1000);
+    if (sec !== this.lastEmittedSec) {
+      this.lastEmittedSec = sec;
+      this.emitUi();
+    }
+  }
+
+  private persistProgress(): void {
+    if (this.currentIndex >= 0 && this.currentIndex < this.playlist.length) {
+      AppStore.putNumber(Constants.KEY_LAST_INDEX, this.currentIndex);
+      AppStore.putNumber(Constants.KEY_LAST_POS_MS, this.currentTime);
+    }
+  }
+
+  private makeProgressCb(): DownloadProgressCallback {
+    const token: number = this.loadToken;
+    let lastPercent: number = -1;
+    return (received: number, total: number): void => {
+      if (token !== this.loadToken) {
+        return;
+      }
+      if (total > 0) {
+        const percent: number = Math.floor(received / total * 100);
+        if (percent !== lastPercent) {
+          lastPercent = percent;
+          this.statusMsg = `正在加载音频... ${percent}%`;
+          this.emitUi();
+        }
+      } else {
+        this.statusMsg = `正在加载音频... ${(received / Constants.BYTES_PER_MB).toFixed(1)}MB`;
+        this.emitUi();
+      }
+    };
+  }
+
+  async loadPlaylistAndPlay(items: BiliVideo[], startIndex: number): Promise<void> {
+    // 追加去重：过滤掉 bvid 已在歌单中的项，避免重复
+    const toAdd: BiliVideo[] = [];
+    let skipped: number = 0;
+    for (let i = 0; i < items.length; i++) {
+      if (this.indexOfBvid(items[i].bvid) >= 0) {
+        skipped++;
+      } else {
+        toAdd.push(items[i]);
+      }
+    }
+
+    // 歌单为空：整体生成并开始播放（保持首次生成的随机/顺序起点行为）
+    if (this.playlist.length === 0) {
+      this.playlist = toAdd.slice(0);
+      this.playlistVersion++;
+      this.shuffleHistory = [];
+      this.forwardHistory = [];
+      this.currentIndex = -1;
+      this.isPrepared = false;
+      this.isPlaying = false;
+      this.currentTime = 0;
+      this.duration = 0;
+      AppStore.savePlaylistFile(this.playlist, startIndex, 0);
+      if (toAdd.length > 0) {
+        this.statusMsg = `已添加 ${toAdd.length} 首，开始播放`;
+        this.emitUi();
+        await this.playIndex(startIndex, 0);
+      } else {
+        this.statusMsg = '所选内容均已在歌单中';
+        this.emitUi();
+      }
+      return;
+    }
+
+    // 歌单非空：追加到末尾，不打断当前播放
+    for (let i = 0; i < toAdd.length; i++) {
+      this.playlist.push(toAdd[i]);
+    }
+    this.playlistVersion++;
+    AppStore.savePlaylistFile(this.playlist, this.currentIndex, this.currentTime);
+    let msg: string = `已追加 ${toAdd.length} 首到歌单末尾`;
+    if (skipped > 0) {
+      msg += `，去重 ${skipped} 首`;
+    }
+    this.statusMsg = msg;
+    this.emitUi();
+  }
+
+  async playIndex(index: number, seekMs: number, fromNav: boolean = false): Promise<void> {
+    this.resumeAfterInterrupt = false;
+    if (index < 0 || index >= this.playlist.length) {
+      return;
+    }
+    if (!fromNav) {
+      const currentBvid: string = this.currentIndex >= 0 && this.currentIndex < this.playlist.length
+        ? this.playlist[this.currentIndex].bvid : '';
+      if (currentBvid !== this.playlist[index].bvid) {
+        this.forwardHistory = [];
+      }
+    }
+    this.currentIndex = index;
+    const item: BiliVideo = this.playlist[index];
+    this.pendingSeekMs = seekMs;
+    this.currentTime = seekMs;
+    this.duration = item.duration > 0 ? item.duration * 1000 : 0;
+    this.isPreparing = true;
+    this.isPrepared = false;
+    this.isPlaying = false;
+    this.playWhenReady = true;
+    this.pausedByUser = false;
+    this.statusMsg = '正在解析...';
+    this.emitUi();
+    this.loadToken++;
+    const token: number = this.loadToken;
+    try {
+      // 离线优先：已下载的歌曲直接播本地文件，不联网、不被临时缓存清理
+      const localPath: string = DownloadManager.getInstance().resolveLocalPath(item.bvid);
+      if (localPath !== '') {
+        item.audioUrl = localPath;
+        await this.player.setSource(localPath);
+        if (token !== this.loadToken) {
+          return;
+        }
+        this.mediaSession.updateTrack(item.bvid, item.title,
+          item.duration > 0 ? item.duration * 1000 : 0, item.cover, item.ownerName);
+        AppStore.savePlaylistFile(this.playlist, this.currentIndex, 0);
+      } else {
+        // 仅 Wi-Fi 下载门控：开关开且非 Wi-Fi 时，须经 UI 层确认后才放行本次缓存下载
+        const wifiOnly: boolean = AppStore.getNumber(Constants.KEY_WIFI_ONLY_DOWNLOAD, 0) === 1;
+        if (wifiOnly && !(await NetUtil.isWifi())) {
+          let confirmed: boolean = false;
+          if (this.confirmCellularDownload !== undefined) {
+            try {
+              confirmed = await this.confirmCellularDownload();
+            } catch (e) {
+              confirmed = false;
+            }
+          }
+          if (!confirmed) {
+            this.isPreparing = false;
+            this.statusMsg = '当前非 Wi-Fi 网络，已取消播放';
+            this.emitUi();
+            return;
+          }
+        }
+        const preferLow: boolean = AppStore.getNumber(Constants.KEY_PREFER_LOW_BITRATE, 0) === 1;
+        const video: BiliVideo = await BiliService.resolveAndDownload(item.bvid, this.makeProgressCb(), preferLow);
+        if (token !== this.loadToken) {
+          return;
+        }
+        item.audioUrl = video.audioUrl;
+        if (video.cid > 0) {
+          item.cid = video.cid;
+        }
+        if (video.ownerName !== '') {
+          item.ownerMid = video.ownerMid;
+          item.ownerName = video.ownerName;
+          item.ownerFace = video.ownerFace;
+          this.emitUi();
+        }
+        if (video.view > 0) {
+          item.view = video.view;
+        }
+        if (video.pubdate > 0) {
+          item.pubdate = video.pubdate;
+        }
+        if (video.desc !== '') {
+          item.desc = video.desc;
+        }
+        if (video.view > 0 || video.pubdate > 0 || video.desc !== '') {
+          this.emitUi();
+        }
+        await this.player.setSource(video.audioUrl);
+        if (token !== this.loadToken) {
+          return;
+        }
+        this.mediaSession.updateTrack(item.bvid, item.title,
+          item.duration > 0 ? item.duration * 1000 : 0, item.cover, item.ownerName);
+        AppStore.savePlaylistFile(this.playlist, this.currentIndex, 0);
+        BiliService.cleanCache(video.audioUrl);
+      }
+    } catch (err) {
+      if (token !== this.loadToken) {
+        return;
+      }
+      const error = err as BusinessError;
+      this.isPreparing = false;
+      this.statusMsg = `播放失败: ${error.message}`;
+      this.emitUi();
+    }
+  }
+
+  private randomIndex(): number {
+    const len: number = this.playlist.length;
+    if (len <= 1) {
+      return 0;
+    }
+    let target: number = Math.floor(Math.random() * len);
+    while (target === this.currentIndex) {
+      target = Math.floor(Math.random() * len);
+    }
+    return target;
+  }
+
+  private shuffleHistory: string[] = [];
+  private forwardHistory: string[] = [];
+
+  private indexOfBvid(bvid: string): number {
+    for (let i = 0; i < this.playlist.length; i++) {
+      if (this.playlist[i].bvid === bvid) {
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  private pushShuffleHistory(): void {
+    if (this.currentIndex >= 0 && this.currentIndex < this.playlist.length) {
+      const bvid: string = this.playlist[this.currentIndex].bvid;
+      if (bvid !== '') {
+        this.shuffleHistory.push(bvid);
+        if (this.shuffleHistory.length > Constants.HISTORY_MAX) {
+          this.shuffleHistory.shift();
+        }
+      }
+    }
+  }
+
+  private pushForwardHistory(): void {
+    if (this.currentIndex >= 0 && this.currentIndex < this.playlist.length) {
+      const bvid: string = this.playlist[this.currentIndex].bvid;
+      if (bvid !== '') {
+        this.forwardHistory.push(bvid);
+        if (this.forwardHistory.length > Constants.HISTORY_MAX) {
+          this.forwardHistory.shift();
+        }
+      }
+    }
+  }
+
+  private takeShufflePrevIndex(): number {
+    const currentBvid: string = this.currentIndex >= 0 && this.currentIndex < this.playlist.length
+      ? this.playlist[this.currentIndex].bvid : '';
+    while (this.shuffleHistory.length > 0) {
+      const bvid: string = this.shuffleHistory.pop() ?? '';
+      if (bvid === '' || bvid === currentBvid) {
+        continue;
+      }
+      const idx: number = this.indexOfBvid(bvid);
+      if (idx >= 0) {
+        return idx;
+      }
+    }
+    return -1;
+  }
+
+  private takeForwardIndex(): number {
+    while (this.forwardHistory.length > 0) {
+      const bvid: string = this.forwardHistory.pop() ?? '';
+      if (bvid === '') {
+        continue;
+      }
+      const idx: number = this.indexOfBvid(bvid);
+      if (idx >= 0) {
+        return idx;
+      }
+    }
+    return -1;
+  }
+
+  async next(): Promise<void> {
+    if (this.playlist.length === 0) {
+      return;
+    }
+    if (this.playMode === PlayMode.RANDOM && !this.isPreparing) {
+      const redo: number = this.takeForwardIndex();
+      if (redo >= 0) {
+        this.pushShuffleHistory();
+        await this.playIndex(redo, 0, true);
+        return;
+      }
+    }
+    if (!this.isPreparing) {
+      this.pushShuffleHistory();
+    }
+    let target: number = 0;
+    if (this.playMode === PlayMode.RANDOM) {
+      target = this.randomIndex();
+    } else if (this.playMode === PlayMode.REVERSE) {
+      target = (this.currentIndex - 1 + this.playlist.length) % this.playlist.length;
+    } else {
+      target = (this.currentIndex + 1) % this.playlist.length;
+    }
+    await this.playIndex(target, 0, false);
+  }
+
+  async prev(): Promise<void> {
+    if (this.playlist.length === 0) {
+      return;
+    }
+    if (this.isPrepared && this.currentTime > Constants.PREV_SEEK_THRESHOLD_MS) {
+      this.player.seek(0);
+      return;
+    }
+    if (this.playMode === PlayMode.RANDOM && !this.isPreparing) {
+      const target: number = this.takeShufflePrevIndex();
+      this.pushForwardHistory();
+      if (target >= 0) {
+        await this.playIndex(target, 0, true);
+      } else {
+        await this.playIndex((this.currentIndex - 1 + this.playlist.length) % this.playlist.length, 0, true);
+      }
+      return;
+    }
+    let target: number = 0;
+    if (this.playMode === PlayMode.REVERSE) {
+      target = (this.currentIndex + 1) % this.playlist.length;
+    } else {
+      target = (this.currentIndex - 1 + this.playlist.length) % this.playlist.length;
+    }
+    await this.playIndex(target, 0, true);
+  }
+
+  async togglePlay(): Promise<void> {
+    if (this.isPreparing) {
+      if (this.playWhenReady) {
+        await this.pauseRequest();
+      } else {
+        await this.playRequest();
+      }
+      return;
+    }
+    if (this.isPlaying) {
+      await this.pauseRequest();
+    } else {
+      await this.playRequest();
+    }
+  }
+
+  async playRequest(): Promise<void> {
+    if (this.isPreparing) {
+      this.playWhenReady = true;
+      this.pausedByUser = false;
+      this.statusMsg = '加载完成后将自动播放';
+      this.emitUi();
+      return;
+    }
+    this.pausedByUser = false;
+    if (this.isPrepared) {
+      await this.player.play();
+    } else if (this.currentIndex >= 0) {
+      await this.playIndex(this.currentIndex, this.pendingSeekMs);
+    } else if (this.playlist.length > 0) {
+      await this.playIndex(0, 0);
+    }
+  }
+
+  async pauseRequest(): Promise<void> {
+    this.resumeAfterInterrupt = false;
+    if (this.isPreparing) {
+      this.playWhenReady = false;
+      this.pausedByUser = true;
+      await this.player.pause();
+      this.isPlaying = false;
+      this.statusMsg = '加载完成后将保持暂停';
+      this.emitUi();
+      return;
+    }
+    if (this.isPlaying) {
+      this.pausedByUser = true;
+      await this.player.pause();
+      this.isPlaying = false;
+      this.persistProgress();
+    }
+  }
+
+  seek(ms: number): void {
+    this.currentTime = ms;
+    if (this.isPrepared) {
+      this.player.seek(ms);
+    } else {
+      this.pendingSeekMs = ms;
+    }
+    this.emitUi();
+  }
+
+  setPlayMode(mode: PlayMode): void {
+    if (mode !== PlayMode.SEQUENTIAL && mode !== PlayMode.RANDOM &&
+      mode !== PlayMode.REPEAT_ONE && mode !== PlayMode.REVERSE) {
+      return;
+    }
+    this.playMode = mode;
+    AppStore.putNumber(Constants.KEY_PLAY_MODE, this.playMode);
+    this.statusMsg = PlayerController.modeLabel(this.playMode);
+    this.emitUi();
+  }
+
+  setPlaybackRate(rate: number): void {
+    if (PLAYBACK_RATES.indexOf(rate) < 0) {
+      return;
+    }
+    this.playbackRate = rate;
+    AppStore.putNumber(Constants.KEY_PLAYBACK_RATE, rate);
+    this.player.setRate(rate);
+    this.statusMsg = `倍速 ${PlayerController.rateLabel(rate)}`;
+    this.emitUi();
+  }
+
+  async addToPlaylist(bvid: string): Promise<void> {
+    const trimmed: string = bvid.trim();
+    if (trimmed === '') {
+      this.statusMsg = '请输入BV号';
+      this.emitUi();
+      return;
+    }
+    if (this.isPreparing) {
+      this.statusMsg = '正在准备中，请稍候';
+      this.emitUi();
+      return;
+    }
+    for (let i = 0; i < this.playlist.length; i++) {
+      if (this.playlist[i].bvid === trimmed) {
+        this.statusMsg = '该歌曲已在歌单中';
+        this.emitUi();
+        await this.playIndex(i, 0);
+        return;
+      }
+    }
+    this.isPreparing = true;
+    this.statusMsg = '正在解析...';
+    this.emitUi();
+    try {
+      const video: BiliVideo = await BiliService.fetchVideoInfo(trimmed);
+      this.playlist.push(video);
+      this.playlistVersion++;
+      AppStore.savePlaylistFile(this.playlist, this.currentIndex, this.currentTime);
+      this.isPreparing = false;
+      this.statusMsg = `已添加「${video.title}」`;
+      this.emitUi();
+      await this.playIndex(this.playlist.length - 1, 0);
+    } catch (err) {
+      const error = err as BusinessError;
+      this.isPreparing = false;
+      this.statusMsg = `解析失败: ${error.message}`;
+      this.emitUi();
+    }
+  }
+
+  // 播放已下载的本地歌曲：以本地文件加入歌单并立即播放（离线，不联网）
+  async playDownloadedSong(video: BiliVideo): Promise<void> {
+    if (this.isPreparing) {
+      this.statusMsg = '正在准备中，请稍候';
+      this.emitUi();
+      return;
+    }
+    const idx: number = this.indexOfBvid(video.bvid);
+    if (idx >= 0) {
+      await this.playIndex(idx, 0);
+      return;
+    }
+    this.playlist.push(video);
+    this.playlistVersion++;
+    AppStore.savePlaylistFile(this.playlist, this.currentIndex, this.currentTime);
+    this.statusMsg = `已添加「${video.title}」`;
+    this.emitUi();
+    await this.playIndex(this.playlist.length - 1, 0);
+  }
+
+  async unfavoriteCurrent(): Promise<void> {
+    if (this.currentIndex < 0 || this.currentIndex >= this.playlist.length) {
+      return;
+    }
+    const item: BiliVideo = this.playlist[this.currentIndex];
+    if (item.folderIds.length === 0) {
+      this.statusMsg = '该视频不在收藏夹中，无法取消收藏';
+      this.emitUi();
+      return;
+    }
+    if (!BiliSession.getInstance().isLogged()) {
+      this.statusMsg = '取消收藏需要先登录';
+      this.emitUi();
+      return;
+    }
+    this.statusMsg = '正在取消收藏...';
+    this.emitUi();
+    try {
+      await BiliService.unfavorite(item.aid, item.folderIds);
+      const folderCount: number = item.folderIds.length;
+      this.pushHistory(UnfavoriteRecord.fromVideo(item, Date.now()));
+      this.playlist.splice(this.currentIndex, 1);
+      this.playlistVersion++;
+      if (this.playlist.length === 0) {
+        this.currentIndex = -1;
+        this.isPrepared = false;
+        this.isPlaying = false;
+        this.currentTime = 0;
+        this.duration = 0;
+        await this.player.resetPlayer();
+        this.statusMsg = '已取消收藏，歌单已空';
+        AppStore.savePlaylistFile(this.playlist, -1, 0);
+      } else {
+        let targetIndex: number = this.currentIndex;
+        let restoreForward: boolean = false;
+        if (this.playMode === PlayMode.RANDOM) {
+          const restore: number = this.takeForwardIndex();
+          if (restore >= 0) {
+            targetIndex = restore;
+            restoreForward = true;
+          }
+        }
+        if (targetIndex < 0 || targetIndex >= this.playlist.length) {
+          targetIndex = 0;
+        }
+        hilog.info(Constants.LOG_DOMAIN, Constants.LOG_TAG,
+          'unfavorite target=%{public}s strategy=%{public}s',
+          this.playlist[targetIndex].bvid, restoreForward ? 'forward' : 'successor');
+        this.statusMsg = `已从 ${folderCount} 个收藏夹移除`;
+        AppStore.savePlaylistFile(this.playlist, targetIndex, 0);
+        await this.playIndex(targetIndex, 0, restoreForward);
+      }
+      this.emitUi();
+    } catch (err) {
+      const error = err as BusinessError;
+      this.statusMsg = `取消收藏失败: ${error.message}`;
+      this.emitUi();
+    }
+  }
+
+  private findInFolders(folders: FavFolder[], mediaId: number): FavFolder | undefined {
+    for (let i = 0; i < folders.length; i++) {
+      if (folders[i].mediaId === mediaId) {
+        return folders[i];
+      }
+    }
+    return undefined;
+  }
+
+  private buildFolderCounts(folders: FavFolder[], selectedIds: number[]): string {
+    const parts: string[] = [];
+    for (let i = 0; i < folders.length; i++) {
+      if (selectedIds.indexOf(folders[i].mediaId) >= 0) {
+        parts.push(`${folders[i].mediaId}=${folders[i].count}`);
+      }
+    }
+    parts.sort();
+    return parts.join(';');
+  }
+
+  private buildSeasonCounts(seasons: SelectedSeason[]): string {
+    const parts: string[] = [];
+    for (let i = 0; i < seasons.length; i++) {
+      parts.push(`${seasons[i].mid}_${seasons[i].seasonId}=${seasons[i].count}`);
+    }
+    parts.sort();
+    return parts.join(';');
+  }
+
+  private clearSyncHint(): void {
+    if (this.statusMsg === '正在同步，请稍候') {
+      this.statusMsg = '';
+      this.emitUi();
+    }
+  }
+
+  async syncWithFolders(manual: boolean): Promise<void> {
+    if (this.syncing) {
+      this.statusMsg = '正在同步，请稍候';
+      this.emitUi();
+      return;
+    }
+    if (!BiliSession.getInstance().isLogged()) {
+      if (manual) {
+        this.statusMsg = '同步需要先登录';
+        this.emitUi();
+      }
+      return;
+    }
+    let selectedIds: number[] = [];
+    try {
+      selectedIds = JSON.parse(AppStore.getString(Constants.KEY_SELECTED_FOLDER_IDS, '[]')) as number[];
+    } catch (e) {
+      selectedIds = [];
+    }
+    let selectedSeasons: SelectedSeason[] = [];
+    try {
+      const arr: Record<string, Object>[] = JSON.parse(AppStore.getString(Constants.KEY_SELECTED_SEASONS, '[]')) as Record<string, Object>[];
+      for (let i = 0; i < arr.length; i++) {
+        selectedSeasons.push(SelectedSeason.fromRecord(arr[i]));
+      }
+    } catch (e) {
+      selectedSeasons = [];
+    }
+    if (selectedIds.length === 0 && selectedSeasons.length === 0) {
+      if (manual) {
+        this.statusMsg = '请先在"歌曲源"页勾选收藏夹或UP主合集';
+        this.emitUi();
+      }
+      return;
+    }
+    if (Date.now() < AppStore.getNumber(Constants.KEY_SYNC_BLOCKED_UNTIL, 0)) {
+      if (manual) {
+        this.statusMsg = 'B站接口风控中，请约10分钟后再试';
+        this.emitUi();
+      }
+      return;
+    }
+    this.syncing = true;
+    if (manual) {
+      this.statusMsg = '正在同步...';
+      this.emitUi();
+    }
+    try {
+      const folders: FavFolder[] = selectedIds.length > 0 ? await BiliService.fetchMyFolders() : [];
+      hilog.info(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'sync: selected=%{public}s, folders=%{public}d',
+        selectedIds.join(','), folders.length);
+      const countsStr: string = this.buildFolderCounts(folders, selectedIds) + '|' + this.buildSeasonCounts(selectedSeasons);
+      const savedCounts: string = AppStore.getString(Constants.KEY_SYNC_FOLDER_COUNTS, '');
+      if (!manual && savedCounts !== '' && countsStr === savedCounts) {
+        this.syncing = false;
+        this.clearSyncHint();
+        return;
+      }
+      const map: Map<string, BiliVideo> = new Map<string, BiliVideo>();
+      let allOk: boolean = true;
+      for (let i = 0; i < selectedIds.length; i++) {
+        const found: FavFolder | undefined = this.findInFolders(folders, selectedIds[i]);
+        if (found === undefined) {
+          hilog.warn(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'sync: folder %{public}d not found in list', selectedIds[i]);
+          allOk = false;
+          continue;
+        }
+        const folder: FavFolder = found;
+        if (manual) {
+          this.statusMsg = `正在同步「${folder.title}」...`;
+          this.emitUi();
+        }
+        let result: FolderFetchResult;
+        try {
+          const progress = manual ? (fetched: number, total: number): void => {
+            const totalText: string = total > 0 ? `${total}` : '?';
+            this.statusMsg = `正在同步「${folder.title}」${fetched}/${totalText}...`;
+            this.emitUi();
+          } : undefined;
+          result = await BiliService.fetchFolderVideos(folder.mediaId, folder.count, progress);
+        } catch (err) {
+          const errMsg: string = (err as Error).message;
+          hilog.warn(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'sync: folder %{public}d fetch failed: %{public}s',
+            selectedIds[i], errMsg);
+          if (errMsg.indexOf('412') >= 0) {
+            AppStore.putNumber(Constants.KEY_SYNC_BLOCKED_UNTIL, Date.now() + 10 * 60 * 1000);
+            break;
+          }
+          allOk = false;
+          if (!manual) {
+            break;
+          }
+          continue;
+        }
+        if (result.partialMsg !== '') {
+          hilog.warn(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'sync: folder %{public}d partial: %{public}s',
+            selectedIds[i], result.partialMsg);
+          if (result.partialMsg.indexOf('412') >= 0) {
+            AppStore.putNumber(Constants.KEY_SYNC_BLOCKED_UNTIL, Date.now() + 10 * 60 * 1000);
+            break;
+          }
+          allOk = false;
+        }
+        hilog.info(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'sync: folder %{public}d fetched %{public}d items (skipped %{public}d)',
+          folder.mediaId, result.items.length, result.skipped);
+        for (let j = 0; j < result.items.length; j++) {
+          const v: BiliVideo = result.items[j];
+          const ex: BiliVideo | undefined = map.get(v.bvid);
+          if (ex !== undefined) {
+            ex.folderIds.push(folder.mediaId);
+          } else {
+            v.folderIds.push(folder.mediaId);
+            map.set(v.bvid, v);
+          }
+        }
+      }
+      // 同步勾选的 UP主合集：拉取内容并合并进 map（以 mid_seasonId 作为来源标记）
+      for (let i = 0; i < selectedSeasons.length; i++) {
+        const season: SelectedSeason = selectedSeasons[i];
+        if (manual) {
+          this.statusMsg = `正在同步合集「${season.title}」...`;
+          this.emitUi();
+        }
+        let list: BiliVideo[];
+        try {
+          list = await BiliService.fetchSeasonVideos(season.mid, season.seasonId);
+        } catch (err) {
+          const errMsg: string = (err as Error).message;
+          hilog.warn(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'sync: season %{public}s fetch failed: %{public}s',
+            season.key(), errMsg);
+          if (errMsg.indexOf('412') >= 0) {
+            AppStore.putNumber(Constants.KEY_SYNC_BLOCKED_UNTIL, Date.now() + 10 * 60 * 1000);
+            break;
+          }
+          allOk = false;
+          if (!manual) {
+            break;
+          }
+          continue;
+        }
+        hilog.info(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'sync: season %{public}s fetched %{public}d items',
+          season.key(), list.length);
+        for (let j = 0; j < list.length; j++) {
+          const v: BiliVideo = list[j];
+          const ex: BiliVideo | undefined = map.get(v.bvid);
+          if (ex !== undefined) {
+            if (ex.seasonKeys.indexOf(season.key()) < 0) {
+              ex.seasonKeys.push(season.key());
+            }
+          } else {
+            v.seasonKeys.push(season.key());
+            map.set(v.bvid, v);
+          }
+        }
+      }
+      if (map.size === 0) {
+        this.syncing = false;
+        if (manual) {
+          this.statusMsg = '同步失败，请稍后再试';
+          this.emitUi();
+        } else {
+          this.clearSyncHint();
+        }
+        return;
+      }
+      const removalsAllowed: boolean = allOk;
+      const kept: BiliVideo[] = [];
+      let removedCount: number = 0;
+      for (let i = 0; i < this.playlist.length; i++) {
+        const item: BiliVideo = this.playlist[i];
+        const ex: BiliVideo | undefined = map.get(item.bvid);
+        if (ex !== undefined) {
+          item.folderIds = ex.folderIds.slice(0);
+          item.seasonKeys = ex.seasonKeys.slice(0);
+          kept.push(item);
+        } else if ((item.folderIds.length === 0 && item.seasonKeys.length === 0) || !removalsAllowed) {
+          kept.push(item);
+        } else {
+          removedCount++;
+        }
+      }
+      const playlistBvids: Set<string> = new Set<string>();
+      for (let i = 0; i < this.playlist.length; i++) {
+        playlistBvids.add(this.playlist[i].bvid);
+      }
+      const adds: BiliVideo[] = [];
+      map.forEach((v: BiliVideo, bvid: string) => {
+        if (!playlistBvids.has(bvid)) {
+          adds.push(v);
+        }
+      });
+      if (adds.length === 0 && removedCount === 0) {
+        hilog.info(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'sync: no changes, allOk=%{public}d, mapSize=%{public}d, playlist=%{public}d',
+          allOk ? 1 : 0, map.size, this.playlist.length);
+        if (allOk) {
+          AppStore.putString(Constants.KEY_SYNC_FOLDER_COUNTS, countsStr);
+        }
+        this.syncing = false;
+        if (manual) {
+          this.statusMsg = allOk ? '无变化' : '部分内容获取失败，未能完成校验，请稍后再试';
+          this.emitUi();
+        }
+        return;
+      }
+      const playingBvid: string = this.currentIndex >= 0 && this.currentIndex < this.playlist.length
+        ? this.playlist[this.currentIndex].bvid : '';
+      const wasPlaying: boolean = this.isPlaying || this.isPrepared;
+      this.playlist = kept.concat(adds);
+      this.playlistVersion++;
+      let newIndex: number = -1;
+      for (let i = 0; i < this.playlist.length; i++) {
+        if (this.playlist[i].bvid === playingBvid) {
+          newIndex = i;
+          break;
+        }
+      }
+      this.syncing = false;
+      const summary: string = allOk
+        ? `同步完成：新增 ${adds.length}，移除 ${removedCount}`
+        : `同步完成：新增 ${adds.length}（部分内容获取失败，移除未执行，可稍后再同步）`;
+      if (allOk) {
+        AppStore.putString(Constants.KEY_SYNC_FOLDER_COUNTS, countsStr);
+      }
+      if (newIndex >= 0) {
+        this.currentIndex = newIndex;
+        AppStore.putNumber(Constants.KEY_LAST_INDEX, newIndex);
+        this.statusMsg = summary;
+        AppStore.savePlaylistFile(this.playlist, this.currentIndex, this.currentTime);
+        this.emitUi();
+      } else if (wasPlaying && this.playlist.length > 0) {
+        const target: number = Math.min(this.currentIndex < 0 ? 0 : this.currentIndex, this.playlist.length - 1);
+        this.statusMsg = summary;
+        this.emitUi();
+        await this.playIndex(target, 0);
+      } else {
+        this.currentIndex = this.playlist.length > 0
+          ? Math.min(this.currentIndex < 0 ? 0 : this.currentIndex, this.playlist.length - 1) : -1;
+        this.statusMsg = summary;
+        AppStore.savePlaylistFile(this.playlist, this.currentIndex, 0);
+        this.emitUi();
+      }
+    } catch (err) {
+      this.syncing = false;
+      const error = err as BusinessError;
+      hilog.warn(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'sync folders failed: %{public}s', error.message);
+      if (manual) {
+        this.statusMsg = `同步失败: ${error.message}`;
+        this.emitUi();
+      } else {
+        this.clearSyncHint();
+      }
+    }
+  }
+
+  private pushHistory(record: UnfavoriteRecord): void {
+    for (let i = this.unfavoriteHistory.length - 1; i >= 0; i--) {
+      if (this.unfavoriteHistory[i].bvid === record.bvid) {
+        this.unfavoriteHistory.splice(i, 1);
+      }
+    }
+    this.unfavoriteHistory.unshift(record);
+    if (this.unfavoriteHistory.length > Constants.HISTORY_MAX) {
+      this.unfavoriteHistory = this.unfavoriteHistory.slice(0, Constants.HISTORY_MAX);
+    }
+    this.historyVersion++;
+    AppStore.saveUnfavoriteHistory(this.unfavoriteHistory);
+  }
+
+  async refavoriteFromHistory(index: number): Promise<void> {
+    if (index < 0 || index >= this.unfavoriteHistory.length) {
+      return;
+    }
+    if (!BiliSession.getInstance().isLogged()) {
+      this.statusMsg = '恢复收藏需要先登录';
+      this.emitUi();
+      return;
+    }
+    const record: UnfavoriteRecord = this.unfavoriteHistory[index];
+    this.statusMsg = '正在恢复收藏...';
+    this.emitUi();
+    try {
+      await BiliService.favorite(record.aid, record.folderIds);
+      this.unfavoriteHistory.splice(index, 1);
+      this.historyVersion++;
+      AppStore.saveUnfavoriteHistory(this.unfavoriteHistory);
+      this.statusMsg = `已恢复收藏「${record.title}」`;
+      this.emitUi();
+    } catch (err) {
+      const error = err as BusinessError;
+      this.statusMsg = `恢复收藏失败: ${error.message}`;
+      this.emitUi();
+    }
+  }
+
+  clearUnfavoriteHistory(): void {
+    this.unfavoriteHistory = [];
+    this.historyVersion++;
+    AppStore.saveUnfavoriteHistory(this.unfavoriteHistory);
+    this.statusMsg = '已清空取消收藏历史';
+    this.emitUi();
+  }
+
+  private resolveSourceType(video: BiliVideo): number {
+    if (video.folderIds.length > 0) {
+      return PlayHistoryItem.SOURCE_FAVORITE;
+    }
+    if (video.seasonKeys.length > 0) {
+      return PlayHistoryItem.SOURCE_SEASON;
+    }
+    return PlayHistoryItem.SOURCE_LOCAL;
+  }
+
+  private recordOnPlaying(video: BiliVideo): void {
+    try {
+      const item: PlayHistoryItem = PlayHistoryItem.fromVideo(
+        video, this.resolveSourceType(video), Date.now());
+      for (let i = this.playHistory.length - 1; i >= 0; i--) {
+        if (this.playHistory[i].bvid === item.bvid) {
+          this.playHistory.splice(i, 1);
+        }
+      }
+      this.playHistory.unshift(item);
+      if (this.playHistory.length > Constants.HISTORY_MAX) {
+        this.playHistory = this.playHistory.slice(0, Constants.HISTORY_MAX);
+      }
+      this.playHistoryVersion++;
+      hilog.info(Constants.LOG_DOMAIN, Constants.LOG_TAG,
+        'recordOnPlaying bvid=%{public}s source=%{public}d total=%{public}d',
+        item.bvid, item.sourceType, this.playHistory.length);
+      setTimeout((): void => {
+        try {
+          AppStore.savePlayHistoryFile(this.playHistory);
+        } catch (e) {
+          hilog.warn(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'savePlayHistoryFile failed');
+        }
+      }, 0);
+    } catch (e) {
+      hilog.warn(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'recordOnPlaying failed');
+    }
+  }
+
+  clearPlayHistory(): void {
+    this.playHistory = [];
+    this.playHistoryVersion++;
+    try {
+      AppStore.savePlayHistoryFile(this.playHistory);
+    } catch (e) {
+      hilog.warn(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'clearPlayHistory save failed');
+    }
+    this.emitUi();
+  }
+
+  searchLibrary(keyword: string): BiliVideo[] {
+    const trimmed: string = keyword.trim();
+    if (trimmed === '') {
+      return [];
+    }
+    const kw: string = trimmed.length > Constants.SEARCH_MAX_INPUT_LEN
+      ? trimmed.slice(0, Constants.SEARCH_MAX_INPUT_LEN) : trimmed;
+    const lowerKw: string = kw.toLowerCase();
+    const songs: BiliVideo[] = this.playlist.slice(0);
+
+    const seen: Set<string> = new Set<string>();
+    const results: BiliVideo[] = [];
+    for (let i = 0; i < songs.length; i++) {
+      const v: BiliVideo = songs[i];
+      if (v.bvid === '' || seen.has(v.bvid)) {
+        continue;
+      }
+      const titleHit: boolean = v.title.toLowerCase().indexOf(lowerKw) >= 0;
+      const ownerHit: boolean = v.ownerName.toLowerCase().indexOf(lowerKw) >= 0;
+      if (titleHit || ownerHit) {
+        seen.add(v.bvid);
+        results.push(v);
+      }
+    }
+    hilog.info(Constants.LOG_DOMAIN, Constants.LOG_TAG,
+      'searchLibrary keyword=%{public}s hits=%{public}d', kw, results.length);
+    return results;
+  }
+
+  // 播放搜索结果：已在歌单则直接播放，不在则追加到歌单末尾后播放（本地已下载走离线路径，否则联网取流）
+  async playFromLibraryResult(video: BiliVideo): Promise<void> {
+    await this.playDownloadedSong(video);
+  }
+
+  setCoPlayWithOthers(enabled: boolean): void {
+    AppStore.putNumber(Constants.KEY_CO_PLAY_WITH_OTHERS, enabled ? 1 : 0);
+    hilog.info(Constants.LOG_DOMAIN, Constants.LOG_TAG,
+      'setCoPlayWithOthers mode=%{public}s', enabled ? 'share' : 'independent');
+    this.player.applyInterruptMode(enabled);
+  }
+
+  async addManyToPlaylist(bvids: string[]): Promise<void> {
+    const unique: string[] = [];
+    for (let i = 0; i < bvids.length; i++) {
+      const bv: string = bvids[i].trim();
+      if (bv === '' || unique.indexOf(bv) >= 0) {
+        continue;
+      }
+      unique.push(bv);
+    }
+    if (unique.length === 0) {
+      this.statusMsg = '请输入BV号';
+      this.emitUi();
+      return;
+    }
+    if (this.isPreparing) {
+      this.statusMsg = '正在准备中，请稍候';
+      this.emitUi();
+      return;
+    }
+    let added: number = 0;
+    let skipped: number = 0;
+    let failed: number = 0;
+    const firstAddedIndex: number[] = [];
+    for (let i = 0; i < unique.length; i++) {
+      this.statusMsg = `正在解析 ${i + 1}/${unique.length}...`;
+      this.emitUi();
+      let exists: boolean = false;
+      for (let j = 0; j < this.playlist.length; j++) {
+        if (this.playlist[j].bvid === unique[i]) {
+          exists = true;
+          break;
+        }
+      }
+      if (exists) {
+        skipped++;
+        continue;
+      }
+      try {
+        const video: BiliVideo = await BiliService.fetchVideoInfo(unique[i]);
+        this.playlist.push(video);
+        firstAddedIndex.push(this.playlist.length - 1);
+        this.playlistVersion++;
+        added++;
+        AppStore.savePlaylistFile(this.playlist, this.currentIndex, this.currentTime);
+      } catch (err) {
+        failed++;
+      }
+      await new Promise<void>((resolve) => {
+        setTimeout(() => { resolve(); }, 300);
+      });
+    }
+    let summary: string = `添加完成：新增 ${added} 首`;
+    if (skipped > 0) {
+      summary += `，已在歌单 ${skipped}`;
+    }
+    if (failed > 0) {
+      summary += `，失败 ${failed}`;
+    }
+    this.statusMsg = summary;
+    this.emitUi();
+    if (firstAddedIndex.length > 0) {
+      await this.playIndex(firstAddedIndex[0], 0);
+    }
+  }
+
+  async removeSelectedFromPlaylist(bvids: string[]): Promise<void> {
+    if (bvids.length === 0) {
+      return;
+    }
+    const removingCurrent: boolean = this.currentIndex >= 0 &&
+      this.playlist.length > 0 &&
+      bvids.indexOf(this.playlist[this.currentIndex].bvid) >= 0;
+    let removedBeforeCurrent: number = 0;
+    for (let i = 0; i < this.currentIndex && i < this.playlist.length; i++) {
+      if (bvids.indexOf(this.playlist[i].bvid) >= 0) {
+        removedBeforeCurrent++;
+      }
+    }
+    const kept: BiliVideo[] = this.playlist.filter((v: BiliVideo): boolean => bvids.indexOf(v.bvid) < 0);
+    const removedCount: number = this.playlist.length - kept.length;
+    if (removedCount === 0) {
+      return;
+    }
+    this.playlist = kept;
+    this.playlistVersion++;
+    if (this.playlist.length === 0) {
+      this.currentIndex = -1;
+      this.isPrepared = false;
+      this.isPlaying = false;
+      this.currentTime = 0;
+      this.duration = 0;
+      await this.player.resetPlayer();
+      this.statusMsg = `已从歌单移除 ${removedCount} 首，歌单已空`;
+      AppStore.savePlaylistFile(this.playlist, -1, 0);
+    } else if (removingCurrent) {
+      this.isPrepared = false;
+      this.isPlaying = false;
+      let target: number = this.currentIndex - removedBeforeCurrent;
+      if (target >= this.playlist.length) {
+        target = 0;
+      }
+      this.statusMsg = `已从歌单移除 ${removedCount} 首`;
+      AppStore.savePlaylistFile(this.playlist, target, 0);
+      await this.playIndex(target, 0);
+    } else {
+      this.currentIndex -= removedBeforeCurrent;
+      this.statusMsg = `已从歌单移除 ${removedCount} 首`;
+      AppStore.savePlaylistFile(this.playlist, this.currentIndex, this.currentTime);
+    }
+    this.emitUi();
+  }
+}
