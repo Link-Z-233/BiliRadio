@@ -1,0 +1,9 @@
+{
+  "routerMap": [
+    {
+      "name": "sourcePage",
+      "pageSourceFile": "src/main/ets/pages/SourcePage.ets",
+      "buildFunction": "SourcePageBuilder"
+    }
+  ]
+}

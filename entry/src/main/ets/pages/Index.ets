@@ -154,7 +154,7 @@ struct Index {
 
       Column() {
         Navigation(this.navPathStack) {
-          HomePage()
+          HomePage({ navPathStack: this.navPathStack })
         }
         .hideTitleBar(true)
         .mode(NavigationMode.Stack)

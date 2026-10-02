@@ -3,6 +3,7 @@ import { BiliVideo } from '../model/BiliVideo';
 import { SubscriptionStore } from '../service/SubscriptionStore';
 import { Constants } from '../service/Constants';
 import { CoverThumb } from '../component/CoverThumb';
+import { AddSubscriptionSheet } from './AddSubscriptionSheet';
 
 class SubRow {
   sub: Subscription = new Subscription();
@@ -49,9 +50,11 @@ export struct HomePage {
   @StorageProp('accentColor') accentColor: string = Constants.ACCENT_DEFAULT;
   @State refreshing: boolean = false;
   @State rowCount: number = 0;
+  @State showAddSheet: boolean = false;
   private subs: Subscription[] = [];
   private provider: SubDataSource = new SubDataSource();
   private refreshingNow: boolean = false;
+  navPathStack: NavPathStack = new NavPathStack();
 
   aboutToAppear(): void {
     this.subs = SubscriptionStore.loadSubscriptions();
@@ -131,6 +134,37 @@ export struct HomePage {
     this.rebuild();
   }
 
+  private addSubscription(sub: Subscription): void {
+    let max: number = 0;
+    for (let i = 0; i < this.subs.length; i++) {
+      if (this.subs[i].sortOrder > max) {
+        max = this.subs[i].sortOrder;
+      }
+    }
+    sub.sortOrder = max + 1;
+    this.subs.push(sub);
+    SubscriptionStore.saveSubscriptions(this.subs);
+    this.rebuild();
+    // 新源立即刷一次，拿到封面/剧集后再刷新列表
+    SubscriptionStore.refreshSubscription(sub).then((): void => {
+      SubscriptionStore.saveSubscriptions(this.subs);
+      this.rebuild();
+    }).catch((): void => {
+    });
+  }
+
+  @Builder
+  private addSheetBuilder() {
+    AddSubscriptionSheet({
+      onSubscribed: (sub: Subscription): void => {
+        this.addSubscription(sub);
+      },
+      onDismiss: (): void => {
+        this.showAddSheet = false;
+      }
+    })
+  }
+
   @Builder
   private subRowItem(row: SubRow) {
     Row() {
@@ -167,7 +201,9 @@ export struct HomePage {
     .borderRadius(14)
     .backgroundColor($r('app.color.card_background'))
     .onClick(() => {
-      // ponytail: 源详情 SourcePage 第4步接入
+      this.navPathStack.pushPathByName('sourcePage', row.sub.id, (popInfo: PopInfo) => {
+        this.rebuild();
+      });
     })
     .bindContextMenu((): void => {
       this.subRowMenu(row);
@@ -228,7 +264,7 @@ export struct HomePage {
         .backgroundColor($r('app.color.card_background'))
         .justifyContent(FlexAlign.Center)
         .onClick(() => {
-          // ponytail: 添加订阅半模态第4步接入
+          this.showAddSheet = true;
         })
         Row() {
           SymbolGlyph($r('sys.symbol.ellipsis_circle'))
@@ -270,5 +306,9 @@ export struct HomePage {
     }
     .width('100%')
     .height('100%')
+    .bindSheet($$this.showAddSheet, this.addSheetBuilder(), {
+      detents: [SheetSize.MEDIUM, SheetSize.LARGE],
+      showClose: true
+    })
   }
 }

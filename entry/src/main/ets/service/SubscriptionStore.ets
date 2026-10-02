@@ -149,6 +149,13 @@ export class SubscriptionStore {
     if (items.length > 0 && items[0].pubdate > 0) {
       sub.latestPubAt = items[0].pubdate;
     }
+    // 收藏夹/合集列表接口不返回封面与 UP 名，用最新一集回填
+    if (sub.cover === '' && items.length > 0 && items[0].cover !== '') {
+      sub.cover = items[0].cover;
+    }
+    if (sub.upperName === '' && items.length > 0 && items[0].ownerName !== '') {
+      sub.upperName = items[0].ownerName;
+    }
     SubscriptionStore.saveEpisodes(sub.id, items);
     return items;
   }

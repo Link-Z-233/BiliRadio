@@ -400,6 +400,55 @@ export class BiliService {
     return seasons;
   }
 
+  // UP 主的「系列」列表；ponytail: 复用 Season 类，seasonId 字段承载 series_id
+  static async fetchSeriesList(mid: number): Promise<Season[]> {
+    const mixinKey: string = await BiliService.fetchMixinKey();
+    const params: Record<string, string> = {
+      'mid': mid.toString(),
+      'page_num': '1',
+      'page_size': '20',
+    };
+    const signedQuery: string = await WbiSigner.signParams(params, mixinKey);
+    const resultStr: string = await httpGet(`${BILI_SEASONS_SERIES_LIST_URL}?${signedQuery}`);
+    const data: Record<string, Object> = parseApiData(resultStr);
+    const series: Season[] = [];
+    const itemsListsRaw: Object = data['items_lists'];
+    if (itemsListsRaw !== undefined && itemsListsRaw !== null) {
+      const itemsLists: Record<string, Object> = itemsListsRaw as Record<string, Object>;
+      const seriesRaw: Object = itemsLists['series_list'];
+      if (seriesRaw !== undefined && seriesRaw !== null) {
+        const arr: Object[] = seriesRaw as Object[];
+        for (let i = 0; i < arr.length; i++) {
+          const rec: Record<string, Object> = arr[i] as Record<string, Object>;
+          let seriesId: number = 0;
+          const seriesIdRaw: Object = rec['series_id'];
+          if (seriesIdRaw !== undefined && seriesIdRaw !== null) {
+            seriesId = seriesIdRaw as number;
+          }
+          let title: string = '';
+          let count: number = 0;
+          const metaRaw: Object = rec['meta'];
+          if (metaRaw !== undefined && metaRaw !== null) {
+            const meta: Record<string, Object> = metaRaw as Record<string, Object>;
+            const nameRaw: Object = meta['name'];
+            if (nameRaw !== undefined && nameRaw !== null) {
+              title = cleanTitle(nameRaw as string);
+            }
+            const totalRaw: Object = meta['total'];
+            if (totalRaw !== undefined && totalRaw !== null) {
+              count = totalRaw as number;
+            }
+          }
+          if (seriesId === 0) {
+            continue;
+          }
+          series.push(new Season(seriesId, title, count));
+        }
+      }
+    }
+    return series;
+  }
+
   // seasons_archives_list / series archives 共用的条目解析（合集接口为正序，最老在前）
   private static parseArchiveRecords(archives: Object[]): BiliVideo[] {
     const items: BiliVideo[] = [];

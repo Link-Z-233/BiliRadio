@@ -32,6 +32,7 @@
     "deliveryWithInstall": true,
     "installationFree": false,
     "pages": "$profile:main_pages",
+    "routerMap": "$profile:router_map",
     "metadata": [
       {
         "name": "ohos.arkui.UIMaterial.state",
