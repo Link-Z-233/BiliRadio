@@ -16,7 +16,7 @@ const GLOW_ACTIVE: number = 0.8;
 const GLOW_BREATH_MS: number = 3200;
 
 @Component
-export struct PlayerPage {
+export struct PlayerOverlay {
   @State isPlaying: boolean = false;
   @State isPrepared: boolean = false;
   @State isPreparing: boolean = false;
@@ -55,7 +55,6 @@ export struct PlayerPage {
   @State trackDesc: string = '';
   private trackBvid: string = '';
   private wasPlaying: boolean = false;
-  @StorageProp('floatingTabHeight') floatingTabHeight: number = 90;
   // 智能反色：封面偏暗时 true，前景文字自动转浅色保证可读
   @StorageProp('coverIsDark') coverIsDark: boolean = false;
   private controller: PlayerController = PlayerController.getInstance();
@@ -591,6 +590,35 @@ export struct PlayerPage {
   build() {
     Stack() {
       Column() {
+        // 顶部操作行：收起播放层 / 打开播放队列
+        Row() {
+          SymbolGlyph($r('sys.symbol.chevron_down'))
+            .fontSize(22)
+            .fontColor([$r('app.color.text_primary')])
+            .padding(6)
+            .onClick(() => {
+              AppStorage.setOrCreate<boolean>(Constants.AS_SHOW_PLAYER_OVERLAY, false);
+            })
+
+          Blank()
+
+          Text('正在播放')
+            .fontSize(13)
+            .fontColor(this.textSecondary())
+
+          Blank()
+
+          SymbolGlyph($r('sys.symbol.list_bullet'))
+            .fontSize(22)
+            .fontColor([$r('app.color.text_primary')])
+            .padding(6)
+            .onClick(() => {
+              AppStorage.setOrCreate<boolean>(Constants.AS_SHOW_QUEUE_SHEET, true);
+            })
+        }
+        .width('100%')
+        .padding({ left: 10, right: 10, top: 6 })
+
         if (this.trackIndex < 0 && this.playlistCount === 0) {
           Column() {
             Text('BiliRadio')
@@ -604,7 +632,7 @@ export struct PlayerPage {
               .fontColor(this.textSecondary())
               .margin({ top: 40 })
 
-            Text('去"歌单"页输入BV号添加歌曲\n或在"歌曲源"页生成歌单')
+            Text('在首页点「＋」粘贴BV号直接播放\n或订阅UP主/收藏夹/合集')
               .fontSize(13)
               .fontColor(this.textDisabled())
               .textAlign(TextAlign.Center)
@@ -946,8 +974,7 @@ export struct PlayerPage {
         }
       }
       .width('100%')
-      .height('100%')
-      .padding({ bottom: this.floatingTabHeight })
+      .layoutWeight(1)
 
       if (this.showSpeed) {
         this.speedPanel()

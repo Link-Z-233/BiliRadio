@@ -3,6 +3,8 @@ import { SleepTimerController } from '../service/SleepTimerController';
 import { GripDetector } from '../service/GripDetector';
 
 import { HomePage } from './HomePage';
+import { PlayerOverlay } from './PlayerOverlay';
+import { QueueSheet } from '../component/QueueSheet';
 import { MiniPlayer } from '../component/MiniPlayer';
 import { mediaquery } from '@kit.ArkUI';
 import { Constants } from '../service/Constants';
@@ -12,6 +14,8 @@ import { Constants } from '../service/Constants';
 struct Index {
   @StorageProp('statusBarHeight') statusBarHeight: number = 38;
   @StorageProp('navBarHeight') navBarHeight: number = 0;
+  @StorageLink('showPlayerOverlay') showPlayerOverlay: boolean = false; // key 与 Constants.AS_SHOW_PLAYER_OVERLAY 对应
+  @StorageLink('showQueueSheet') showQueueSheet: boolean = false; // key 与 Constants.AS_SHOW_QUEUE_SHEET 对应
   private navPathStack: NavPathStack = new NavPathStack();
   private pageWidth: number = 0;
   private wideListener: mediaquery.MediaQueryListener | undefined = undefined;
@@ -143,6 +147,16 @@ struct Index {
     return false;
   }
 
+  @Builder
+  private playerOverlayBuilder() {
+    PlayerOverlay()
+  }
+
+  @Builder
+  private queueSheetBuilder() {
+    QueueSheet()
+  }
+
   build() {
     Stack() {
       // 页面背景 — 延伸到顶部和底部安全区
@@ -169,6 +183,14 @@ struct Index {
     }
     .width('100%')
     .height('100%')
+    .bindContentCover($$this.showPlayerOverlay, this.playerOverlayBuilder(), {
+      modalTransition: ModalTransition.DEFAULT
+    })
+    .bindSheet($$this.showQueueSheet, this.queueSheetBuilder(), {
+      detents: [SheetSize.LARGE],
+      dragBar: true,
+      showClose: false
+    })
     .onAreaChange((oldArea: Area, newArea: Area) => {
       this.pageWidth = newArea.width as number;
     })

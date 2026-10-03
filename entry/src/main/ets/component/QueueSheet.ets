@@ -2,18 +2,13 @@ import { PlayerController } from '../service/PlayerController';
 import { BiliVideo } from '../model/BiliVideo';
 
 
-import { BiliSession } from '../service/BiliSession';
 import { DownloadManager } from '../service/DownloadManager';
-import { curves } from '@kit.ArkUI';
-import { ForegroundColor } from '../component/ForegroundColor';
+import { ForegroundColor } from './ForegroundColor';
 import { Constants } from '../service/Constants';
-import { CoverThumb } from '../component/CoverThumb';
+import { CoverThumb } from './CoverThumb';
 
 // 颜色全部使用 base/dark 双份颜色资源：浅色/深色外观下自动匹配（见 resources/base|dark/element/color.json）
 
-const BALL_SIZE: number = 52;
-const BALL_MARGIN_X: number = 20;
-const BALL_MARGIN_Y: number = 28;
 const FLASH_DURATION_MS: number = 1600;
 
 // 列表上下边缘渐变模糊半径；悬浮头部底部留白；列表底部超出悬浮菜单栏的余量
@@ -59,8 +54,9 @@ class PlaylistDataSource implements IDataSource {
   }
 }
 
+// 播放队列半模态：计数/定位当前播放/清空/搜索/添加歌曲/多选删除与保存
 @Component
-export struct PlaylistPage {
+export struct QueueSheet {
   @State items: BiliVideo[] = [];
   @State currentIndex: number = -1;
   @State isPlaying: boolean = false;
@@ -78,15 +74,11 @@ export struct PlaylistPage {
   @State searched: boolean = false;
 
 
-  @StorageLink('biliRadioGripOnRight') @Watch('onGripChange') gripOnRight: boolean = true;
-  @State ballOnRight: boolean = true;
-  @State ballScale: number = 1;
   @State pageWidth: number = 0;
   @State pageHeight: number = 0;
   @State headerHeight: number = 138;
   @State flashIndex: number = -1;
 
-  @StorageProp('floatingTabHeight') floatingTabHeight: number = 90;
   // 智能反色：封面偏暗时 true，前景文字自动转浅色保证可读
   @StorageProp('coverIsDark') coverIsDark: boolean = false;
   @StorageProp('isWideScreen') isWideScreen: boolean = false;
@@ -122,7 +114,6 @@ export struct PlaylistPage {
   private swipeStartIndex: number = -1;
 
   aboutToAppear(): void {
-    this.ballOnRight = this.gripOnRight;
     this.syncFrom(this.controller);
     this.controller.subscribe((): void => {
       this.syncFrom(this.controller);
@@ -136,33 +127,6 @@ export struct PlaylistPage {
       clearTimeout(this.flashTimer);
       this.flashTimer = -1;
     }
-  }
-
-  onGripChange(): void {
-    if (this.ballOnRight === this.gripOnRight) {
-      return;
-    }
-    this.getUIContext().animateTo({ curve: curves.springMotion(0.4, 0.85) }, (): void => {
-      this.ballOnRight = this.gripOnRight;
-    });
-  }
-
-  private ballVisible(): boolean {
-    return this.items.length > 0 && this.currentIndex >= 0 && !this.selectMode;
-  }
-
-  private ballX(): number {
-    if (this.pageWidth <= 0) {
-      return BALL_MARGIN_X;
-    }
-    return this.ballOnRight ? this.pageWidth - BALL_SIZE - BALL_MARGIN_X : BALL_MARGIN_X;
-  }
-
-  private ballY(): number {
-    if (this.pageHeight <= 0) {
-      return 400;
-    }
-    return this.pageHeight - BALL_SIZE - BALL_MARGIN_Y - this.floatingTabHeight;
   }
 
   private locateCurrent(): void {
@@ -296,6 +260,34 @@ export struct PlaylistPage {
     this.controller.removeSelectedFromPlaylist(bvids);
   }
 
+  // 清空队列：移除全部条目（含当前播放），二次确认防误触
+  private clearQueue(): void {
+    if (this.items.length === 0) {
+      return;
+    }
+    AlertDialog.show({
+      title: '清空队列',
+      message: `确定移除全部 ${this.items.length} 首吗？`,
+      autoCancel: true,
+      alignment: DialogAlignment.Center,
+      primaryButton: {
+        value: '清空',
+        action: (): void => {
+          const all: string[] = [];
+          for (let i = 0; i < this.items.length; i++) {
+            all.push(this.items[i].bvid);
+          }
+          this.controller.removeSelectedFromPlaylist(all);
+        }
+      },
+      secondaryButton: {
+        value: '取消',
+        action: (): void => {
+        }
+      }
+    });
+  }
+
   // 批量下载选中的歌曲到本地（持久离线缓存）
   private async downloadSelected(): Promise<void> {
     const bvids: string[] = this.selectedBvids.slice(0);
@@ -358,13 +350,36 @@ export struct PlaylistPage {
     Stack({ alignContent: Alignment.Top }) {
       Column() {
         Row() {
-          Text('播放列表')
+          Text('播放队列')
             .fontSize(20)
             .fontWeight(FontWeight.Bold)
             .fontColor(this.textPrimary())
             .layoutWeight(1)
 
+          if (this.items.length > 0) {
+            Text(`共 ${this.items.length} 首`)
+              .fontSize(13)
+              .fontColor(this.textSecondary())
+              .margin({ right: 4 })
+          }
+
           if (!this.selectMode) {
+            if (this.currentIndex >= 0) {
+              Button('定位')
+                .height(30)
+                .padding({ left: 12, right: 12 })
+                .backgroundColor($r('app.color.btn_glass'))
+                .backdropBlur(20)
+                .border({ width: 1, color: $r('app.color.btn_border') })
+                .fontColor(this.textPrimary())
+                .borderRadius(15)
+                .fontSize(12)
+                .margin({ right: 8 })
+                .onClick(() => {
+                  this.locateCurrent();
+                })
+            }
+
             Button('搜索')
               .height(30)
               .padding({ left: 12, right: 12 })
@@ -396,7 +411,7 @@ export struct PlaylistPage {
                 this.selectedBvids = [];
               })
 
-            Button('同步')
+            Button('清空')
               .height(30)
               .padding({ left: 12, right: 12 })
               .backgroundColor($r('app.color.btn_glass'))
@@ -405,18 +420,9 @@ export struct PlaylistPage {
               .fontColor(this.textPrimary())
               .borderRadius(15)
               .fontSize(12)
-              .margin({ right: 8 })
               .onClick(() => {
-                this.controller.syncWithFolders(true);
+                this.clearQueue();
               })
-          }
-
-
-          if (this.items.length > 0) {
-            Text(`共 ${this.items.length} 首`)
-              .fontSize(13)
-              .fontColor(this.textSecondary())
-              .margin({ left: 8 })
           }
         }
         .width('100%')
@@ -550,11 +556,11 @@ export struct PlaylistPage {
 
       if (this.items.length === 0) {
         Column() {
-          Text('歌单为空')
+          Text('队列为空')
             .fontSize(16)
             .fontColor(this.textSecondary())
             .margin({ top: 60 })
-          Text('输入BV号添加歌曲，或去"歌曲源"页生成歌单')
+          Text('输入BV号添加歌曲，或到订阅源详情页播放节目')
             .fontSize(13)
             .fontColor(this.textDisabled())
             .margin({ top: 8 })
@@ -664,7 +670,7 @@ export struct PlaylistPage {
           .width('100%')
           .height('100%')
           .contentStartOffset(this.headerHeight)
-          .contentEndOffset(this.floatingTabHeight + LIST_BOTTOM_GAP)
+          .contentEndOffset(LIST_BOTTOM_GAP)
           .linearGradientBlur(EDGE_BLUR_RADIUS, {
             fractionStops: this.listBlurStops(),
             direction: GradientDirection.Bottom
@@ -672,51 +678,6 @@ export struct PlaylistPage {
           .lanes(this.isWideScreen ? 2 : 1)
 
         }
-
-      if (this.ballVisible()) {
-        Stack() {
-          Column()
-            .width(26)
-            .height(26)
-            .borderRadius(13)
-            .border({ width: 1.5, color: $r('app.color.primary_color') })
-
-          Text('♪')
-            .fontSize(14)
-            .fontColor($r('app.color.primary_color'))
-        }
-        .zIndex(2)
-        .width(BALL_SIZE)
-        .height(BALL_SIZE)
-        .borderRadius(BALL_SIZE / 2)
-        .backgroundColor($r('app.color.ball_background'))
-        .border({ width: 1, color: $r('app.color.ball_border') })
-        .shadow({ radius: 14, color: $r('app.color.shadow_ball'), offsetY: 5 })
-        .scale({ x: this.ballScale, y: this.ballScale })
-
-        .position({ x: this.ballX(), y: this.ballY() })
-        .transition(
-          TransitionEffect.OPACITY
-            .combine(TransitionEffect.scale({ x: 0.3, y: 0.3 }))
-            .combine(TransitionEffect.translate({ x: this.ballOnRight ? 48 : -48 }))
-            .animation({ duration: 280, curve: Curve.Friction })
-        )
-        .onClick(() => {
-          this.locateCurrent();
-        })
-        .onTouch((event: TouchEvent) => {
-
-          if (event.type === TouchType.Down) {
-            this.getUIContext().animateTo({ duration: 100, curve: Curve.Friction }, (): void => {
-              this.ballScale = 0.85;
-            });
-          } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
-            this.getUIContext().animateTo({ duration: 260, curve: Curve.Smooth }, (): void => {
-              this.ballScale = 1;
-            });
-          }
-        })
-      }
 
       if (this.showSearch) {
         this.searchPanel()
@@ -869,7 +830,6 @@ export struct PlaylistPage {
     .height('100%')
     .backgroundColor($r('app.color.sheet_background'))
     .backdropBlur(20)
-    .padding({ bottom: this.floatingTabHeight })
     .zIndex(3)
   }
 }
