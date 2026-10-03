@@ -164,23 +164,21 @@ struct Index {
         Column()
           .width('60%')
           .height('100%')
-          .backgroundColor('#00000000')
           .onClick(() => {
-            animateTo({ duration: 250, curve: Curve.EaseOut }, (): void => {
-              this.showQueueSheet = false;
-            });
+            this.showQueueSheet = false;
           })
       }
 
-      Column() {
-        QueueSheet()
+      if (this.showQueueSheet) {
+        Column() {
+          QueueSheet()
+        }
+        .width('40%')
+        .height('100%')
+        .backgroundColor($r('app.color.sheet_background'))
+        .borderRadius({ topLeft: 16, bottomLeft: 16 })
+        .transition(TransitionEffect.OPACITY.animation({ duration: 250, curve: Curve.EaseOut }))
       }
-      .width('40%')
-      .height('100%')
-      .backgroundColor($r('app.color.sheet_background'))
-      .borderRadius({ topLeft: 16, bottomLeft: 16 })
-      .translate({ x: this.showQueueSheet ? 0 : '100%' })
-      .animation({ duration: 250, curve: Curve.EaseOut })
     }
     .width('100%')
     .height('100%')
