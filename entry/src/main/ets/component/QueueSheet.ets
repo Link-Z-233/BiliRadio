@@ -10,7 +10,7 @@ import { CoverThumb } from './CoverThumb';
 
 const FLASH_DURATION_MS: number = 1600;
 
-// 列表上下边缘渐变模糊半径；悬浮头部底部留白；列表底部超出悬浮菜单栏的余量
+// 列表上下边缘渐变模糊半径；sheet 底部安全留白
 const EDGE_BLUR_RADIUS: number = 48;
 const HEADER_FADE_TAIL: number = 8;
 const LIST_BOTTOM_GAP: number = 12;

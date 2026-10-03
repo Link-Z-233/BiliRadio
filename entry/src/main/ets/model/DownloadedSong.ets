@@ -1,7 +1,7 @@
 import { BiliVideo } from './BiliVideo';
 
 // 已下载歌曲：持久化到本地（离线可播）的音频文件及其元数据。
-// 元数据字段与 BiliVideo 对齐，便于「下载内容」来源直接作为歌曲源播放。
+// 元数据字段与 BiliVideo 对齐，便于「下载管理」页直接作为歌曲源播放。
 export class DownloadedSong {
   bvid: string = '';
   aid: number = 0;

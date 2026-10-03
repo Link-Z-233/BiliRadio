@@ -2,7 +2,6 @@ import { PlayerController, PlayMode as MusicPlayMode, PLAYBACK_RATES, PLAY_MODES
 import { BiliVideo } from '../model/BiliVideo';
 import { common, Want } from '@kit.AbilityKit';
 import { BusinessError } from '@kit.BasicServicesKit';
-// import { uiMaterial } from '@kit.ArkUI';
 import { AppStore } from '../service/AppStore';
 import { Constants } from '../service/Constants';
 import { SleepTimerController } from '../service/SleepTimerController';
@@ -808,12 +807,6 @@ export struct PlayerOverlay {
                   .trackColor($r('app.color.track_color'))
                   .selectedColor($r('app.color.primary_color'))
                   .blockColor($r('app.color.primary_color'))
-                  // TODO: uiMaterial.ImmersiveStyle 在 API 24 模拟器不可用，待升级后恢复
-                  // .systemMaterial(new uiMaterial.ImmersiveMaterial({
-                  //   style: uiMaterial.ImmersiveStyle.REGULAR,
-                  //   interactive: true,
-                  //   lightEffect: { color: $r('app.color.primary_color') },
-                  // }))
                   .onChange((value: number, mode: SliderChangeMode) => {
                     this.sliderValue = value;
                     if (mode === SliderChangeMode.Begin || mode === SliderChangeMode.Moving) {

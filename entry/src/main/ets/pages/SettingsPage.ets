@@ -79,12 +79,12 @@ struct SettingsPage {
   @State showAbout: boolean = false;
   @State aboutTip: string = '';
 
-  // —— 取消收藏历史（入口从播放列表页迁移到设置页） ——
+  // —— 取消收藏历史 ——
   @StorageLink('showHistory') showHistory: boolean = false; // key 与 Constants.AS_SHOW_HISTORY 对应
   @State historyItems: UnfavoriteRecord[] = [];
   @State historyVersion: number = -1;
 
-  // —— 播放历史（入口从播放列表页迁移到设置页） ——
+  // —— 播放历史 ——
   @StorageLink('showPlayHistory') showPlayHistory: boolean = false; // key 与 Constants.AS_SHOW_PLAY_HISTORY 对应
   @State playHistoryItems: PlayHistoryItem[] = [];
   @State playHistoryVersion: number = -1;
@@ -154,7 +154,7 @@ struct SettingsPage {
     const count: number = dm.downloads.length;
     const sizeMB: number = dm.downloadSizeMB();
     this.cacheText = count > 0
-      ? `已保存 ${count} 首 · ${sizeMB.toFixed(1)} MB` : '暂无本地歌曲，可在播放列表多选后保存到本地';
+      ? `已保存 ${count} 首 · ${sizeMB.toFixed(1)} MB` : '暂无本地歌曲，可在播放队列中多选后保存到本地';
     const cacheMB: number = BiliService.cacheSizeMB();
     this.cacheSubText = cacheMB > 0.5
       ? `播放缓存 ${cacheMB.toFixed(1)} MB（播过的歌临时存放，可清理）` : '';
@@ -632,11 +632,11 @@ struct SettingsPage {
             .textAlign(TextAlign.Start)
 
           Column({ space: 10 }) {
-            this.aboutFeature('歌单播放：BV 号 / 收藏夹 / UP主合集一键生成歌单')
-            this.aboutFeature('个人收藏夹：登录后同步 B 站收藏夹')
-            this.aboutFeature('UP主合集追更：输入 UID 查看合集与系列')
-            this.aboutFeature('播放控制：倍速、播放模式、历史记录、进度续播')
-            this.aboutFeature('外观：深浅色主题、智能反色')
+            this.aboutFeature('订阅收听：UP 主 / 收藏夹 / 合集 / 系列，新集自动标 NEW')
+            this.aboutFeature('队列播放：整源入队、搜索、多选管理与保存到本地')
+            this.aboutFeature('播放控制：倍速、播放模式、睡眠定时、进度续播')
+            this.aboutFeature('下载管理：离线保存、存储占用概览、批量删除')
+            this.aboutFeature('外观：深浅色三态 + 六色主题色板')
           }
           .width('100%')
           .margin({ top: 12 })

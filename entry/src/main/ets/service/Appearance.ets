@@ -214,7 +214,7 @@ export class Appearance {
     }
   }
 
-  // 同步到 AppStorage：设置页选中态、底栏联动等 UI 由此驱动
+  // 同步到 AppStorage：设置页选中态等 UI 由此驱动
   private static syncAppStorage(): void {
     AppStorage.setOrCreate<number>(Constants.AS_COLOR_MODE_SETTING, Appearance.userMode);
     AppStorage.setOrCreate<number>(Constants.AS_COLOR_MODE_RESOLVED,
