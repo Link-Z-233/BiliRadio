@@ -57,8 +57,15 @@ class HistoryDataSource implements IDataSource {
   }
 }
 
+@Builder
+export function SettingsPageBuilder() {
+  SettingsPage()
+}
+
+// 设置页（NavDestination）：登录 / 本地缓存 / 播放设置 / 外观（含主题色板）/ 历史记录 / 关于
+// pushPathByName('settingsPage', param) 可带 'playHistory' / 'about' 直开对应面板
 @Component
-export struct SettingsPage {
+struct SettingsPage {
   @State showQr: boolean = false;
   @State isLogged: boolean = false;
   @State loginName: string = '未登录';
@@ -94,9 +101,9 @@ export struct SettingsPage {
   // 外观三态选中态（0=跟随系统 1=浅色 2=深色）：由 Appearance 写入 AppStorage 驱动刷新
   @StorageProp('colorModeSetting') colorModeSetting: number = 0;
 
-  @StorageProp('floatingTabHeight') floatingTabHeight: number = 90;
   // 智能反色：封面偏暗时 true，前景文字自动转浅色保证可读
   @StorageProp('coverIsDark') coverIsDark: boolean = false;
+  @StorageProp('accentColor') accentColor: string = Constants.ACCENT_DEFAULT;
   private qrCanvas: CanvasRenderingContext2D =
     new CanvasRenderingContext2D(new RenderingContextSettings(true));
 
@@ -116,6 +123,7 @@ export struct SettingsPage {
   private pollGeneration: number = 0;
   private controller: PlayerController = PlayerController.getInstance();
   private playHistorySource: HistoryDataSource = new HistoryDataSource();
+  private navPathStack: NavPathStack = new NavPathStack();
 
   aboutToAppear(): void {
     this.refreshLoginState();
@@ -534,6 +542,37 @@ export struct SettingsPage {
       })
   }
 
+  private selectAccent(color: string): void {
+    if (color === this.accentColor) {
+      return;
+    }
+    // 立即生效：Appearance 内部完成持久化并写入 AppStorage('accentColor') 驱动全 UI 刷新
+    Appearance.setAccentColor(color, getContext(this));
+  }
+
+  // 主题色色板圆点：选中项外圈描边高亮
+  @Builder
+  accentSwatch(color: string) {
+    Row() {
+      Row()
+        .width(24)
+        .height(24)
+        .borderRadius(12)
+        .backgroundColor(color)
+    }
+    .width(32)
+    .height(32)
+    .borderRadius(16)
+    .justifyContent(FlexAlign.Center)
+    .border({
+      width: 2,
+      color: this.accentColor === color ? this.accentColor : Color.Transparent
+    })
+    .onClick(() => {
+      this.selectAccent(color);
+    })
+  }
+
   // 「关于」弹窗内的功能条目：圆点 + 说明文字，左侧对齐，支持多行
   @Builder
   aboutFeature(text: string) {
@@ -832,7 +871,7 @@ export struct SettingsPage {
     .height('100%')
     .backgroundColor($r('app.color.sheet_background'))
     .backdropBlur(20)
-    .padding({ bottom: this.floatingTabHeight })
+    .padding({ bottom: 16 })
     .zIndex(3)
   }
 
@@ -935,23 +974,17 @@ export struct SettingsPage {
     .height('100%')
     .backgroundColor($r('app.color.sheet_background'))
     .backdropBlur(20)
-    .padding({ bottom: this.floatingTabHeight })
+    .padding({ bottom: 16 })
     .zIndex(3)
   }
 
 
   build() {
-    Stack({ alignContent: Alignment.Top }) {
-    Scroll() {
-      Column() {
-        Text('设置')
-          .fontSize(20)
-          .fontWeight(FontWeight.Bold)
-          .fontColor(this.textPrimary())
-          .width('92%')
-          .margin({ top: 16, bottom: 12 })
-
-        Row() {
+    NavDestination() {
+      Stack({ alignContent: Alignment.Top }) {
+        Scroll() {
+          Column() {
+            Row() {
           Text('账号')
             .fontSize(15)
             .fontColor(this.textPrimary())
@@ -1396,6 +1429,19 @@ export struct SettingsPage {
         .border({ width: 1, color: $r('app.color.btn_border') })
         .borderRadius(12)
 
+        Row({ space: 12 }) {
+          ForEach(Constants.ACCENT_PRESETS, (color: string) => {
+            this.accentSwatch(color)
+          }, (color: string) => color)
+        }
+        .width('92%')
+        .padding(14)
+        .backgroundColor($r('app.color.btn_glass'))
+        .backdropBlur(20)
+        .border({ width: 1, color: $r('app.color.btn_border') })
+        .borderRadius(12)
+        .margin({ top: 8 })
+
         Row() {
           Text('播放历史')
             .fontSize(15)
@@ -1475,7 +1521,7 @@ export struct SettingsPage {
       }
       .width('100%')
       .alignItems(HorizontalAlign.Center)
-      .padding({ top: 12, bottom: this.floatingTabHeight })
+      .padding({ top: 12, bottom: 24 })
     }
     .width('100%')
     .height('100%')
@@ -1493,6 +1539,33 @@ export struct SettingsPage {
       if (this.showPlayHistory) {
         this.playHistoryPanel()
       }
+      }
+      .width('100%')
+      .height('100%')
     }
+    .title('设置')
+    .onReady((ctx: NavDestinationContext) => {
+      this.navPathStack = ctx.pathStack;
+      if (ctx.pathInfo.param === undefined || ctx.pathInfo.param === null) {
+        return;
+      }
+      const p: string = ctx.pathInfo.param as string;
+      if (p === 'playHistory') {
+        this.openPlayHistory();
+      } else if (p === 'about') {
+        this.showAbout = true;
+      }
+    })
+    .onBackPressed((): boolean => {
+      if (this.showPlayHistory) {
+        this.showPlayHistory = false;
+        return true;
+      }
+      if (this.showHistory) {
+        this.showHistory = false;
+        return true;
+      }
+      return false;
+    })
   }
 }

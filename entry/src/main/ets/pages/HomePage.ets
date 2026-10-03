@@ -225,6 +225,28 @@ export struct HomePage {
   }
 
   @Builder
+  private moreMenu() {
+    Menu() {
+      MenuItem({ content: '设置' })
+        .onClick(() => {
+          this.navPathStack.pushPathByName('settingsPage', '');
+        })
+      MenuItem({ content: '下载管理' })
+        .onClick(() => {
+          this.navPathStack.pushPathByName('downloadsPage', '');
+        })
+      MenuItem({ content: '播放历史' })
+        .onClick(() => {
+          this.navPathStack.pushPathByName('settingsPage', 'playHistory');
+        })
+      MenuItem({ content: '关于' })
+        .onClick(() => {
+          this.navPathStack.pushPathByName('settingsPage', 'about');
+        })
+    }
+  }
+
+  @Builder
   private emptyView() {
     Column() {
       Text('♪')
@@ -277,9 +299,7 @@ export struct HomePage {
         .backgroundColor($r('app.color.card_background'))
         .justifyContent(FlexAlign.Center)
         .margin({ left: 8 })
-        .onClick(() => {
-          // ponytail: 更多菜单第6步接入
-        })
+        .bindMenu(this.moreMenu)
       }
       .width('100%')
       .padding({ left: 16, right: 12, top: 6, bottom: 10 })
