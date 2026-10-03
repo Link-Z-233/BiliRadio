@@ -33,7 +33,6 @@ export class Constants {
   static readonly KEY_DATA_SAVER: string = 'dataSaver';
   static readonly KEY_PREFER_LOW_BITRATE: string = 'preferLowBitrate';
   static readonly KEY_WIFI_ONLY_DOWNLOAD: string = 'wifiOnlyDownload';
-  static readonly KEY_CO_PLAY_WITH_OTHERS: string = 'coPlayWithOthers';
   static readonly PLAY_HISTORY_FILE: string = 'play_history.json';
 
   // —— AppStorage 键 ——

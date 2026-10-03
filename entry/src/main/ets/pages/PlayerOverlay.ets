@@ -989,6 +989,7 @@ export struct PlayerOverlay {
       dragBar: true,
       showClose: false,
       backgroundColor: $r('app.color.sheet_background'),
+      preferType: SheetType.BOTTOM
     })
   }
 }

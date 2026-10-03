@@ -104,7 +104,7 @@ export struct MiniPlayer {
           .onClick(() => {
             PlayerController.getInstance().next();
           })
-        SymbolGlyph($r('sys.symbol.list_bullet'))
+        SymbolGlyph($r('sys.symbol.chevron_up'))
           .fontSize(20)
           .fontColor([$r('app.color.text_primary')])
           .padding(8)
@@ -115,8 +115,9 @@ export struct MiniPlayer {
       .width('100%')
       .padding({ left: 10, right: 6, top: 8, bottom: 8 })
       .backgroundColor($r('app.color.card_background'))
-      .borderRadius(16)
-      .margin({ left: 8, right: 8, bottom: 6 })
+      .borderRadius(24)
+      .margin({ left: 16, right: 16, bottom: 6 })
+      .shadow({ radius: 12, color: '#33000000', offsetX: 0, offsetY: 2 })
     }
   }
 }

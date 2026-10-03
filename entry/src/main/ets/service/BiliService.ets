@@ -21,7 +21,10 @@ const BILI_SEASONS_SERIES_LIST_URL: string = 'https://api.bilibili.com/x/polymer
 const BILI_SEASONS_ARCHIVES_LIST_URL: string = 'https://api.bilibili.com/x/polymer/web-space/seasons_archives_list';
 const BILI_SERIES_ARCHIVES_URL: string = 'https://api.bilibili.com/x/series/archives';
 const BILI_SPACE_ARC_SEARCH_URL: string = 'https://api.bilibili.com/x/space/wbi/arc/search';
+const BILI_SPACE_ARC_URL: string = 'https://api.bilibili.com/x/space/arc/search';
 const BILI_SPACE_ACC_INFO_URL: string = 'https://api.bilibili.com/x/space/wbi/acc/info';
+const BILI_CARD_URL: string = 'https://api.bilibili.com/x/web-interface/card';
+const BILI_SERIES_META_URL: string = 'https://api.bilibili.com/x/series/series';
 const BILI_QR_GENERATE_URL: string = 'https://passport.bilibili.com/x/passport-login/web/qrcode/generate';
 const BILI_QR_POLL_URL: string = 'https://passport.bilibili.com/x/passport-login/web/qrcode/poll';
 const REFERER: string = 'https://www.bilibili.com';
@@ -70,6 +73,14 @@ export class UpInfo {
   face: string = '';
 }
 
+export class SeasonMeta {
+  mid: number = 0;
+  name: string = '';
+  total: number = 0;
+  cover: string = '';
+  seasonId: number = 0;
+}
+
 class CacheEntry {
   name: string = '';
   mtimeMs: number = 0;
@@ -102,16 +113,6 @@ function buildSpaceHeaders(mid: number): Record<string, string> {
   headers['Origin'] = SPACE_ORIGIN;
   headers['User-Agent'] = SPACE_USER_AGENT;
   return headers;
-}
-
-// 风控指纹占位：dm_img_str/dm_cover_img_str 用随机 base64（固定假值实测 -403）
-function randomDmImgStr(): string {
-  const chars: string = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
-  let s: string = '';
-  for (let i = 0; i < 96; i++) {
-    s += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return s;
 }
 
 // 空间投稿列表的时长字段为 'm:ss' / 'h:mm:ss' 字符串
@@ -375,6 +376,7 @@ export class BiliService {
           }
           let title: string = '';
           let count: number = 0;
+          let cover: string = '';
           const metaRaw: Object = rec['meta'];
           if (metaRaw !== undefined && metaRaw !== null) {
             const meta: Record<string, Object> = metaRaw as Record<string, Object>;
@@ -389,11 +391,15 @@ export class BiliService {
             if (totalRaw !== undefined && totalRaw !== null) {
               count = totalRaw as number;
             }
+            const coverRaw: Object = meta['cover'];
+            if (coverRaw !== undefined && coverRaw !== null) {
+              cover = coverRaw as string;
+            }
           }
           if (seasonId === 0) {
             continue;
           }
-          seasons.push(new Season(seasonId, title, count));
+          seasons.push(new Season(seasonId, title, count, cover));
         }
       }
     }
@@ -427,6 +433,7 @@ export class BiliService {
           }
           let title: string = '';
           let count: number = 0;
+          let cover: string = '';
           const metaRaw: Object = rec['meta'];
           if (metaRaw !== undefined && metaRaw !== null) {
             const meta: Record<string, Object> = metaRaw as Record<string, Object>;
@@ -438,11 +445,15 @@ export class BiliService {
             if (totalRaw !== undefined && totalRaw !== null) {
               count = totalRaw as number;
             }
+            const coverRaw: Object = meta['cover'];
+            if (coverRaw !== undefined && coverRaw !== null) {
+              cover = coverRaw as string;
+            }
           }
           if (seriesId === 0) {
             continue;
           }
-          series.push(new Season(seriesId, title, count));
+          series.push(new Season(seriesId, title, count, cover));
         }
       }
     }
@@ -592,19 +603,67 @@ export class BiliService {
   // UP 主最新投稿（单页 30 条，新集在前）
   // ponytail: 只取第一页——播客「近期节目」语义；升级路径：SourcePage 滚动到底按需追加页
   static async fetchUpVideos(mid: number): Promise<BiliVideo[]> {
-    const mixinKey: string = await BiliService.fetchMixinKey();
     const params: Record<string, string> = {
       'mid': mid.toString(),
       'ps': '30',
       'pn': '1',
       'order': 'pubdate',
       'platform': 'web',
-      'dm_img_str': randomDmImgStr(),
-      'dm_cover_img_str': randomDmImgStr(),
     };
-    const signedQuery: string = await WbiSigner.signParams(params, mixinKey);
-    const resultStr: string = await httpGet(`${BILI_SPACE_ARC_SEARCH_URL}?${signedQuery}`, buildSpaceHeaders(mid));
-    const data: Record<string, Object> = parseApiData(resultStr);
+    const spaceHeaders: Record<string, string> = buildSpaceHeaders(mid);
+    let lastError: Error = new Error('unknown');
+    for (let attempt: number = 0; attempt < 3; attempt++) {
+      if (attempt > 0) {
+        BiliSession.getInstance().resetBuvid();
+        await sleep(2000 * attempt);
+      }
+      const plainResult: string | null = await BiliService.fetchUpVideosOnce(
+        `${BILI_SPACE_ARC_URL}`, params, spaceHeaders);
+      if (plainResult !== null) {
+        const parsed: BiliVideo[] | null = BiliService.parseUpVideoList(plainResult);
+        if (parsed !== null) {
+          return parsed;
+        }
+      }
+      const mixinKey: string = await BiliService.fetchMixinKey();
+      const signedQuery: string = await WbiSigner.signParams(params, mixinKey);
+      const wbiResult: string | null = await BiliService.fetchUpVideosOnce(
+        `${BILI_SPACE_ARC_SEARCH_URL}?${signedQuery}`, {}, spaceHeaders);
+      if (wbiResult !== null) {
+        const parsed: BiliVideo[] | null = BiliService.parseUpVideoList(wbiResult);
+        if (parsed !== null) {
+          return parsed;
+        }
+      }
+    }
+    throw lastError;
+  }
+
+  private static async fetchUpVideosOnce(
+    url: string, params: Record<string, string>,
+    headers: Record<string, string>): Promise<string | null> {
+    try {
+      const query: string = Object.keys(params).length > 0
+        ? '?' + Object.keys(params).map((k: string): string =>
+          `${k}=${encodeURIComponent(params[k])}`).join('&')
+        : '';
+      return await httpGet(`${url}${query}`, headers);
+    } catch (err) {
+      const msg: string = err instanceof Error ? err.message : String(err);
+      if (msg.indexOf('-352') >= 0 || msg.indexOf('-412') >= 0) {
+        return null;
+      }
+      throw new Error(msg);
+    }
+  }
+
+  private static parseUpVideoList(resultStr: string): BiliVideo[] | null {
+    const root: Record<string, Object> = JSON.parse(resultStr) as Record<string, Object>;
+    const code: number = root['code'] as number;
+    if (code !== 0) {
+      return null;
+    }
+    const data: Record<string, Object> = root['data'] as Record<string, Object>;
     const items: BiliVideo[] = [];
     const listRaw: Object = data['list'];
     if (listRaw !== undefined && listRaw !== null) {
@@ -612,7 +671,7 @@ export class BiliService {
       const vlistRaw: Object = list['vlist'];
       if (vlistRaw !== undefined && vlistRaw !== null) {
         const arr: Object[] = vlistRaw as Object[];
-        for (let i = 0; i < arr.length; i++) {
+        for (let i: number = 0; i < arr.length; i++) {
           const rec: Record<string, Object> = arr[i] as Record<string, Object>;
           const bvidRaw: Object = rec['bvid'];
           const bvid: string = bvidRaw === undefined || bvidRaw === null ? '' : bvidRaw as string;
@@ -645,14 +704,62 @@ export class BiliService {
     return items;
   }
 
+  static async resolveShortUrl(shortUrl: string): Promise<string> {
+    const httpRequest: http.HttpRequest = http.createHttp();
+    try {
+      const response: http.HttpResponse = await httpRequest.request(shortUrl, {
+        method: http.RequestMethod.GET,
+        header: {
+          'User-Agent': USER_AGENT,
+          'Referer': REFERER,
+        },
+        usingCache: false,
+        expectDataType: http.HttpDataType.STRING,
+        connectTimeout: Constants.CONNECT_TIMEOUT_MS,
+        readTimeout: Constants.READ_TIMEOUT_MS,
+      });
+      httpRequest.destroy();
+      const body: string = response.result as string;
+      const bvMatch: RegExpMatchArray | null = body.match(/BV[0-9A-Za-z]{10}/);
+      if (bvMatch !== null) {
+        return `https://www.bilibili.com/video/${bvMatch[0]}`;
+      }
+      const urlMatch: RegExpMatchArray | null = body.match(/https?:\/\/(?:www\.)?bilibili\.com\/[^\s"'<>]+/);
+      if (urlMatch !== null) {
+        return urlMatch[0];
+      }
+      return shortUrl;
+    } catch (_err) {
+      httpRequest.destroy();
+      return shortUrl;
+    }
+  }
+
   static async fetchUpInfo(mid: number): Promise<UpInfo> {
     const mixinKey: string = await BiliService.fetchMixinKey();
     const params: Record<string, string> = {
       'mid': mid.toString(),
     };
     const signedQuery: string = await WbiSigner.signParams(params, mixinKey);
-    const resultStr: string = await httpGet(`${BILI_SPACE_ACC_INFO_URL}?${signedQuery}`, buildSpaceHeaders(mid));
-    const data: Record<string, Object> = parseApiData(resultStr);
+    // acc/info 风控严格（-352 频发），失败时兜底走风控宽松的 card 接口取 name/face
+    try {
+      const resultStr: string = await httpGet(`${BILI_SPACE_ACC_INFO_URL}?${signedQuery}`, buildSpaceHeaders(mid));
+      return BiliService.parseUpInfo(parseApiData(resultStr), mid);
+    } catch (e) {
+      hilog.warn(Constants.LOG_DOMAIN, Constants.LOG_TAG,
+        'acc/info failed (mid=%{public}d), fallback to card', mid);
+      const cardStr: string = await httpGet(`${BILI_CARD_URL}?${signedQuery}`, buildSpaceHeaders(mid));
+      const data: Record<string, Object> = parseApiData(cardStr);
+      const cardRaw: Object = data['card'];
+      if (cardRaw === undefined || cardRaw === null) {
+        throw new Error('未获取到UP主信息');
+      }
+      return BiliService.parseUpInfo(cardRaw as Record<string, Object>, mid);
+    }
+  }
+
+  // acc/info 与 card 的用户字段结构一致（name/face 同名）
+  private static parseUpInfo(data: Record<string, Object>, mid: number): UpInfo {
     const info: UpInfo = new UpInfo();
     info.mid = mid;
     if (data['name'] !== undefined && data['name'] !== null) {
@@ -665,6 +772,77 @@ export class BiliService {
       throw new Error('未获取到UP主信息');
     }
     return info;
+  }
+
+  static async fetchSeasonMeta(seasonId: number): Promise<SeasonMeta> {
+    const mixinKey: string = await BiliService.fetchMixinKey();
+    const params: Record<string, string> = {
+      'season_id': seasonId.toString(),
+      'page_num': '1',
+      'page_size': '1',
+    };
+    const signedQuery: string = await WbiSigner.signParams(params, mixinKey);
+    const resultStr: string = await httpGet(`${BILI_SEASONS_ARCHIVES_LIST_URL}?${signedQuery}`);
+    const data: Record<string, Object> = parseApiData(resultStr);
+    const meta: SeasonMeta = new SeasonMeta();
+    meta.seasonId = seasonId;
+    const metaRaw: Object = data['meta'];
+    if (metaRaw !== undefined && metaRaw !== null) {
+      const rec: Record<string, Object> = metaRaw as Record<string, Object>;
+      if (rec['mid'] !== undefined && rec['mid'] !== null) {
+        meta.mid = rec['mid'] as number;
+      }
+      if (rec['name'] !== undefined && rec['name'] !== null) {
+        meta.name = cleanTitle(rec['name'] as string);
+      }
+      if (rec['total'] !== undefined && rec['total'] !== null) {
+        meta.total = rec['total'] as number;
+      }
+      if (rec['cover'] !== undefined && rec['cover'] !== null) {
+        meta.cover = rec['cover'] as string;
+      }
+    }
+    if (meta.name === '') {
+      meta.name = `合集 ${seasonId}`;
+    }
+    return meta;
+  }
+
+  static async fetchSeriesMeta(seriesId: number): Promise<SeasonMeta> {
+    const mixinKey: string = await BiliService.fetchMixinKey();
+    const params: Record<string, string> = {
+      'series_id': seriesId.toString(),
+    };
+    const signedQuery: string = await WbiSigner.signParams(params, mixinKey);
+    const resultStr: string = await httpGet(`${BILI_SERIES_META_URL}?${signedQuery}`);
+    const data: Record<string, Object> = parseApiData(resultStr);
+    const meta: SeasonMeta = new SeasonMeta();
+    const metaRaw: Object = data['meta'];
+    if (metaRaw !== undefined && metaRaw !== null) {
+      const rec: Record<string, Object> = metaRaw as Record<string, Object>;
+      if (rec['mid'] !== undefined && rec['mid'] !== null) {
+        meta.mid = rec['mid'] as number;
+      }
+      if (rec['name'] !== undefined && rec['name'] !== null) {
+        meta.name = cleanTitle(rec['name'] as string);
+      }
+      if (rec['total'] !== undefined && rec['total'] !== null) {
+        meta.total = rec['total'] as number;
+      }
+      if (rec['cover'] !== undefined && rec['cover'] !== null) {
+        meta.cover = rec['cover'] as string;
+      }
+      if (rec['series_id'] !== undefined && rec['series_id'] !== null) {
+        meta.seasonId = rec['series_id'] as number;
+      }
+    }
+    if (meta.seasonId === 0) {
+      meta.seasonId = seriesId;
+    }
+    if (meta.name === '') {
+      meta.name = `系列 ${seriesId}`;
+    }
+    return meta;
   }
 
   static async fetchMyFolders(): Promise<FavFolder[]> {

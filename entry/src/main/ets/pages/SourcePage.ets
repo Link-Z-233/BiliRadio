@@ -252,31 +252,19 @@ struct SourcePage {
           })
         }
 
-        if (this.canLoadOlder) {
+        if (this.loadingOlder) {
           Row() {
-            if (this.loadingOlder) {
-              LoadingProgress()
-                .width(18)
-                .height(18)
-                .color($r('app.color.text_secondary'))
-              Text('加载中...')
-                .fontSize(13)
-                .fontColor($r('app.color.text_secondary'))
-                .margin({ left: 6 })
-            } else {
-              Text('加载更早')
-                .fontSize(13)
-                .fontColor($r('app.color.text_secondary'))
-            }
+            LoadingProgress()
+              .width(18)
+              .height(18)
+              .color($r('app.color.text_secondary'))
+            Text('加载中...')
+              .fontSize(13)
+              .fontColor($r('app.color.text_secondary'))
+              .margin({ left: 6 })
           }
           .padding({ left: 14, right: 14, top: 6, bottom: 6 })
-          .borderRadius(14)
-          .backgroundColor($r('app.color.card_background'))
           .margin({ left: 16, bottom: 8 })
-          .alignSelf(ItemAlign.Start)
-          .onClick(() => {
-            this.loadOlder();
-          })
         }
 
         if (this.episodeCount === 0) {
@@ -336,6 +324,9 @@ struct SourcePage {
           .width('100%')
           .padding({ left: 12, right: 12, top: 4, bottom: 12 })
           .layoutWeight(1)
+          .onReachStart(() => {
+            this.loadOlder();
+          })
         }
       }
       .width('100%')

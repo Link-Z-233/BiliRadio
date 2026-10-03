@@ -78,6 +78,7 @@ export struct QueueSheet {
   @State headerHeight: number = 138;
   @State flashIndex: number = -1;
 
+  @StorageLink('showQueueSheet') showQueueSheet: boolean = false;
   @StorageProp('isWideScreen') isWideScreen: boolean = false;
   private controller: PlayerController = PlayerController.getInstance();
 
@@ -421,6 +422,20 @@ export struct QueueSheet {
                 this.clearQueue();
               })
           }
+
+          Button('完成')
+            .height(30)
+            .padding({ left: 12, right: 12 })
+            .backgroundColor($r('app.color.btn_glass'))
+            .backdropBlur(20)
+            .border({ width: 1, color: $r('app.color.btn_border') })
+            .fontColor(this.textPrimary())
+            .borderRadius(15)
+            .fontSize(12)
+            .margin({ left: 8 })
+            .onClick(() => {
+              this.showQueueSheet = false;
+            })
         }
         .width('100%')
         .padding({ left: 16, right: 16, top: 20, bottom: 8 })

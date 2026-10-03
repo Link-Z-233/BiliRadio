@@ -960,13 +960,6 @@ export class PlayerController {
     await this.playDownloadedSong(video);
   }
 
-  setCoPlayWithOthers(enabled: boolean): void {
-    AppStore.putNumber(Constants.KEY_CO_PLAY_WITH_OTHERS, enabled ? 1 : 0);
-    hilog.info(Constants.LOG_DOMAIN, Constants.LOG_TAG,
-      'setCoPlayWithOthers mode=%{public}s', enabled ? 'share' : 'independent');
-    this.player.applyInterruptMode(enabled);
-  }
-
   async addManyToPlaylist(bvids: string[]): Promise<void> {
     const unique: string[] = [];
     for (let i = 0; i < bvids.length; i++) {

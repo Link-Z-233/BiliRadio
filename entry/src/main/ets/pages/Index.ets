@@ -137,14 +137,8 @@ struct Index {
     PlayerOverlay()
   }
 
-  @Builder
-  private queueSheetBuilder() {
-    QueueSheet()
-  }
-
   build() {
     Stack() {
-      // 页面背景 — 延伸到顶部和底部安全区
       Column()
         .width('100%')
         .height('100%')
@@ -165,16 +159,33 @@ struct Index {
       .width('100%')
       .height('100%')
       .padding({ top: this.statusBarHeight, bottom: this.navBarHeight })
+
+      if (this.showQueueSheet) {
+        Column()
+          .width('60%')
+          .height('100%')
+          .backgroundColor('#00000000')
+          .onClick(() => {
+            animateTo({ duration: 250, curve: Curve.EaseOut }, (): void => {
+              this.showQueueSheet = false;
+            });
+          })
+      }
+
+      Column() {
+        QueueSheet()
+      }
+      .width('40%')
+      .height('100%')
+      .backgroundColor($r('app.color.sheet_background'))
+      .borderRadius({ topLeft: 16, bottomLeft: 16 })
+      .translate({ x: this.showQueueSheet ? 0 : '100%' })
+      .animation({ duration: 250, curve: Curve.EaseOut })
     }
     .width('100%')
     .height('100%')
     .bindContentCover($$this.showPlayerOverlay, this.playerOverlayBuilder(), {
       modalTransition: ModalTransition.DEFAULT
-    })
-    .bindSheet($$this.showQueueSheet, this.queueSheetBuilder(), {
-      detents: [SheetSize.LARGE],
-      dragBar: true,
-      showClose: false
     })
     .onAreaChange((oldArea: Area, newArea: Area) => {
       this.pageWidth = newArea.width as number;

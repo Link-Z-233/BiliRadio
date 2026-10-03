@@ -4,6 +4,11 @@ import { SubscriptionStore } from '../service/SubscriptionStore';
 import { Constants } from '../service/Constants';
 import { CoverThumb } from '../component/CoverThumb';
 import { AddSubscriptionSheet } from './AddSubscriptionSheet';
+import { promptAction } from '@kit.ArkUI';
+
+interface PopupStateChange {
+  isVisible: boolean;
+}
 
 class SubRow {
   sub: Subscription = new Subscription();
@@ -51,6 +56,7 @@ export struct HomePage {
   @State refreshing: boolean = false;
   @State rowCount: number = 0;
   @State showAddSheet: boolean = false;
+  @State showMoreMenu: boolean = false;
   private subs: Subscription[] = [];
   private provider: SubDataSource = new SubDataSource();
   private refreshingNow: boolean = false;
@@ -149,7 +155,8 @@ export struct HomePage {
     SubscriptionStore.refreshSubscription(sub).then((): void => {
       SubscriptionStore.saveSubscriptions(this.subs);
       this.rebuild();
-    }).catch((): void => {
+    }).catch((err: Error): void => {
+      promptAction.showToast({ message: `刷新节目失败: ${err.message}` });
     });
   }
 
@@ -225,25 +232,56 @@ export struct HomePage {
   }
 
   @Builder
-  private moreMenu() {
-    Menu() {
-      MenuItem({ content: '设置' })
+  private morePopupContent() {
+    Column() {
+      Text('设置')
+        .width('100%')
+        .height(44)
+        .padding({ left: 16, right: 16 })
+        .fontSize(14)
+        .fontColor($r('app.color.text_primary'))
         .onClick(() => {
+          this.showMoreMenu = false;
           this.navPathStack.pushPathByName('settingsPage', '');
         })
-      MenuItem({ content: '下载管理' })
+      Divider().color($r('app.color.track_color')).margin({ left: 16, right: 16 })
+      Text('下载管理')
+        .width('100%')
+        .height(44)
+        .padding({ left: 16, right: 16 })
+        .fontSize(14)
+        .fontColor($r('app.color.text_primary'))
         .onClick(() => {
+          this.showMoreMenu = false;
           this.navPathStack.pushPathByName('downloadsPage', '');
         })
-      MenuItem({ content: '播放历史' })
+      Divider().color($r('app.color.track_color')).margin({ left: 16, right: 16 })
+      Text('播放历史')
+        .width('100%')
+        .height(44)
+        .padding({ left: 16, right: 16 })
+        .fontSize(14)
+        .fontColor($r('app.color.text_primary'))
         .onClick(() => {
+          this.showMoreMenu = false;
           this.navPathStack.pushPathByName('settingsPage', 'playHistory');
         })
-      MenuItem({ content: '关于' })
+      Divider().color($r('app.color.track_color')).margin({ left: 16, right: 16 })
+      Text('关于')
+        .width('100%')
+        .height(44)
+        .padding({ left: 16, right: 16 })
+        .fontSize(14)
+        .fontColor($r('app.color.text_primary'))
         .onClick(() => {
+          this.showMoreMenu = false;
           this.navPathStack.pushPathByName('settingsPage', 'about');
         })
     }
+    .width(160)
+    .borderRadius(12)
+    .backgroundColor($r('app.color.card_background'))
+    .shadow({ radius: 12, color: '#33000000', offsetY: 4 })
   }
 
   @Builder
@@ -299,7 +337,20 @@ export struct HomePage {
         .backgroundColor($r('app.color.card_background'))
         .justifyContent(FlexAlign.Center)
         .margin({ left: 8 })
-        .bindMenu(this.moreMenu)
+        .onClick(() => {
+          this.showMoreMenu = !this.showMoreMenu;
+        })
+        .bindPopup(this.showMoreMenu, {
+          builder: this.morePopupContent,
+          placement: Placement.BottomRight,
+          showInSubWindow: true,
+          maskColor: '#00000000',
+          onStateChange: (e: PopupStateChange): void => {
+            if (!e.isVisible) {
+              this.showMoreMenu = false;
+            }
+          }
+        })
       }
       .width('100%')
       .padding({ left: 16, right: 12, top: 6, bottom: 10 })
@@ -328,7 +379,8 @@ export struct HomePage {
     .height('100%')
     .bindSheet($$this.showAddSheet, this.addSheetBuilder(), {
       detents: [SheetSize.MEDIUM, SheetSize.LARGE],
-      showClose: true
+      showClose: true,
+      preferType: SheetType.BOTTOM
     })
   }
 }

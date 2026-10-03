@@ -6,7 +6,7 @@ import { QrCode, QrEcc } from '../service/QrCode';
 import { AppStore } from '../service/AppStore';
 import { Appearance } from '../service/Appearance';
 import { DownloadManager } from '../service/DownloadManager';
-import { BusinessError, pasteboard } from '@kit.BasicServicesKit';
+import { BusinessError } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { common, OpenLinkOptions } from '@kit.AbilityKit';
 import { componentSnapshot } from '@kit.ArkUI';
@@ -77,7 +77,6 @@ struct SettingsPage {
   @State qrUrl: string = '';
   @State oneKeyLogging: boolean = false;
   @State showAbout: boolean = false;
-  @State aboutTip: string = '';
 
   // —— 取消收藏历史 ——
   @StorageLink('showHistory') showHistory: boolean = false; // key 与 Constants.AS_SHOW_HISTORY 对应
@@ -95,8 +94,6 @@ struct SettingsPage {
   @State dataSaver: boolean = false;
   @State preferLowBitrate: boolean = false;
   @State wifiOnlyDownload: boolean = false;
-  // 与其他媒体同时播放：默认开=共存混音（与 1.0.1 行为一致），关=独占音频焦点
-  @State coPlayWithOthers: boolean = true;
   // 外观三态选中态（0=跟随系统 1=浅色 2=深色）：由 Appearance 写入 AppStorage 驱动刷新
   @StorageProp('colorModeSetting') colorModeSetting: number = 0;
 
@@ -129,7 +126,6 @@ struct SettingsPage {
     this.dataSaver = AppStore.getNumber(Constants.KEY_DATA_SAVER, 0) === 1;
     this.preferLowBitrate = AppStore.getNumber(Constants.KEY_PREFER_LOW_BITRATE, 0) === 1;
     this.wifiOnlyDownload = AppStore.getNumber(Constants.KEY_WIFI_ONLY_DOWNLOAD, 0) === 1;
-    this.coPlayWithOthers = AppStore.getNumber(Constants.KEY_CO_PLAY_WITH_OTHERS, 1) === 1;
     this.controller.subscribe((): void => {
       this.refreshLoginState();
       if (this.showHistory && this.historyVersion !== this.controller.historyVersion) {
@@ -496,22 +492,6 @@ struct SettingsPage {
     this.refreshLoginState();
   }
 
-  private openBiliSpace(): void {
-    const ctx = getContext(this) as common.UIAbilityContext;
-    const options: OpenLinkOptions = { appLinkingOnly: false };
-    ctx.openLink('https://space.bilibili.com/604142543', options)
-      .catch((err: BusinessError) => {
-        this.aboutTip = `打开B站主页失败: ${err.message}`;
-      });
-  }
-
-  private async copyEmail(): Promise<void> {
-    const pasteData = pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, 'heartthrobwood@qq.com');
-    const systemPasteboard = pasteboard.getSystemPasteboard();
-    await systemPasteboard.setData(pasteData);
-    this.aboutTip = '反馈邮箱已复制';
-  }
-
 
   private selectAppearance(mode: number): void {
     if (mode === this.colorModeSetting) {
@@ -588,10 +568,28 @@ struct SettingsPage {
     .alignItems(VerticalAlign.Top)
   }
 
-  // 「关于」弹窗：应用图标/名称 + 简介 + 核心功能 + 联系我们 + 作者
+  // 「关于」弹窗：应用图标/名称 + 简介 + 核心功能
   @Builder
   aboutSheet() {
     Column() {
+      Row() {
+        Blank()
+        Button('完成')
+          .height(30)
+          .padding({ left: 12, right: 12 })
+          .backgroundColor($r('app.color.btn_glass'))
+          .backdropBlur(20)
+          .border({ width: 1, color: $r('app.color.btn_border') })
+          .fontColor(this.textPrimary())
+          .borderRadius(15)
+          .fontSize(12)
+          .onClick(() => {
+            this.showAbout = false;
+          })
+      }
+      .width('100%')
+      .padding({ left: 16, right: 8, top: 8, bottom: 4 })
+
       Scroll() {
         Column() {
           Image($r('app.media.startIcon'))
@@ -641,99 +639,6 @@ struct SettingsPage {
           .width('100%')
           .margin({ top: 12 })
 
-          Divider()
-            .color($r('app.color.track_color'))
-            .strokeWidth(1)
-            .margin({ top: 16, bottom: 14 })
-
-          Text('联系我们')
-            .fontSize(15)
-            .fontWeight(FontWeight.Bold)
-            .fontColor(this.textPrimary())
-            .width('100%')
-            .textAlign(TextAlign.Start)
-
-          Row() {
-            Text('B站主页')
-              .fontSize(14)
-              .fontColor(this.textPrimary())
-            Blank()
-            Text('space.bilibili.com/604142543')
-              .fontSize(12)
-              .fontColor(this.textSecondary())
-              .maxLines(1)
-              .textOverflow({ overflow: TextOverflow.Ellipsis })
-          }
-          .width('100%')
-          .padding(12)
-          .backgroundColor($r('app.color.btn_glass'))
-          .backdropBlur(20)
-          .border({ width: 1, color: $r('app.color.btn_border') })
-          .borderRadius(10)
-          .margin({ top: 12 })
-          .onClick(() => {
-            this.openBiliSpace();
-          })
-
-          Row() {
-            Text('反馈邮箱')
-              .fontSize(14)
-              .fontColor(this.textPrimary())
-            Blank()
-            Text('heartthrobwood@qq.com')
-              .fontSize(12)
-              .fontColor(this.textSecondary())
-          }
-          .width('100%')
-          .padding(12)
-          .backgroundColor($r('app.color.btn_glass'))
-          .backdropBlur(20)
-          .border({ width: 1, color: $r('app.color.btn_border') })
-          .borderRadius(10)
-          .margin({ top: 8 })
-          .onClick(() => {
-            this.copyEmail();
-          })
-
-          Divider()
-            .color($r('app.color.track_color'))
-            .strokeWidth(1)
-            .margin({ top: 16, bottom: 14 })
-
-          Text('作者')
-            .fontSize(15)
-            .fontWeight(FontWeight.Bold)
-            .fontColor(this.textPrimary())
-            .width('100%')
-            .textAlign(TextAlign.Start)
-
-          Row({ space: 12 }) {
-            Image($r('app.media.headpic'))
-              .width(44)
-              .height(44)
-              .borderRadius(22)
-              .objectFit(ImageFit.Cover)
-              .border({ width: 1, color: $r('app.color.btn_border') })
-            Text('盖世木头')
-              .fontSize(15)
-              .fontWeight(FontWeight.Medium)
-              .fontColor(this.textPrimary())
-          }
-          .width('100%')
-          .padding(12)
-          .backgroundColor($r('app.color.btn_glass'))
-          .backdropBlur(20)
-          .border({ width: 1, color: $r('app.color.btn_border') })
-          .borderRadius(10)
-          .margin({ top: 12 })
-          .alignItems(VerticalAlign.Center)
-
-          if (this.aboutTip !== '') {
-            Text(this.aboutTip)
-              .fontSize(12)
-              .fontColor(this.textSecondary())
-              .margin({ top: 12 })
-          }
         }
         .width('100%')
         .padding({ left: 24, right: 24, top: 16, bottom: 24 })
@@ -1290,34 +1195,6 @@ struct SettingsPage {
         .borderRadius(12)
         .margin({ top: 8 })
 
-        Row() {
-          Column() {
-            Text('与其他媒体同时播放')
-              .fontSize(14)
-              .fontColor(this.textPrimary())
-            Text('开启后听歌时允许其他应用声音同时播放')
-              .fontSize(12)
-              .fontColor(this.textSecondary())
-              .margin({ top: 2 })
-          }
-          .alignItems(HorizontalAlign.Start)
-          .layoutWeight(1)
-
-          Toggle({ type: ToggleType.Switch, isOn: this.coPlayWithOthers })
-            .selectedColor($r('app.color.primary_color'))
-            .onChange((isOn: boolean) => {
-              this.coPlayWithOthers = isOn;
-              this.controller.setCoPlayWithOthers(isOn);
-            })
-        }
-        .width('92%')
-        .padding(14)
-        .backgroundColor($r('app.color.btn_glass'))
-        .backdropBlur(20)
-        .border({ width: 1, color: $r('app.color.btn_border') })
-        .borderRadius(12)
-        .margin({ top: 8 })
-
         Text('省流量设置')
           .fontSize(15)
           .fontColor(this.textPrimary())
@@ -1527,6 +1404,7 @@ struct SettingsPage {
       dragBar: true,
       showClose: false,
       backgroundColor: $r('app.color.sheet_background'),
+      preferType: SheetType.BOTTOM
     })
 
       if (this.showHistory) {

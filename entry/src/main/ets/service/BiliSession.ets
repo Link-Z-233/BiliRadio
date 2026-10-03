@@ -39,6 +39,11 @@ export class BiliSession {
     this.uname = '';
   }
 
+  resetBuvid(): void {
+    this.buvid3 = '';
+    this.buvid4 = '';
+  }
+
   private static extractValue(cookie: string, key: string): string {
     const parts: string[] = cookie.split(';');
     for (let i = 0; i < parts.length; i++) {

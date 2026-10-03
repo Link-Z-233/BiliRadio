@@ -4,7 +4,6 @@ import { fileIo as fs } from '@kit.CoreFileKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { Constants, sleep } from './Constants';
-import { AppStore } from './AppStore';
 
 export class AudioPlayer {
   private avPlayer: media.AVPlayer | undefined = undefined;
@@ -129,9 +128,7 @@ export class AudioPlayer {
       rendererFlags: 0
     };
     try {
-      const coPlay: number = AppStore.getNumber(Constants.KEY_CO_PLAY_WITH_OTHERS, 1);
-      this.avPlayer.audioInterruptMode = coPlay === 1
-        ? audio.InterruptMode.SHARE_MODE : audio.InterruptMode.INDEPENDENT_MODE;
+      this.avPlayer.audioInterruptMode = audio.InterruptMode.INDEPENDENT_MODE;
     } catch (e) {
       hilog.warn(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'set audioInterruptMode failed');
     }
@@ -200,20 +197,6 @@ export class AudioPlayer {
       try {
         this.avPlayer.setPlaybackRate(rate);
       } catch (e) {}
-    }
-  }
-
-  applyInterruptMode(coPlayEnabled: boolean): void {
-    if (this.avPlayer === undefined) {
-      return;
-    }
-    try {
-      this.avPlayer.audioInterruptMode = coPlayEnabled
-        ? audio.InterruptMode.SHARE_MODE : audio.InterruptMode.INDEPENDENT_MODE;
-      hilog.info(Constants.LOG_DOMAIN, Constants.LOG_TAG,
-        'applyInterruptMode coPlayEnabled=%{public}d', coPlayEnabled ? 1 : 0);
-    } catch (e) {
-      hilog.warn(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'applyInterruptMode failed');
     }
   }
 

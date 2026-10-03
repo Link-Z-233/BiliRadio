@@ -1,7 +1,7 @@
 // 封面缩略图：播放列表与播放历史共用的封面渲染（有封面显示图片，无封面显示 ♪ 占位）。
 @Component
 export struct CoverThumb {
-  cover: string = '';
+  @Prop cover: string = '';
   thumbSize: number = 44;
   radius: number = 8;
   highlight: boolean = false;
