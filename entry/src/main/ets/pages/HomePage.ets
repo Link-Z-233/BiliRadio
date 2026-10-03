@@ -53,6 +53,7 @@ class SubDataSource implements IDataSource {
 @Component
 export struct HomePage {
   @StorageProp('accentColor') accentColor: string = Constants.ACCENT_DEFAULT;
+  @StorageProp('miniPlayerVisible') miniPlayerVisible: boolean = false; // key 与 Constants.AS_MINI_PLAYER_VISIBLE 对应
   @State refreshing: boolean = false;
   @State rowCount: number = 0;
   @State showAddSheet: boolean = false;
@@ -245,17 +246,6 @@ export struct HomePage {
           this.navPathStack.pushPathByName('settingsPage', '');
         })
       Divider().color($r('app.color.track_color')).margin({ left: 16, right: 16 })
-      Text('下载管理')
-        .width('100%')
-        .height(44)
-        .padding({ left: 16, right: 16 })
-        .fontSize(14)
-        .fontColor($r('app.color.text_primary'))
-        .onClick(() => {
-          this.showMoreMenu = false;
-          this.navPathStack.pushPathByName('downloadsPage', '');
-        })
-      Divider().color($r('app.color.track_color')).margin({ left: 16, right: 16 })
       Text('播放历史')
         .width('100%')
         .height(44)
@@ -367,7 +357,7 @@ export struct HomePage {
             }, (row: SubRow) => row.sub.id)
           }
           .width('100%')
-          .padding({ left: 12, right: 12, top: 4, bottom: 12 })
+          .padding({ left: 12, right: 12, top: 4, bottom: this.miniPlayerVisible ? Constants.MINI_PLAYER_CLEARANCE : 12 })
         }
         .onRefreshing(() => {
           this.manualRefresh();

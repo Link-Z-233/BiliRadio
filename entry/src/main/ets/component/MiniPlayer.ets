@@ -7,6 +7,7 @@ import { CoverThumb } from './CoverThumb';
 @Component
 export struct MiniPlayer {
   @StorageProp('accentColor') accentColor: string = Constants.ACCENT_DEFAULT;
+  @StorageProp('navBarHeight') navBarHeight: number = 0; // key 与 Constants.AS_NAV_BAR_HEIGHT 对应
   @State hasContent: boolean = false;
   @State cover: string = '';
   @State title: string = '';
@@ -21,11 +22,20 @@ export struct MiniPlayer {
     this.syncFromPlayer();
   }
 
+  aboutToDisappear(): void {
+    AppStorage.setOrCreate<boolean>(Constants.AS_MINI_PLAYER_VISIBLE, false);
+  }
+
   private syncFromPlayer(): void {
     const c: PlayerController = PlayerController.getInstance();
     const idxOk: boolean = c.currentIndex >= 0 && c.currentIndex < c.playlist.length;
     const dataSaver: boolean = AppStore.getNumber(Constants.KEY_DATA_SAVER, 0) === 1;
     const has: boolean = c.playlist.length > 0;
+    // 悬浮胶囊可见性上报：供各滚动页计算底部避让（值变化时才写，避免秒级 tick 抖动）
+    const prevVisible: boolean = AppStorage.get<boolean>(Constants.AS_MINI_PLAYER_VISIBLE) === true;
+    if (has !== prevVisible) {
+      AppStorage.setOrCreate<boolean>(Constants.AS_MINI_PLAYER_VISIBLE, has);
+    }
     const cover: string = idxOk && !dataSaver ? c.playlist[c.currentIndex].cover : '';
     const title: string = idxOk ? c.playlist[c.currentIndex].title : '';
     const owner: string = idxOk ? c.playlist[c.currentIndex].ownerName : '';
@@ -76,9 +86,6 @@ export struct MiniPlayer {
           .margin({ left: 10, right: 6 })
         }
         .layoutWeight(1)
-        .onClick(() => {
-          AppStorage.setOrCreate<boolean>(Constants.AS_SHOW_PLAYER_OVERLAY, true);
-        })
 
         if (this.isPlaying || this.isPreparing) {
           SymbolGlyph($r('sys.symbol.pause_fill'))
@@ -104,7 +111,7 @@ export struct MiniPlayer {
           .onClick(() => {
             PlayerController.getInstance().next();
           })
-        SymbolGlyph($r('sys.symbol.chevron_up'))
+        SymbolGlyph($r('sys.symbol.list_bullet'))
           .fontSize(20)
           .fontColor([$r('app.color.text_primary')])
           .padding(8)
@@ -114,10 +121,14 @@ export struct MiniPlayer {
       }
       .width('100%')
       .padding({ left: 10, right: 6, top: 8, bottom: 8 })
-      .backgroundColor($r('app.color.card_background'))
+      .backgroundColor($r('app.color.miniplayer_background'))
+      .backdropBlur(24)
       .borderRadius(24)
-      .margin({ left: 16, right: 16, bottom: 6 })
+      .margin({ left: 16, right: 16, bottom: this.navBarHeight + 8 })
       .shadow({ radius: 12, color: '#33000000', offsetX: 0, offsetY: 2 })
+      .onClick(() => {
+        AppStorage.setOrCreate<boolean>(Constants.AS_SHOW_PLAYER_OVERLAY, true);
+      })
     }
   }
 }

@@ -2,7 +2,6 @@ import { PlayerController } from '../service/PlayerController';
 import { BiliVideo } from '../model/BiliVideo';
 
 
-import { DownloadManager } from '../service/DownloadManager';
 import { Constants } from '../service/Constants';
 import { CoverThumb } from './CoverThumb';
 
@@ -64,7 +63,6 @@ export struct QueueSheet {
   @State addMsg: string = '';
   @StorageLink('playlistSelectMode') selectMode: boolean = false; // key 与 Constants.AS_PLAYLIST_SELECT_MODE 对应
   @State selectedBvids: string[] = [];
-  @State downloadMsg: string = '';
 
   // —— 歌曲搜索浮层（本地检索播放列表，零网络请求） ——
   @StorageLink('showSearch') showSearch: boolean = false; // key 与 Constants.AS_SHOW_SEARCH 对应
@@ -286,42 +284,6 @@ export struct QueueSheet {
     });
   }
 
-  // 批量下载选中的歌曲到本地（持久离线缓存）
-  private async downloadSelected(): Promise<void> {
-    const bvids: string[] = this.selectedBvids.slice(0);
-    if (bvids.length === 0) {
-      return;
-    }
-    const dm: DownloadManager = DownloadManager.getInstance();
-    let done: number = 0;
-    let failed: number = 0;
-    let skipped: number = 0;
-    for (let i = 0; i < bvids.length; i++) {
-      if (dm.isDownloaded(bvids[i])) {
-        skipped++;
-        continue;
-      }
-      this.downloadMsg = `正在保存到本地 ${i + 1}/${bvids.length}...`;
-      try {
-        await dm.downloadSong(bvids[i]);
-        done++;
-      } catch (e) {
-        failed++;
-      }
-    }
-    let msg: string = `保存完成：新增 ${done} 首`;
-    if (skipped > 0) {
-      msg += `，已保存跳过 ${skipped} 首`;
-    }
-    if (failed > 0) {
-      msg += `，失败 ${failed} 首`;
-    }
-    this.downloadMsg = '';
-    this.exitSelectMode();
-    this.addMsg = msg;
-  }
-
-
   formatTime(ms: number): string {
     const totalSeconds: number = Math.floor(ms / 1000);
     const minutes: number = Math.floor(totalSeconds / 60);
@@ -516,20 +478,6 @@ export struct QueueSheet {
                 this.removeSelected();
               })
 
-            Button(`保存到本地(${this.selectedBvids.length})`)
-              .height(36)
-              .padding({ left: 14, right: 14 })
-              .backgroundColor($r('app.color.btn_glass'))
-              .backdropBlur(20)
-              .border({ width: 1, color: $r('app.color.btn_border') })
-              .fontColor(this.selectedBvids.length > 0 ? $r('app.color.primary_color') : this.textPrimary())
-              .borderRadius(18)
-              .fontSize(13)
-              .margin({ left: 8 })
-              .onClick(() => {
-                this.downloadSelected();
-              })
-
             Button('返回')
               .height(36)
               .padding({ left: 14, right: 14 })
@@ -546,16 +494,6 @@ export struct QueueSheet {
           }
           .width('92%')
           .margin({ bottom: 4 })
-
-          if (this.downloadMsg !== '') {
-            Text(this.downloadMsg)
-              .fontSize(12)
-              .fontColor(this.textSecondary())
-              .width('92%')
-              .maxLines(1)
-              .textOverflow({ overflow: TextOverflow.Ellipsis })
-              .margin({ bottom: 4 })
-          }
         }
 
       }
@@ -612,15 +550,6 @@ export struct QueueSheet {
                         .maxLines(1)
                         .textOverflow({ overflow: TextOverflow.Ellipsis })
                         .layoutWeight(1)
-
-                      Text(item.sourceLabel())
-                        .fontSize(10)
-                        .fontColor(this.textSecondary())
-                        .padding({ left: 6, right: 6, top: 2, bottom: 2 })
-                        .backgroundColor($r('app.color.btn_glass'))
-                        .border({ width: 1, color: $r('app.color.btn_border') })
-                        .borderRadius(4)
-                        .margin({ left: 8 })
                     }
                     .width('100%')
 
@@ -649,10 +578,8 @@ export struct QueueSheet {
                   if (this.selectMode) {
                     this.toggleSelect(item.bvid);
                   } else {
+                    // 仅切换歌曲，不跳转播放页
                     this.controller.playIndex(index, 0);
-                    if (this.controller.goToPlayerTab !== undefined) {
-                      this.controller.goToPlayerTab();
-                    }
                   }
                 })
                 .gesture(
@@ -687,7 +614,6 @@ export struct QueueSheet {
             fractionStops: this.listBlurStops(),
             direction: GradientDirection.Bottom
           })
-          .lanes(this.isWideScreen ? 2 : 1)
 
         }
 

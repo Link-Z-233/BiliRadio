@@ -4,7 +4,7 @@ import { GripDetector } from '../service/GripDetector';
 
 import { HomePage } from './HomePage';
 import { PlayerOverlay } from './PlayerOverlay';
-import { QueueSheet } from '../component/QueueSheet';
+import { QueueDrawer } from '../component/QueueDrawer';
 import { MiniPlayer } from '../component/MiniPlayer';
 import { mediaquery } from '@kit.ArkUI';
 import { Constants } from '../service/Constants';
@@ -138,7 +138,7 @@ struct Index {
   }
 
   build() {
-    Stack() {
+    Stack({ alignContent: Alignment.Bottom }) {
       Column()
         .width('100%')
         .height('100%')
@@ -153,31 +153,22 @@ struct Index {
         .mode(NavigationMode.Stack)
         .width('100%')
         .layoutWeight(1)
-
-        MiniPlayer()
       }
       .width('100%')
       .height('100%')
       .padding({ top: this.statusBarHeight, bottom: this.navBarHeight })
 
-      if (this.showQueueSheet) {
-        Column()
-          .width('60%')
-          .height('100%')
-          .onClick(() => {
-            this.showQueueSheet = false;
-          })
+      // 悬浮播放胶囊：底部对齐覆盖在内容之上，内容可从其后方滚过；
+      // 用 Visibility 而非卸载，避免 MiniPlayer 反复 mount 造成 PlayerController 订阅累积
+      Column() {
+        MiniPlayer()
       }
+      .width('100%')
+      .visibility(this.showPlayerOverlay ? Visibility.None : Visibility.Visible)
 
-      if (this.showQueueSheet) {
-        Column() {
-          QueueSheet()
-        }
-        .width('40%')
-        .height('100%')
-        .backgroundColor($r('app.color.sheet_background'))
-        .borderRadius({ topLeft: 16, bottomLeft: 16 })
-        .transition(TransitionEffect.OPACITY.animation({ duration: 250, curve: Curve.EaseOut }))
+      // 队列抽屉：仅内容层渲染；播放页展开时改由 PlayerOverlay 层渲染，避免被封面图层遮挡
+      if (this.showQueueSheet && !this.showPlayerOverlay) {
+        QueueDrawer()
       }
     }
     .width('100%')

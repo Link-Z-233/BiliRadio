@@ -9,11 +9,6 @@
       "name": "settingsPage",
       "pageSourceFile": "src/main/ets/pages/SettingsPage.ets",
       "buildFunction": "SettingsPageBuilder"
-    },
-    {
-      "name": "downloadsPage",
-      "pageSourceFile": "src/main/ets/pages/DownloadsPage.ets",
-      "buildFunction": "DownloadsPageBuilder"
     }
   ]
 }

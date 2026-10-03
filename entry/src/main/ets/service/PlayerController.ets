@@ -1,6 +1,5 @@
 import { AudioPlayer } from './AudioPlayer';
 import { BiliService, DownloadProgressCallback } from './BiliService';
-import { DownloadManager } from './DownloadManager';
 import { BiliSession } from './BiliSession';
 import { SecureStore } from './SecureStore';
 import { AppStore, PlaylistSnapshot } from './AppStore';
@@ -415,72 +414,59 @@ export class PlayerController {
     this.loadToken++;
     const token: number = this.loadToken;
     try {
-      // 离线优先：已下载的歌曲直接播本地文件，不联网、不被临时缓存清理
-      const localPath: string = DownloadManager.getInstance().resolveLocalPath(item.bvid);
-      if (localPath !== '') {
-        item.audioUrl = localPath;
-        await this.player.setSource(localPath);
-        if (token !== this.loadToken) {
-          return;
-        }
-        this.mediaSession.updateTrack(item.bvid, item.title,
-          item.duration > 0 ? item.duration * 1000 : 0, item.cover, item.ownerName);
-        AppStore.savePlaylistFile(this.playlist, this.currentIndex, 0);
-      } else {
-        // 仅 Wi-Fi 下载门控：开关开且非 Wi-Fi 时，须经 UI 层确认后才放行本次缓存下载
-        const wifiOnly: boolean = AppStore.getNumber(Constants.KEY_WIFI_ONLY_DOWNLOAD, 0) === 1;
-        if (wifiOnly && !(await NetUtil.isWifi())) {
-          let confirmed: boolean = false;
-          if (this.confirmCellularDownload !== undefined) {
-            try {
-              confirmed = await this.confirmCellularDownload();
-            } catch (e) {
-              confirmed = false;
-            }
-          }
-          if (!confirmed) {
-            this.isPreparing = false;
-            this.statusMsg = '当前非 Wi-Fi 网络，已取消播放';
-            this.emitUi();
-            return;
+      // 仅 Wi-Fi 缓存下载门控：开关开且非 Wi-Fi 时，须经 UI 层确认后才放行本次缓存下载
+      const wifiOnly: boolean = AppStore.getNumber(Constants.KEY_WIFI_ONLY_DOWNLOAD, 0) === 1;
+      if (wifiOnly && !(await NetUtil.isWifi())) {
+        let confirmed: boolean = false;
+        if (this.confirmCellularDownload !== undefined) {
+          try {
+            confirmed = await this.confirmCellularDownload();
+          } catch (e) {
+            confirmed = false;
           }
         }
-        const preferLow: boolean = AppStore.getNumber(Constants.KEY_PREFER_LOW_BITRATE, 0) === 1;
-        const video: BiliVideo = await BiliService.resolveAndDownload(item.bvid, this.makeProgressCb(), preferLow);
-        if (token !== this.loadToken) {
+        if (!confirmed) {
+          this.isPreparing = false;
+          this.statusMsg = '当前非 Wi-Fi 网络，已取消播放';
+          this.emitUi();
           return;
         }
-        item.audioUrl = video.audioUrl;
-        if (video.cid > 0) {
-          item.cid = video.cid;
-        }
-        if (video.ownerName !== '') {
-          item.ownerMid = video.ownerMid;
-          item.ownerName = video.ownerName;
-          item.ownerFace = video.ownerFace;
-          this.emitUi();
-        }
-        if (video.view > 0) {
-          item.view = video.view;
-        }
-        if (video.pubdate > 0) {
-          item.pubdate = video.pubdate;
-        }
-        if (video.desc !== '') {
-          item.desc = video.desc;
-        }
-        if (video.view > 0 || video.pubdate > 0 || video.desc !== '') {
-          this.emitUi();
-        }
-        await this.player.setSource(video.audioUrl);
-        if (token !== this.loadToken) {
-          return;
-        }
-        this.mediaSession.updateTrack(item.bvid, item.title,
-          item.duration > 0 ? item.duration * 1000 : 0, item.cover, item.ownerName);
-        AppStore.savePlaylistFile(this.playlist, this.currentIndex, 0);
-        BiliService.cleanCache(video.audioUrl);
       }
+      const preferLow: boolean = AppStore.getNumber(Constants.KEY_PREFER_LOW_BITRATE, 0) === 1;
+      const video: BiliVideo = await BiliService.resolveAndDownload(item.bvid, this.makeProgressCb(), preferLow);
+      if (token !== this.loadToken) {
+        return;
+      }
+      item.audioUrl = video.audioUrl;
+      if (video.cid > 0) {
+        item.cid = video.cid;
+      }
+      if (video.ownerName !== '') {
+        item.ownerMid = video.ownerMid;
+        item.ownerName = video.ownerName;
+        item.ownerFace = video.ownerFace;
+        this.emitUi();
+      }
+      if (video.view > 0) {
+        item.view = video.view;
+      }
+      if (video.pubdate > 0) {
+        item.pubdate = video.pubdate;
+      }
+      if (video.desc !== '') {
+        item.desc = video.desc;
+      }
+      if (video.view > 0 || video.pubdate > 0 || video.desc !== '') {
+        this.emitUi();
+      }
+      await this.player.setSource(video.audioUrl);
+      if (token !== this.loadToken) {
+        return;
+      }
+      this.mediaSession.updateTrack(item.bvid, item.title,
+        item.duration > 0 ? item.duration * 1000 : 0, item.cover, item.ownerName);
+      AppStore.savePlaylistFile(this.playlist, this.currentIndex, 0);
+      BiliService.cleanCache(video.audioUrl);
     } catch (err) {
       if (token !== this.loadToken) {
         return;
@@ -748,7 +734,7 @@ export class PlayerController {
     }
   }
 
-  // 播放已下载的本地歌曲：以本地文件加入歌单并立即播放（离线，不联网）
+  // 按 bvid 加入歌单并立即播放（已在歌单则直接播放）
   async playDownloadedSong(video: BiliVideo): Promise<void> {
     if (this.isPreparing) {
       this.statusMsg = '正在准备中，请稍候';
@@ -955,7 +941,7 @@ export class PlayerController {
     return results;
   }
 
-  // 播放搜索结果：已在歌单则直接播放，不在则追加到歌单末尾后播放（本地已下载走离线路径，否则联网取流）
+  // 播放搜索结果：已在歌单则直接播放，不在则追加到歌单末尾后播放
   async playFromLibraryResult(video: BiliVideo): Promise<void> {
     await this.playDownloadedSong(video);
   }

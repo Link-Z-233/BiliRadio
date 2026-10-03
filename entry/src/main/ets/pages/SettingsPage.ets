@@ -5,7 +5,6 @@ import { PlayerController } from '../service/PlayerController';
 import { QrCode, QrEcc } from '../service/QrCode';
 import { AppStore } from '../service/AppStore';
 import { Appearance } from '../service/Appearance';
-import { DownloadManager } from '../service/DownloadManager';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { common, OpenLinkOptions } from '@kit.AbilityKit';
@@ -98,6 +97,7 @@ struct SettingsPage {
   @StorageProp('colorModeSetting') colorModeSetting: number = 0;
 
   @StorageProp('accentColor') accentColor: string = Constants.ACCENT_DEFAULT;
+  @StorageProp('miniPlayerVisible') miniPlayerVisible: boolean = false; // key 与 Constants.AS_MINI_PLAYER_VISIBLE 对应
   private qrCanvas: CanvasRenderingContext2D =
     new CanvasRenderingContext2D(new RenderingContextSettings(true));
 
@@ -146,14 +146,9 @@ struct SettingsPage {
   }
 
   private refreshCacheText(): void {
-    const dm: DownloadManager = DownloadManager.getInstance();
-    const count: number = dm.downloads.length;
-    const sizeMB: number = dm.downloadSizeMB();
-    this.cacheText = count > 0
-      ? `已保存 ${count} 首 · ${sizeMB.toFixed(1)} MB` : '暂无本地歌曲，可在播放队列中多选后保存到本地';
     const cacheMB: number = BiliService.cacheSizeMB();
-    this.cacheSubText = cacheMB > 0.5
-      ? `播放缓存 ${cacheMB.toFixed(1)} MB（播过的歌临时存放，可清理）` : '';
+    this.cacheText = cacheMB > 0.5 ? `播放缓存 ${cacheMB.toFixed(1)} MB` : '暂无播放缓存';
+    this.cacheSubText = '播过的歌临时存放，可清理';
   }
 
   private refreshLoginState(): void {
@@ -177,10 +172,6 @@ struct SettingsPage {
     this.playHistoryItems = this.controller.playHistory.slice(0);
     this.playHistorySource.setItems(this.playHistoryItems);
     this.showPlayHistory = true;
-  }
-
-  private sourceLabel(sourceType: number): string {
-    return BiliVideo.sourceLabelOf(sourceType);
   }
 
   private formatPlayedAt(playedAt: number): string {
@@ -604,7 +595,7 @@ struct SettingsPage {
             .fontColor(this.textPrimary())
             .margin({ top: 12 })
 
-          Text('版本 1.0.0')
+          Text('版本 0.1.0')
             .fontSize(12)
             .fontColor(this.textSecondary())
             .margin({ top: 4 })
@@ -631,9 +622,8 @@ struct SettingsPage {
 
           Column({ space: 10 }) {
             this.aboutFeature('订阅收听：UP 主 / 收藏夹 / 合集 / 系列，新集自动标 NEW')
-            this.aboutFeature('队列播放：整源入队、搜索、多选管理与保存到本地')
+            this.aboutFeature('队列播放：整源入队、搜索、多选管理')
             this.aboutFeature('播放控制：倍速、播放模式、睡眠定时、进度续播')
-            this.aboutFeature('下载管理：离线保存、存储占用概览、批量删除')
             this.aboutFeature('外观：深浅色三态 + 六色主题色板')
           }
           .width('100%')
@@ -773,7 +763,7 @@ struct SettingsPage {
     .height('100%')
     .backgroundColor($r('app.color.sheet_background'))
     .backdropBlur(20)
-    .padding({ bottom: 16 })
+    .padding({ bottom: this.miniPlayerVisible ? Constants.MINI_PLAYER_CLEARANCE : 16 })
     .zIndex(3)
   }
 
@@ -843,7 +833,7 @@ struct SettingsPage {
                     .fontColor($r('app.color.text_primary'))
                     .maxLines(1)
                     .textOverflow({ overflow: TextOverflow.Ellipsis })
-                  Text(`${this.sourceLabel(item.sourceType)} · ${this.formatPlayedAt(item.playedAt)}`)
+                  Text(this.formatPlayedAt(item.playedAt))
                     .fontSize(11)
                     .fontColor($r('app.color.text_secondary'))
                     .margin({ top: 3 })
@@ -876,7 +866,7 @@ struct SettingsPage {
     .height('100%')
     .backgroundColor($r('app.color.sheet_background'))
     .backdropBlur(20)
-    .padding({ bottom: 16 })
+    .padding({ bottom: this.miniPlayerVisible ? Constants.MINI_PLAYER_CLEARANCE : 16 })
     .zIndex(3)
   }
 
@@ -1259,7 +1249,7 @@ struct SettingsPage {
 
         Row() {
           Column() {
-            Text('仅 Wi-Fi 下在线播放')
+            Text('仅在 Wi-Fi 环境播放')
               .fontSize(14)
               .fontColor(this.textPrimary())
             Text('非 Wi-Fi 网络播放需手动确认')
@@ -1395,7 +1385,7 @@ struct SettingsPage {
       }
       .width('100%')
       .alignItems(HorizontalAlign.Center)
-      .padding({ top: 12, bottom: 24 })
+      .padding({ top: 12, bottom: this.miniPlayerVisible ? Constants.MINI_PLAYER_CLEARANCE : 24 })
     }
     .width('100%')
     .height('100%')

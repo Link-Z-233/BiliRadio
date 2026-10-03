@@ -7,7 +7,7 @@
 // 单例范式约束：后续新增服务类若需单例，必须复用
 //   private static instance: X | undefined = undefined;
 //   static getInstance(): X { ... }
-// 的一致写法，禁止引入第三种单例写法（现状 PlayerController/BiliSession/MediaSession/DownloadManager 四处已一致，不引入抽象基类）。
+// 的一致写法，禁止引入第三种单例写法（现状 PlayerController/BiliSession/MediaSession 三处已一致，不引入抽象基类）。
 
 export class Constants {
   // —— 日志 ——
@@ -54,6 +54,7 @@ export class Constants {
   static readonly AS_SHOW_PLAY_HISTORY: string = 'showPlayHistory';
   static readonly AS_SHOW_PLAYER_OVERLAY: string = 'showPlayerOverlay';
   static readonly AS_SHOW_QUEUE_SHEET: string = 'showQueueSheet';
+  static readonly AS_MINI_PLAYER_VISIBLE: string = 'miniPlayerVisible';
 
   // —— 受限色值（窗口层 API / Canvas 2D 不接受颜色资源引用，只能写字面量） ——
   // 仅能在此唯一定义，禁止其他文件重复声明
@@ -87,6 +88,8 @@ export class Constants {
   static readonly SLEEP_TIMER_MAX_HOURS: number = 12;
   static readonly SLEEP_TIMER_MIN_SECONDS: number = 60;
   static readonly SLEEP_TIMER_TICK_MS: number = 1000;
+  // 悬浮播放胶囊占位高度：胶囊高约 60 + 底部 8 偏移 + 余量，供各滚动页底部预留
+  static readonly MINI_PLAYER_CLEARANCE: number = 88;
 }
 
 // 延时工具：全库唯一实现，供各处「等待固定时长」复用。

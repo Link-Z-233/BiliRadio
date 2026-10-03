@@ -38,6 +38,7 @@ export function SourcePageBuilder() {
 @Component
 struct SourcePage {
   @StorageProp('accentColor') accentColor: string = Constants.ACCENT_DEFAULT;
+  @StorageProp('miniPlayerVisible') miniPlayerVisible: boolean = false; // key 与 Constants.AS_MINI_PLAYER_VISIBLE 对应
   @State navTitle: string = '';
   @State episodes: BiliVideo[] = [];      // 展示序：正序（老在上）
   @State refreshing: boolean = false;
@@ -322,7 +323,7 @@ struct SourcePage {
             }, (item: BiliVideo) => item.bvid)
           }
           .width('100%')
-          .padding({ left: 12, right: 12, top: 4, bottom: 12 })
+          .padding({ left: 12, right: 12, top: 4, bottom: this.miniPlayerVisible ? Constants.MINI_PLAYER_CLEARANCE : 12 })
           .layoutWeight(1)
           .onReachStart(() => {
             this.loadOlder();

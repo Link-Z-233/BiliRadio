@@ -5,6 +5,7 @@ import { BusinessError } from '@kit.BasicServicesKit';
 import { AppStore } from '../service/AppStore';
 import { Constants } from '../service/Constants';
 import { SleepTimerController } from '../service/SleepTimerController';
+import { QueueDrawer } from '../component/QueueDrawer';
 
 // 颜色全部使用 base/dark 双份颜色资源：浅色/深色外观下自动匹配（见 resources/base|dark/element/color.json）
 
@@ -12,6 +13,9 @@ import { SleepTimerController } from '../service/SleepTimerController';
 const GLOW_IDLE: number = 0.35;
 const GLOW_ACTIVE: number = 0.8;
 const GLOW_BREATH_MS: number = 3200;
+
+// 下滑退出播放层的位移阈值（vp）：内容已到顶部时，下滑超过该距离才退出
+const PLAYER_DISMISS_SWIPE: number = 80;
 
 @Component
 export struct PlayerOverlay {
@@ -35,6 +39,9 @@ export struct PlayerOverlay {
   @StorageLink('showMode') showMode: boolean = false; // key 与 Constants.AS_SHOW_MODE 对应
   @StorageLink('showSleepTimer') showSleepTimer: boolean = false; // key 与 Constants.AS_SHOW_SLEEP_TIMER 对应
   @StorageLink('showSleepTimerPicker') showSleepTimerPicker: boolean = false; // key 与 Constants.AS_SHOW_SLEEP_TIMER_PICKER 对应
+  @StorageLink('showQueueSheet') showQueueSheet: boolean = false; // key 与 Constants.AS_SHOW_QUEUE_SHEET 对应
+  @StorageProp('statusBarHeight') statusBarHeight: number = 38; // key 与 Constants.AS_STATUS_BAR_HEIGHT 对应
+  @StorageProp('navBarHeight') navBarHeight: number = 0; // key 与 Constants.AS_NAV_BAR_HEIGHT 对应
 
   @State glowStrength: number = GLOW_IDLE;
   @State playBtnScale: number = 1;
@@ -54,6 +61,8 @@ export struct PlayerOverlay {
   private trackBvid: string = '';
   private wasPlaying: boolean = false;
   private controller: PlayerController = PlayerController.getInstance();
+  // 内容滚动控制器：滑动手势结束时据此判断内容是否已滚到顶部
+  private contentScroller: Scroller = new Scroller();
 
   private textPrimary(): Resource {
     return $r('app.color.text_primary');
@@ -586,34 +595,26 @@ export struct PlayerOverlay {
   build() {
     Stack() {
       Column() {
-        // 顶部操作行：收起播放层 / 打开播放队列
-        Row() {
-          SymbolGlyph($r('sys.symbol.chevron_down'))
-            .fontSize(22)
-            .fontColor([$r('app.color.text_primary')])
-            .padding(6)
-            .onClick(() => {
-              AppStorage.setOrCreate<boolean>(Constants.AS_SHOW_PLAYER_OVERLAY, false);
-            })
-
-          Blank()
+        // 顶部操作行：仅保留收起按钮，标题居中；播放队列入口在下方控制行
+        Stack({ alignContent: Alignment.Center }) {
+          Row() {
+            SymbolGlyph($r('sys.symbol.chevron_down'))
+              .fontSize(22)
+              .fontColor([$r('app.color.text_primary')])
+              .padding(6)
+              .onClick(() => {
+                AppStorage.setOrCreate<boolean>(Constants.AS_SHOW_PLAYER_OVERLAY, false);
+              })
+            Blank()
+          }
+          .width('100%')
 
           Text('正在播放')
             .fontSize(13)
             .fontColor(this.textSecondary())
-
-          Blank()
-
-          SymbolGlyph($r('sys.symbol.list_bullet'))
-            .fontSize(22)
-            .fontColor([$r('app.color.text_primary')])
-            .padding(6)
-            .onClick(() => {
-              AppStorage.setOrCreate<boolean>(Constants.AS_SHOW_QUEUE_SHEET, true);
-            })
         }
         .width('100%')
-        .padding({ left: 10, right: 10, top: 6 })
+        .padding({ left: 10, right: 10, top: this.statusBarHeight + 6, bottom: 4 })
 
         if (this.trackIndex < 0 && this.playlistCount === 0) {
           Column() {
@@ -639,7 +640,7 @@ export struct PlayerOverlay {
           .justifyContent(FlexAlign.Start)
           .alignItems(HorizontalAlign.Center)
         } else {
-          Scroll() {
+          Scroll(this.contentScroller) {
             Column() {
               Stack() {
                 // 封面环境光晕 — 多段衰减模拟自然光扩散，播放时呼吸；粉色系资源，浅色下适当调亮保持协调
@@ -878,6 +879,21 @@ export struct PlayerOverlay {
                     this.popNext();
                     this.controller.next();
                   })
+
+                Row() {
+                  SymbolGlyph($r('sys.symbol.list_bullet'))
+                    .fontSize(22)
+                    .fontColor([this.textPrimary()])
+                }
+                .width(44)
+                .height(44)
+                .borderRadius(22)
+                .backgroundColor($r('app.color.btn_glass'))
+                .backdropBlur(20)
+                .justifyContent(FlexAlign.Center)
+                .onClick(() => {
+                  AppStorage.setOrCreate<boolean>(Constants.AS_SHOW_QUEUE_SHEET, true);
+                })
               }
               .margin({ top: 24 })
               .justifyContent(FlexAlign.Center)
@@ -965,6 +981,7 @@ export struct PlayerOverlay {
       }
       .width('100%')
       .layoutWeight(1)
+      .padding({ bottom: this.navBarHeight })
 
       if (this.showSpeed) {
         this.speedPanel()
@@ -981,9 +998,27 @@ export struct PlayerOverlay {
       if (this.showSleepTimerPicker) {
         this.sleepTimerPicker()
       }
+
+      // 播放队列抽屉：渲染在播放层内，保证覆盖在播放页内容之上
+      if (this.showQueueSheet) {
+        QueueDrawer()
+      }
     }
     .width('100%')
     .height('100%')
+    .backgroundColor($r('app.color.page_background'))
+    // 下滑退出播放层：仅在内容已滚到顶部时生效，避免与内容滚动冲突
+    .parallelGesture(
+      PanGesture({ direction: PanDirection.Vertical })
+        .onActionEnd((event: GestureEvent) => {
+          const atTop: boolean = this.contentScroller.currentOffset().yOffset <= 0;
+          const noOverlayOpen: boolean = !this.showQueueSheet && !this.showSpeed && !this.showMode &&
+            !this.showSleepTimer && !this.showSleepTimerPicker && !this.showDetail;
+          if (noOverlayOpen && atTop && event.offsetY > PLAYER_DISMISS_SWIPE) {
+            AppStorage.setOrCreate<boolean>(Constants.AS_SHOW_PLAYER_OVERLAY, false);
+          }
+        })
+    )
     .bindSheet($$this.showDetail, this.detailSheet(), {
       height: '62%',
       dragBar: true,

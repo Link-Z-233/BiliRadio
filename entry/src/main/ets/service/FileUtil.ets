@@ -1,7 +1,7 @@
 import { fileIo as fs } from '@kit.CoreFileKit';
 import { util } from '@kit.ArkTS';
 
-// 公共文件读写工具：全库唯一实现，供 AppStore / DownloadManager 等复用。
+// 公共文件读写工具：全库唯一实现，供 AppStore 等复用。
 // 仅依赖 @kit.CoreFileKit / @kit.ArkTS，零业务依赖；自身不吞异常，由调用方 try-catch 兜底。
 export class FileUtil {
   static readTextFile(path: string): string {

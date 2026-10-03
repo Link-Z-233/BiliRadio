@@ -1394,20 +1394,6 @@ export class BiliService {
     return BiliService.downloadToFile(remoteUrl, localPath, onProgress);
   }
 
-  static async downloadFirstSuccessToFile(candidates: string[], destPath: string,
-    onProgress: DownloadProgressCallback | undefined): Promise<string> {
-    let lastError: Error = new Error('No download candidate');
-    for (let i = 0; i < candidates.length; i++) {
-      try {
-        return await BiliService.downloadToFile(candidates[i], destPath, onProgress);
-      } catch (err) {
-        const error = err as BusinessError;
-        lastError = new Error(error.message);
-      }
-    }
-    throw lastError;
-  }
-
   static async downloadFirstSuccess(candidates: string[], fileName: string,
     onProgress: DownloadProgressCallback | undefined): Promise<string> {
     let lastError: Error = new Error('No download candidate');
