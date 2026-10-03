@@ -13,7 +13,6 @@ import { componentSnapshot } from '@kit.ArkUI';
 import { image } from '@kit.ImageKit';
 import { photoAccessHelper } from '@kit.MediaLibraryKit';
 import { fileIo as fs } from '@kit.CoreFileKit';
-import { ForegroundColor } from '../component/ForegroundColor';
 import { CoverThumb } from '../component/CoverThumb';
 import { Constants } from '../service/Constants';
 import { UnfavoriteRecord } from '../model/UnfavoriteRecord';
@@ -101,18 +100,16 @@ struct SettingsPage {
   // 外观三态选中态（0=跟随系统 1=浅色 2=深色）：由 Appearance 写入 AppStorage 驱动刷新
   @StorageProp('colorModeSetting') colorModeSetting: number = 0;
 
-  // 智能反色：封面偏暗时 true，前景文字自动转浅色保证可读
-  @StorageProp('coverIsDark') coverIsDark: boolean = false;
   @StorageProp('accentColor') accentColor: string = Constants.ACCENT_DEFAULT;
   private qrCanvas: CanvasRenderingContext2D =
     new CanvasRenderingContext2D(new RenderingContextSettings(true));
 
   private textPrimary(): Resource {
-    return ForegroundColor.primary(this.coverIsDark);
+    return $r('app.color.text_primary');
   }
 
   private textSecondary(): Resource {
-    return ForegroundColor.secondary(this.coverIsDark);
+    return $r('app.color.text_secondary');
   }
 
 

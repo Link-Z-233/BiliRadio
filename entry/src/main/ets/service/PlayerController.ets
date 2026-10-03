@@ -1,5 +1,5 @@
 import { AudioPlayer } from './AudioPlayer';
-import { BiliService, DownloadProgressCallback, FolderFetchResult } from './BiliService';
+import { BiliService, DownloadProgressCallback } from './BiliService';
 import { DownloadManager } from './DownloadManager';
 import { BiliSession } from './BiliSession';
 import { SecureStore } from './SecureStore';
@@ -9,8 +9,6 @@ import { BiliVideo } from '../model/BiliVideo';
 import { UnfavoriteRecord } from '../model/UnfavoriteRecord';
 import { PlayHistoryItem } from '../model/PlayHistoryItem';
 
-import { FavFolder } from '../model/FavFolder';
-import { SelectedSeason } from '../model/SelectedSeason';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { Constants } from './Constants';
@@ -52,7 +50,7 @@ export class PlayerController {
   isPrepared: boolean = false;
   currentTime: number = 0;
   duration: number = 0;
-  statusMsg: string = '登录后在"歌曲源"页选择文件夹生成歌单';
+  statusMsg: string = '在首页添加订阅，或在播放队列中粘贴BV号开始收听';
   pendingSeekMs: number = 0;
   playWhenReady: boolean = true;
   private pausedByUser: boolean = false;
@@ -72,7 +70,6 @@ export class PlayerController {
   playHistoryVersion: number = 0;
   goToPlayerTab: (() => void) | undefined = undefined;
   confirmCellularDownload: (() => Promise<boolean>) | undefined = undefined;
-  private syncing: boolean = false;
   private loadToken: number = 0;
 
   static modeLabel(mode: PlayMode): string {
@@ -222,8 +219,6 @@ export class PlayerController {
         this.statusMsg = '自动继续播放上次进度';
         this.playIndex(autoStartIndex, autoStartPos).catch((): void => {});
       }
-
-      this.syncWithFolders(false).catch((): void => {});
 
       BiliService.cleanCache('');
     } catch (e) {
@@ -830,296 +825,6 @@ export class PlayerController {
       const error = err as BusinessError;
       this.statusMsg = `取消收藏失败: ${error.message}`;
       this.emitUi();
-    }
-  }
-
-  private findInFolders(folders: FavFolder[], mediaId: number): FavFolder | undefined {
-    for (let i = 0; i < folders.length; i++) {
-      if (folders[i].mediaId === mediaId) {
-        return folders[i];
-      }
-    }
-    return undefined;
-  }
-
-  private buildFolderCounts(folders: FavFolder[], selectedIds: number[]): string {
-    const parts: string[] = [];
-    for (let i = 0; i < folders.length; i++) {
-      if (selectedIds.indexOf(folders[i].mediaId) >= 0) {
-        parts.push(`${folders[i].mediaId}=${folders[i].count}`);
-      }
-    }
-    parts.sort();
-    return parts.join(';');
-  }
-
-  private buildSeasonCounts(seasons: SelectedSeason[]): string {
-    const parts: string[] = [];
-    for (let i = 0; i < seasons.length; i++) {
-      parts.push(`${seasons[i].mid}_${seasons[i].seasonId}=${seasons[i].count}`);
-    }
-    parts.sort();
-    return parts.join(';');
-  }
-
-  private clearSyncHint(): void {
-    if (this.statusMsg === '正在同步，请稍候') {
-      this.statusMsg = '';
-      this.emitUi();
-    }
-  }
-
-  async syncWithFolders(manual: boolean): Promise<void> {
-    if (this.syncing) {
-      this.statusMsg = '正在同步，请稍候';
-      this.emitUi();
-      return;
-    }
-    if (!BiliSession.getInstance().isLogged()) {
-      if (manual) {
-        this.statusMsg = '同步需要先登录';
-        this.emitUi();
-      }
-      return;
-    }
-    let selectedIds: number[] = [];
-    try {
-      selectedIds = JSON.parse(AppStore.getString(Constants.KEY_SELECTED_FOLDER_IDS, '[]')) as number[];
-    } catch (e) {
-      selectedIds = [];
-    }
-    let selectedSeasons: SelectedSeason[] = [];
-    try {
-      const arr: Record<string, Object>[] = JSON.parse(AppStore.getString(Constants.KEY_SELECTED_SEASONS, '[]')) as Record<string, Object>[];
-      for (let i = 0; i < arr.length; i++) {
-        selectedSeasons.push(SelectedSeason.fromRecord(arr[i]));
-      }
-    } catch (e) {
-      selectedSeasons = [];
-    }
-    if (selectedIds.length === 0 && selectedSeasons.length === 0) {
-      if (manual) {
-        this.statusMsg = '请先在"歌曲源"页勾选收藏夹或UP主合集';
-        this.emitUi();
-      }
-      return;
-    }
-    if (Date.now() < AppStore.getNumber(Constants.KEY_SYNC_BLOCKED_UNTIL, 0)) {
-      if (manual) {
-        this.statusMsg = 'B站接口风控中，请约10分钟后再试';
-        this.emitUi();
-      }
-      return;
-    }
-    this.syncing = true;
-    if (manual) {
-      this.statusMsg = '正在同步...';
-      this.emitUi();
-    }
-    try {
-      const folders: FavFolder[] = selectedIds.length > 0 ? await BiliService.fetchMyFolders() : [];
-      hilog.info(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'sync: selected=%{public}s, folders=%{public}d',
-        selectedIds.join(','), folders.length);
-      const countsStr: string = this.buildFolderCounts(folders, selectedIds) + '|' + this.buildSeasonCounts(selectedSeasons);
-      const savedCounts: string = AppStore.getString(Constants.KEY_SYNC_FOLDER_COUNTS, '');
-      if (!manual && savedCounts !== '' && countsStr === savedCounts) {
-        this.syncing = false;
-        this.clearSyncHint();
-        return;
-      }
-      const map: Map<string, BiliVideo> = new Map<string, BiliVideo>();
-      let allOk: boolean = true;
-      for (let i = 0; i < selectedIds.length; i++) {
-        const found: FavFolder | undefined = this.findInFolders(folders, selectedIds[i]);
-        if (found === undefined) {
-          hilog.warn(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'sync: folder %{public}d not found in list', selectedIds[i]);
-          allOk = false;
-          continue;
-        }
-        const folder: FavFolder = found;
-        if (manual) {
-          this.statusMsg = `正在同步「${folder.title}」...`;
-          this.emitUi();
-        }
-        let result: FolderFetchResult;
-        try {
-          const progress = manual ? (fetched: number, total: number): void => {
-            const totalText: string = total > 0 ? `${total}` : '?';
-            this.statusMsg = `正在同步「${folder.title}」${fetched}/${totalText}...`;
-            this.emitUi();
-          } : undefined;
-          result = await BiliService.fetchFolderVideos(folder.mediaId, folder.count, progress);
-        } catch (err) {
-          const errMsg: string = (err as Error).message;
-          hilog.warn(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'sync: folder %{public}d fetch failed: %{public}s',
-            selectedIds[i], errMsg);
-          if (errMsg.indexOf('412') >= 0) {
-            AppStore.putNumber(Constants.KEY_SYNC_BLOCKED_UNTIL, Date.now() + 10 * 60 * 1000);
-            break;
-          }
-          allOk = false;
-          if (!manual) {
-            break;
-          }
-          continue;
-        }
-        if (result.partialMsg !== '') {
-          hilog.warn(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'sync: folder %{public}d partial: %{public}s',
-            selectedIds[i], result.partialMsg);
-          if (result.partialMsg.indexOf('412') >= 0) {
-            AppStore.putNumber(Constants.KEY_SYNC_BLOCKED_UNTIL, Date.now() + 10 * 60 * 1000);
-            break;
-          }
-          allOk = false;
-        }
-        hilog.info(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'sync: folder %{public}d fetched %{public}d items (skipped %{public}d)',
-          folder.mediaId, result.items.length, result.skipped);
-        for (let j = 0; j < result.items.length; j++) {
-          const v: BiliVideo = result.items[j];
-          const ex: BiliVideo | undefined = map.get(v.bvid);
-          if (ex !== undefined) {
-            ex.folderIds.push(folder.mediaId);
-          } else {
-            v.folderIds.push(folder.mediaId);
-            map.set(v.bvid, v);
-          }
-        }
-      }
-      // 同步勾选的 UP主合集：拉取内容并合并进 map（以 mid_seasonId 作为来源标记）
-      for (let i = 0; i < selectedSeasons.length; i++) {
-        const season: SelectedSeason = selectedSeasons[i];
-        if (manual) {
-          this.statusMsg = `正在同步合集「${season.title}」...`;
-          this.emitUi();
-        }
-        let list: BiliVideo[];
-        try {
-          list = await BiliService.fetchSeasonVideos(season.mid, season.seasonId);
-        } catch (err) {
-          const errMsg: string = (err as Error).message;
-          hilog.warn(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'sync: season %{public}s fetch failed: %{public}s',
-            season.key(), errMsg);
-          if (errMsg.indexOf('412') >= 0) {
-            AppStore.putNumber(Constants.KEY_SYNC_BLOCKED_UNTIL, Date.now() + 10 * 60 * 1000);
-            break;
-          }
-          allOk = false;
-          if (!manual) {
-            break;
-          }
-          continue;
-        }
-        hilog.info(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'sync: season %{public}s fetched %{public}d items',
-          season.key(), list.length);
-        for (let j = 0; j < list.length; j++) {
-          const v: BiliVideo = list[j];
-          const ex: BiliVideo | undefined = map.get(v.bvid);
-          if (ex !== undefined) {
-            if (ex.seasonKeys.indexOf(season.key()) < 0) {
-              ex.seasonKeys.push(season.key());
-            }
-          } else {
-            v.seasonKeys.push(season.key());
-            map.set(v.bvid, v);
-          }
-        }
-      }
-      if (map.size === 0) {
-        this.syncing = false;
-        if (manual) {
-          this.statusMsg = '同步失败，请稍后再试';
-          this.emitUi();
-        } else {
-          this.clearSyncHint();
-        }
-        return;
-      }
-      const removalsAllowed: boolean = allOk;
-      const kept: BiliVideo[] = [];
-      let removedCount: number = 0;
-      for (let i = 0; i < this.playlist.length; i++) {
-        const item: BiliVideo = this.playlist[i];
-        const ex: BiliVideo | undefined = map.get(item.bvid);
-        if (ex !== undefined) {
-          item.folderIds = ex.folderIds.slice(0);
-          item.seasonKeys = ex.seasonKeys.slice(0);
-          kept.push(item);
-        } else if ((item.folderIds.length === 0 && item.seasonKeys.length === 0) || !removalsAllowed) {
-          kept.push(item);
-        } else {
-          removedCount++;
-        }
-      }
-      const playlistBvids: Set<string> = new Set<string>();
-      for (let i = 0; i < this.playlist.length; i++) {
-        playlistBvids.add(this.playlist[i].bvid);
-      }
-      const adds: BiliVideo[] = [];
-      map.forEach((v: BiliVideo, bvid: string) => {
-        if (!playlistBvids.has(bvid)) {
-          adds.push(v);
-        }
-      });
-      if (adds.length === 0 && removedCount === 0) {
-        hilog.info(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'sync: no changes, allOk=%{public}d, mapSize=%{public}d, playlist=%{public}d',
-          allOk ? 1 : 0, map.size, this.playlist.length);
-        if (allOk) {
-          AppStore.putString(Constants.KEY_SYNC_FOLDER_COUNTS, countsStr);
-        }
-        this.syncing = false;
-        if (manual) {
-          this.statusMsg = allOk ? '无变化' : '部分内容获取失败，未能完成校验，请稍后再试';
-          this.emitUi();
-        }
-        return;
-      }
-      const playingBvid: string = this.currentIndex >= 0 && this.currentIndex < this.playlist.length
-        ? this.playlist[this.currentIndex].bvid : '';
-      const wasPlaying: boolean = this.isPlaying || this.isPrepared;
-      this.playlist = kept.concat(adds);
-      this.playlistVersion++;
-      let newIndex: number = -1;
-      for (let i = 0; i < this.playlist.length; i++) {
-        if (this.playlist[i].bvid === playingBvid) {
-          newIndex = i;
-          break;
-        }
-      }
-      this.syncing = false;
-      const summary: string = allOk
-        ? `同步完成：新增 ${adds.length}，移除 ${removedCount}`
-        : `同步完成：新增 ${adds.length}（部分内容获取失败，移除未执行，可稍后再同步）`;
-      if (allOk) {
-        AppStore.putString(Constants.KEY_SYNC_FOLDER_COUNTS, countsStr);
-      }
-      if (newIndex >= 0) {
-        this.currentIndex = newIndex;
-        AppStore.putNumber(Constants.KEY_LAST_INDEX, newIndex);
-        this.statusMsg = summary;
-        AppStore.savePlaylistFile(this.playlist, this.currentIndex, this.currentTime);
-        this.emitUi();
-      } else if (wasPlaying && this.playlist.length > 0) {
-        const target: number = Math.min(this.currentIndex < 0 ? 0 : this.currentIndex, this.playlist.length - 1);
-        this.statusMsg = summary;
-        this.emitUi();
-        await this.playIndex(target, 0);
-      } else {
-        this.currentIndex = this.playlist.length > 0
-          ? Math.min(this.currentIndex < 0 ? 0 : this.currentIndex, this.playlist.length - 1) : -1;
-        this.statusMsg = summary;
-        AppStore.savePlaylistFile(this.playlist, this.currentIndex, 0);
-        this.emitUi();
-      }
-    } catch (err) {
-      this.syncing = false;
-      const error = err as BusinessError;
-      hilog.warn(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'sync folders failed: %{public}s', error.message);
-      if (manual) {
-        this.statusMsg = `同步失败: ${error.message}`;
-        this.emitUi();
-      } else {
-        this.clearSyncHint();
-      }
     }
   }
 

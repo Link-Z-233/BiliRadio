@@ -28,11 +28,6 @@ export class Constants {
   static readonly KEY_LAST_INDEX: string = 'lastIndex';
   static readonly KEY_LAST_POS_MS: string = 'lastPosMs';
   static readonly KEY_AUTO_PLAY_ON_START: string = 'autoPlayOnStart';
-  static readonly KEY_SELECTED_FOLDER_IDS: string = 'selectedFolderIds';
-  static readonly KEY_SELECTED_SEASONS: string = 'selectedSeasons';
-  static readonly KEY_LAST_SEASON_MID: string = 'lastSeasonMid';
-  static readonly KEY_SYNC_BLOCKED_UNTIL: string = 'syncBlockedUntil';
-  static readonly KEY_SYNC_FOLDER_COUNTS: string = 'syncFolderCounts';
   static readonly KEY_COLOR_MODE: string = 'colorMode';
   static readonly KEY_INTERRUPT_RESUME: string = 'interruptResume';
   static readonly KEY_DATA_SAVER: string = 'dataSaver';
@@ -44,11 +39,8 @@ export class Constants {
   // —— AppStorage 键 ——
   static readonly AS_COLOR_MODE_SETTING: string = 'colorModeSetting';
   static readonly AS_COLOR_MODE_RESOLVED: string = 'colorModeResolved';
-  static readonly AS_COVER_BRIGHTNESS: string = 'coverBrightness';
-  static readonly AS_COVER_IS_DARK: string = 'coverIsDark';
   static readonly AS_STATUS_BAR_HEIGHT: string = 'statusBarHeight';
   static readonly AS_NAV_BAR_HEIGHT: string = 'navBarHeight';
-  static readonly AS_FLOATING_TAB_HEIGHT: string = 'floatingTabHeight';
   static readonly AS_GRIP_ON_RIGHT: string = 'biliRadioGripOnRight';
   static readonly AS_IS_WIDE_SCREEN: string = 'isWideScreen';
 
@@ -57,8 +49,6 @@ export class Constants {
   static readonly AS_SHOW_SPEED: string = 'showSpeed';
   static readonly AS_SHOW_MODE: string = 'showMode';
   static readonly AS_PLAYLIST_SELECT_MODE: string = 'playlistSelectMode';
-  static readonly AS_FOLDER_SELECT_MODE: string = 'folderSelectMode';
-  static readonly AS_FOLDER_DOWNLOAD_SELECT_MODE: string = 'folderDownloadSelectMode';
   static readonly AS_SHOW_SLEEP_TIMER: string = 'showSleepTimer';
   static readonly AS_SHOW_SLEEP_TIMER_PICKER: string = 'showSleepTimerPicker';
   static readonly AS_SHOW_SEARCH: string = 'showSearch';
@@ -94,10 +84,6 @@ export class Constants {
   static readonly CONNECT_TIMEOUT_MS: number = 15000;
   static readonly READ_TIMEOUT_MS: number = 30000;
   static readonly STREAM_TIMEOUT_MS: number = 120000;
-  static readonly COVER_DARK_THRESHOLD: number = 128;
-  static readonly FLOATING_TAB_HEIGHT: number = 90;
-  static readonly COVER_BRIGHTNESS_DARK: number = 0.8;
-  static readonly COVER_BRIGHTNESS_LIGHT: number = 1.0;
   static readonly SLEEP_TIMER_PRESETS: number[] = [15 * 60, 30 * 60, 60 * 60];
   static readonly SLEEP_TIMER_MAX_HOURS: number = 12;
   static readonly SLEEP_TIMER_MIN_SECONDS: number = 60;

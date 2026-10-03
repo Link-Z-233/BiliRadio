@@ -21,8 +21,6 @@ struct Index {
   private wideListener: mediaquery.MediaQueryListener | undefined = undefined;
 
   aboutToAppear(): void {
-    AppStorage.setOrCreate<number>(Constants.AS_FLOATING_TAB_HEIGHT, Constants.FLOATING_TAB_HEIGHT);
-    AppStorage.setOrCreate<boolean>(Constants.AS_SHOW_HISTORY, false);
     AppStorage.setOrCreate<boolean>(Constants.AS_SHOW_SPEED, false);
     AppStorage.setOrCreate<boolean>(Constants.AS_SHOW_MODE, false);
     AppStorage.setOrCreate<boolean>(Constants.AS_SHOW_SLEEP_TIMER, false);
@@ -30,7 +28,6 @@ struct Index {
     AppStorage.setOrCreate<boolean>(Constants.AS_SHOW_SEARCH, false);
     AppStorage.setOrCreate<boolean>(Constants.AS_SHOW_PLAY_HISTORY, false);
     AppStorage.setOrCreate<boolean>(Constants.AS_PLAYLIST_SELECT_MODE, false);
-    AppStorage.setOrCreate<boolean>(Constants.AS_FOLDER_DOWNLOAD_SELECT_MODE, false);
     AppStorage.setOrCreate<boolean>(Constants.AS_SHOW_PLAYER_OVERLAY, false);
     AppStorage.setOrCreate<boolean>(Constants.AS_SHOW_QUEUE_SHEET, false);
     this.wideListener = mediaquery.matchMediaSync('(min-width: 600vp)');
@@ -108,10 +105,6 @@ struct Index {
       AppStorage.setOrCreate<boolean>(Constants.AS_SHOW_PLAYER_OVERLAY, false);
       return true;
     }
-    if (AppStorage.get<boolean>(Constants.AS_SHOW_HISTORY) === true) {
-      AppStorage.setOrCreate<boolean>(Constants.AS_SHOW_HISTORY, false);
-      return true;
-    }
     if (AppStorage.get<boolean>(Constants.AS_SHOW_SPEED) === true) {
       AppStorage.setOrCreate<boolean>(Constants.AS_SHOW_SPEED, false);
       return true;
@@ -132,16 +125,8 @@ struct Index {
       AppStorage.setOrCreate<boolean>(Constants.AS_SHOW_SEARCH, false);
       return true;
     }
-    if (AppStorage.get<boolean>(Constants.AS_SHOW_PLAY_HISTORY) === true) {
-      AppStorage.setOrCreate<boolean>(Constants.AS_SHOW_PLAY_HISTORY, false);
-      return true;
-    }
     if (AppStorage.get<boolean>(Constants.AS_PLAYLIST_SELECT_MODE) === true) {
       AppStorage.setOrCreate<boolean>(Constants.AS_PLAYLIST_SELECT_MODE, false);
-      return true;
-    }
-    if (AppStorage.get<boolean>(Constants.AS_FOLDER_SELECT_MODE) === true) {
-      AppStorage.setOrCreate<boolean>(Constants.AS_FOLDER_SELECT_MODE, false);
       return true;
     }
     return false;

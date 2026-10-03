@@ -15,7 +15,7 @@ import { Constants } from './Constants';
  * - 启动阶段（EntryAbility.onCreate）自行 getPreferencesSync 读取，不依赖 PlayerController 里的 AppStore.init 时机。
  * - 应用层通过 getApplicationContext().setColorMode() 生效，base/dark 资源目录自动匹配。
  * - 窗口层（窗口背景、状态栏/导航栏前景）按生效外观手动映射色值。
- * - AppStorage 同步：colorModeSetting（用户选择）、colorModeResolved（生效深浅）、coverBrightness（封面滤镜亮度）、
+ * - AppStorage 同步：colorModeSetting（用户选择）、colorModeResolved（生效深浅）、
  *   accentColor（主题色，限预设色板，默认 B 站粉）。
  */
 export class Appearance {
@@ -214,15 +214,10 @@ export class Appearance {
     }
   }
 
-  // 同步到 AppStorage：设置页选中态、底栏联动、封面亮度滤镜等 UI 由此驱动
+  // 同步到 AppStorage：设置页选中态、底栏联动等 UI 由此驱动
   private static syncAppStorage(): void {
     AppStorage.setOrCreate<number>(Constants.AS_COLOR_MODE_SETTING, Appearance.userMode);
     AppStorage.setOrCreate<number>(Constants.AS_COLOR_MODE_RESOLVED,
       Appearance.isDark ? Appearance.MODE_DARK : Appearance.MODE_LIGHT);
-    // 封面模糊背景压暗滤镜：深色沿用 0.8，浅色 1.0 避免发黑
-    AppStorage.setOrCreate<number>(Constants.AS_COVER_BRIGHTNESS,
-      Appearance.isDark ? Constants.COVER_BRIGHTNESS_DARK : Constants.COVER_BRIGHTNESS_LIGHT);
-    // 文字前景反色基准：双主题下背景明暗由分主题遮罩（白/深）决定，前景直接跟随生效深浅（深→白字、浅→黑字）
-    AppStorage.setOrCreate<boolean>(Constants.AS_COVER_IS_DARK, Appearance.isDark);
   }
 }

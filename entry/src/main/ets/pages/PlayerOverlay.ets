@@ -3,7 +3,6 @@ import { BiliVideo } from '../model/BiliVideo';
 import { common, Want } from '@kit.AbilityKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 // import { uiMaterial } from '@kit.ArkUI';
-import { ForegroundColor } from '../component/ForegroundColor';
 import { AppStore } from '../service/AppStore';
 import { Constants } from '../service/Constants';
 import { SleepTimerController } from '../service/SleepTimerController';
@@ -55,20 +54,18 @@ export struct PlayerOverlay {
   @State trackDesc: string = '';
   private trackBvid: string = '';
   private wasPlaying: boolean = false;
-  // 智能反色：封面偏暗时 true，前景文字自动转浅色保证可读
-  @StorageProp('coverIsDark') coverIsDark: boolean = false;
   private controller: PlayerController = PlayerController.getInstance();
 
   private textPrimary(): Resource {
-    return ForegroundColor.primary(this.coverIsDark);
+    return $r('app.color.text_primary');
   }
 
   private textSecondary(): Resource {
-    return ForegroundColor.secondary(this.coverIsDark);
+    return $r('app.color.text_secondary');
   }
 
   private textDisabled(): Resource {
-    return ForegroundColor.disabled(this.coverIsDark);
+    return $r('app.color.text_disabled');
   }
 
 

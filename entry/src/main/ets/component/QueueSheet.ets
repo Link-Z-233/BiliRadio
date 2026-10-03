@@ -3,7 +3,6 @@ import { BiliVideo } from '../model/BiliVideo';
 
 
 import { DownloadManager } from '../service/DownloadManager';
-import { ForegroundColor } from './ForegroundColor';
 import { Constants } from '../service/Constants';
 import { CoverThumb } from './CoverThumb';
 
@@ -79,21 +78,19 @@ export struct QueueSheet {
   @State headerHeight: number = 138;
   @State flashIndex: number = -1;
 
-  // 智能反色：封面偏暗时 true，前景文字自动转浅色保证可读
-  @StorageProp('coverIsDark') coverIsDark: boolean = false;
   @StorageProp('isWideScreen') isWideScreen: boolean = false;
   private controller: PlayerController = PlayerController.getInstance();
 
   private textPrimary(): Resource {
-    return ForegroundColor.primary(this.coverIsDark);
+    return $r('app.color.text_primary');
   }
 
   private textSecondary(): Resource {
-    return ForegroundColor.secondary(this.coverIsDark);
+    return $r('app.color.text_secondary');
   }
 
   private textDisabled(): Resource {
-    return ForegroundColor.disabled(this.coverIsDark);
+    return $r('app.color.text_disabled');
   }
 
   // 播放列表检索：纯内存遍历，不发起任何网络请求
