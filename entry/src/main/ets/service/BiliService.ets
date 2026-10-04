@@ -137,6 +137,17 @@ function checkJsonBody(url: string, result: string): string {
   return trimmed;
 }
 
+// UP 主空间类接口（acc/info、card、arc/search）错误分类：
+// -404/-400/-101/登录失效为业务性失败，立即终止降级链；
+// 其余（-352/-412 风控、非 JSON 风控页、空响应、网络抖动）视为可重试错误
+function isUpQueryFatal(err: Object): boolean {
+  const msg: string = err instanceof Error ? err.message : String(err);
+  if (msg.indexOf('登录已失效') >= 0) {
+    return true;
+  }
+  return msg.indexOf('-404') >= 0 || msg.indexOf('-400') >= 0 || msg.indexOf('-101') >= 0;
+}
+
 function httpGet(url: string, headers: Record<string, string> | undefined = undefined): Promise<string> {
   const httpRequest: http.HttpRequest = http.createHttp();
   return httpRequest.request(url, {
@@ -602,6 +613,9 @@ export class BiliService {
 
   // UP 主最新投稿（单页 30 条，新集在前）
   // ponytail: 只取第一页——播客「近期节目」语义；升级路径：SourcePage 滚动到底按需追加页
+  // 风控降级链：最多 3 轮，每轮「无签名 arc/search → WBI 签名」两步；
+  // -352/-412/风控页/网络错误等可重试错误重置 buvid 指数退避后进下一轮，
+  // -404/-400/-101 等业务错误立即失败；全败时抛出最后一轮真实错误（含错误码）
   static async fetchUpVideos(mid: number): Promise<BiliVideo[]> {
     const params: Record<string, string> = {
       'mid': mid.toString(),
@@ -611,28 +625,33 @@ export class BiliService {
       'platform': 'web',
     };
     const spaceHeaders: Record<string, string> = buildSpaceHeaders(mid);
-    let lastError: Error = new Error('unknown');
+    let lastError: Error = new Error('查询UP主投稿失败');
     for (let attempt: number = 0; attempt < 3; attempt++) {
       if (attempt > 0) {
         BiliSession.getInstance().resetBuvid();
         await sleep(2000 * attempt);
       }
-      const plainResult: string | null = await BiliService.fetchUpVideosOnce(
-        `${BILI_SPACE_ARC_URL}`, params, spaceHeaders);
-      if (plainResult !== null) {
-        const parsed: BiliVideo[] | null = BiliService.parseUpVideoList(plainResult);
-        if (parsed !== null) {
-          return parsed;
+      try {
+        const plainResult: string = await BiliService.fetchUpVideosOnce(`${BILI_SPACE_ARC_URL}`, params, spaceHeaders);
+        return BiliService.parseUpVideoList(plainResult);
+      } catch (plainErr) {
+        const plainError: Error = plainErr instanceof Error ? plainErr : new Error(String(plainErr));
+        lastError = plainError;
+        if (isUpQueryFatal(plainError)) {
+          throw plainError;
         }
       }
-      const mixinKey: string = await BiliService.fetchMixinKey();
-      const signedQuery: string = await WbiSigner.signParams(params, mixinKey);
-      const wbiResult: string | null = await BiliService.fetchUpVideosOnce(
-        `${BILI_SPACE_ARC_SEARCH_URL}?${signedQuery}`, {}, spaceHeaders);
-      if (wbiResult !== null) {
-        const parsed: BiliVideo[] | null = BiliService.parseUpVideoList(wbiResult);
-        if (parsed !== null) {
-          return parsed;
+      try {
+        const mixinKey: string = await BiliService.fetchMixinKey();
+        const signedQuery: string = await WbiSigner.signParams(params, mixinKey);
+        const wbiResult: string = await BiliService.fetchUpVideosOnce(
+          `${BILI_SPACE_ARC_SEARCH_URL}?${signedQuery}`, {}, spaceHeaders);
+        return BiliService.parseUpVideoList(wbiResult);
+      } catch (wbiErr) {
+        const wbiError: Error = wbiErr instanceof Error ? wbiErr : new Error(String(wbiErr));
+        lastError = wbiError;
+        if (isUpQueryFatal(wbiError)) {
+          throw wbiError;
         }
       }
     }
@@ -641,27 +660,20 @@ export class BiliService {
 
   private static async fetchUpVideosOnce(
     url: string, params: Record<string, string>,
-    headers: Record<string, string>): Promise<string | null> {
-    try {
-      const query: string = Object.keys(params).length > 0
-        ? '?' + Object.keys(params).map((k: string): string =>
-          `${k}=${encodeURIComponent(params[k])}`).join('&')
-        : '';
-      return await httpGet(`${url}${query}`, headers);
-    } catch (err) {
-      const msg: string = err instanceof Error ? err.message : String(err);
-      if (msg.indexOf('-352') >= 0 || msg.indexOf('-412') >= 0) {
-        return null;
-      }
-      throw new Error(msg);
-    }
+    headers: Record<string, string>): Promise<string> {
+    const query: string = Object.keys(params).length > 0
+      ? '?' + Object.keys(params).map((k: string): string =>
+        `${k}=${encodeURIComponent(params[k])}`).join('&')
+      : '';
+    return await httpGet(`${url}${query}`, headers);
   }
 
-  private static parseUpVideoList(resultStr: string): BiliVideo[] | null {
+  private static parseUpVideoList(resultStr: string): BiliVideo[] {
     const root: Record<string, Object> = JSON.parse(resultStr) as Record<string, Object>;
     const code: number = root['code'] as number;
     if (code !== 0) {
-      return null;
+      // 透出真实错误码（如 -352/-412 风控），供降级链分类与上层提示
+      throw new Error(`Bili API error ${code}`);
     }
     const data: Record<string, Object> = root['data'] as Record<string, Object>;
     const items: BiliVideo[] = [];
@@ -736,26 +748,50 @@ export class BiliService {
   }
 
   static async fetchUpInfo(mid: number): Promise<UpInfo> {
-    const mixinKey: string = await BiliService.fetchMixinKey();
     const params: Record<string, string> = {
       'mid': mid.toString(),
     };
-    const signedQuery: string = await WbiSigner.signParams(params, mixinKey);
-    // acc/info 风控严格（-352 频发），失败时兜底走风控宽松的 card 接口取 name/face
-    try {
-      const resultStr: string = await httpGet(`${BILI_SPACE_ACC_INFO_URL}?${signedQuery}`, buildSpaceHeaders(mid));
-      return BiliService.parseUpInfo(parseApiData(resultStr), mid);
-    } catch (e) {
-      hilog.warn(Constants.LOG_DOMAIN, Constants.LOG_TAG,
-        'acc/info failed (mid=%{public}d), fallback to card', mid);
-      const cardStr: string = await httpGet(`${BILI_CARD_URL}?${signedQuery}`, buildSpaceHeaders(mid));
-      const data: Record<string, Object> = parseApiData(cardStr);
-      const cardRaw: Object = data['card'];
-      if (cardRaw === undefined || cardRaw === null) {
-        throw new Error('未获取到UP主信息');
+    let lastError: Error = new Error('查询UP主失败');
+    // acc/info 风控严格（-352 频发）：最多 3 轮「WBI 签名 acc/info → card 兜底」降级；
+    // -352/-412/风控页等可重试错误重置 buvid 指数退避后进下一轮，
+    // -404/-400/-101 等业务错误立即失败；全败时抛出最后一轮真实错误（含错误码）
+    for (let attempt: number = 0; attempt < 3; attempt++) {
+      if (attempt > 0) {
+        BiliSession.getInstance().resetBuvid();
+        await sleep(2000 * attempt);
       }
-      return BiliService.parseUpInfo(cardRaw as Record<string, Object>, mid);
+      try {
+        const mixinKey: string = await BiliService.fetchMixinKey();
+        const signedQuery: string = await WbiSigner.signParams(params, mixinKey);
+        try {
+          const resultStr: string = await httpGet(`${BILI_SPACE_ACC_INFO_URL}?${signedQuery}`, buildSpaceHeaders(mid));
+          return BiliService.parseUpInfo(parseApiData(resultStr), mid);
+        } catch (accErr) {
+          const accError: Error = accErr instanceof Error ? accErr : new Error(String(accErr));
+          hilog.warn(Constants.LOG_DOMAIN, Constants.LOG_TAG,
+            'acc/info failed (mid=%{public}d, attempt %{public}d): %{public}s, fallback to card',
+            mid, attempt + 1, accError.message);
+          if (isUpQueryFatal(accError)) {
+            throw accError;
+          }
+          // card 接口风控宽松，兜底取 name/face
+          const cardStr: string = await httpGet(`${BILI_CARD_URL}?${signedQuery}`, buildSpaceHeaders(mid));
+          const data: Record<string, Object> = parseApiData(cardStr);
+          const cardRaw: Object = data['card'];
+          if (cardRaw === undefined || cardRaw === null) {
+            throw new Error('未获取到UP主信息');
+          }
+          return BiliService.parseUpInfo(cardRaw as Record<string, Object>, mid);
+        }
+      } catch (roundErr) {
+        const roundError: Error = roundErr instanceof Error ? roundErr : new Error(String(roundErr));
+        lastError = roundError;
+        if (isUpQueryFatal(roundError)) {
+          throw roundError;
+        }
+      }
     }
+    throw lastError;
   }
 
   // acc/info 与 card 的用户字段结构一致（name/face 同名）

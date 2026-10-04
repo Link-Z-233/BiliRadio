@@ -3,7 +3,9 @@ import { BiliVideo } from '../model/BiliVideo';
 import { common, Want } from '@kit.AbilityKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { AppStore } from '../service/AppStore';
+import { BiliService } from '../service/BiliService';
 import { Constants } from '../service/Constants';
+import { Appearance } from '../service/Appearance';
 import { SleepTimerController } from '../service/SleepTimerController';
 import { QueueDrawer } from '../component/QueueDrawer';
 
@@ -16,6 +18,9 @@ const GLOW_BREATH_MS: number = 3200;
 
 // 下滑退出播放层的位移阈值（vp）：内容已到顶部时，下滑超过该距离才退出
 const PLAYER_DISMISS_SWIPE: number = 80;
+
+// ±15s 进度微调步长（ms）：固定 15 秒，不可配置（spec FR-013）
+const SEEK_STEP_MS: number = 15000;
 
 @Component
 export struct PlayerOverlay {
@@ -42,15 +47,22 @@ export struct PlayerOverlay {
   @StorageLink('showQueueSheet') showQueueSheet: boolean = false; // key 与 Constants.AS_SHOW_QUEUE_SHEET 对应
   @StorageProp('statusBarHeight') statusBarHeight: number = 38; // key 与 Constants.AS_STATUS_BAR_HEIGHT 对应
   @StorageProp('navBarHeight') navBarHeight: number = 0; // key 与 Constants.AS_NAV_BAR_HEIGHT 对应
+  // 主题色（key 与 Constants.AS_ACCENT_COLOR 对应）：全部着色点运行时跟随，衍生色经 Appearance.hexWithAlpha 计算
+  @StorageProp('accentColor') accentColor: string = Constants.ACCENT_DEFAULT;
+  // 生效深浅色（1=浅色 2=深色，key 与 Constants.AS_COLOR_MODE_RESOLVED 对应）：驱动深浅色差异化 alpha
+  @StorageProp('colorModeResolved') colorModeResolved: number = 1;
 
   @State glowStrength: number = GLOW_IDLE;
   @State playBtnScale: number = 1;
   @State prevBtnScale: number = 1;
   @State nextBtnScale: number = 1;
+  // 缓冲弧线旋转角度（T013）：isPreparing && playWhenReady 时 0→360 无限循环
+  @State arcAngle: number = 0;
   @State trackIndex: number = -1;
   @State playlistCount: number = 0;
-  @State canUnfavorite: boolean = false;
   @State showDetail: boolean = false;
+  // 详情箭头指向（T011）：独立于 showDetail，sheet 任何关闭路径即时翻转
+  @State detailArrowUp: boolean = false;
   @State sleepTimerActive: boolean = false;
   @State sleepTimerRemaining: number = 0;
   @State pickerHour: number = 0;
@@ -60,6 +72,11 @@ export struct PlayerOverlay {
   @State trackDesc: string = '';
   private trackBvid: string = '';
   private wasPlaying: boolean = false;
+  // 缓冲弧线旋转是否进行中（T013）：变化时启停无限旋转动画
+  private wasSpinning: boolean = false;
+  // 简介懒加载（T014）：进行中标志防并发；已尝试的 bvid 防重复请求
+  private descLoading: boolean = false;
+  private descTriedBvid: string = '';
   private controller: PlayerController = PlayerController.getInstance();
   // 内容滚动控制器：滑动手势结束时据此判断内容是否已滚到顶部
   private contentScroller: Scroller = new Scroller();
@@ -74,6 +91,34 @@ export struct PlayerOverlay {
 
   private textDisabled(): Resource {
     return $r('app.color.text_disabled');
+  }
+
+  // ===== 主题色衍生取色（T006）：alpha 沿用 base/dark 资源键原有取值 =====
+
+  private isDarkMode(): boolean {
+    return this.colorModeResolved === 2;
+  }
+
+  // 播放键底色/面板选中底色：主题色 + material_tint_primary 原 alpha（0x59 ≈ 0.349，深浅色同值）
+  private tintBg(): string {
+    return Appearance.hexWithAlpha(this.accentColor, 0.349);
+  }
+
+  // 播放键阴影：主题色 + shadow_play 原 alpha（浅色 0x8C ≈ 0.549 / 深色 0x73 ≈ 0.451）
+  private playBtnShadowColor(): string {
+    return Appearance.hexWithAlpha(this.accentColor, this.isDarkMode() ? 0.451 : 0.549);
+  }
+
+  // 封面光晕梯度：主题色 + halo_pink_0..3 原 alpha 序列（浅色 [0x80,0x3D,0x14,0x00] / 深色 [0x66,0x29,0x0D,0x00]）
+  private haloColors(): Array<[ResourceColor, number]> {
+    const alphas: number[] = this.isDarkMode() ? [0.4, 0.161, 0.051, 0] : [0.502, 0.239, 0.078, 0];
+    const colors: Array<[ResourceColor, number]> = [
+      [Appearance.hexWithAlpha(this.accentColor, alphas[0]), 0],
+      [Appearance.hexWithAlpha(this.accentColor, alphas[1]), 0.45],
+      [Appearance.hexWithAlpha(this.accentColor, alphas[2]), 0.75],
+      [Appearance.hexWithAlpha(this.accentColor, alphas[3]), 1]
+    ];
+    return colors;
   }
 
 
@@ -150,6 +195,46 @@ export struct PlayerOverlay {
     }, 120);
   }
 
+  // 缓冲弧线旋转启停（T013）：进入缓冲时 0→360 线性无限旋转；结束时归零待下次缓冲
+  private updateArcSpin(): void {
+    if (this.isPreparing && this.playWhenReady) {
+      this.getUIContext().animateTo({
+        duration: 1200,
+        curve: Curve.Linear,
+        iterations: -1,
+        playMode: PlayMode.Normal
+      }, (): void => {
+        this.arcAngle = 360;
+      });
+    } else {
+      this.arcAngle = 0;
+    }
+  }
+
+
+  // 详情简介懒加载（T014）：空简介时后台拉取；回填写入队列条目避免下次 syncFrom 覆盖本地态；
+  // 失败静默保留「暂无简介」占位（无 toast），每个 bvid 单次会话内只尝试一次
+  private loadTrackDescIfNeeded(): void {
+    if (this.descLoading || this.trackDesc !== '' || this.trackBvid === '' ||
+      this.descTriedBvid === this.trackBvid) {
+      return;
+    }
+    this.descLoading = true;
+    this.descTriedBvid = this.trackBvid;
+    BiliService.fetchVideoInfo(this.trackBvid).then((video: BiliVideo): void => {
+      this.descLoading = false;
+      if (video.desc !== '') {
+        this.trackDesc = video.desc;
+        const idx: number = this.controller.currentIndex;
+        if (idx >= 0 && idx < this.controller.playlist.length &&
+          this.controller.playlist[idx].bvid === this.trackBvid) {
+          this.controller.playlist[idx].desc = video.desc;
+        }
+      }
+    }).catch((): void => {
+      this.descLoading = false;
+    });
+  }
 
   private syncFrom(c: PlayerController): void {
     this.isPlaying = c.isPlaying;
@@ -174,7 +259,6 @@ export struct PlayerOverlay {
       this.ownerFace = dataSaver ? '' : item.ownerFace;
       this.trackBvid = item.bvid;
       this.trackIndex = c.currentIndex;
-      this.canUnfavorite = item.folderIds.length > 0;
       this.trackView = item.view;
       this.trackPubdate = item.pubdate;
       this.trackDesc = item.desc;
@@ -185,10 +269,15 @@ export struct PlayerOverlay {
       this.ownerFace = '';
       this.trackBvid = '';
       this.trackIndex = -1;
-      this.canUnfavorite = false;
       this.trackView = 0;
       this.trackPubdate = 0;
       this.trackDesc = '';
+    }
+    // 缓冲态切换时启停弧线旋转（T013）
+    const spinning: boolean = this.isPreparing && this.playWhenReady;
+    if (spinning !== this.wasSpinning) {
+      this.wasSpinning = spinning;
+      this.updateArcSpin();
     }
   }
 
@@ -272,6 +361,20 @@ export struct PlayerOverlay {
     return result;
   }
 
+  // 播放模式四态映射符号（T009）：顺序=order_play / 随机=shuffle / 单曲循环=repeat_1 / 倒序=reverse_order
+  private playModeIcon(): Resource {
+    if (this.playMode === MusicPlayMode.RANDOM) {
+      return $r('sys.symbol.shuffle');
+    }
+    if (this.playMode === MusicPlayMode.REPEAT_ONE) {
+      return $r('sys.symbol.repeat_1');
+    }
+    if (this.playMode === MusicPlayMode.REVERSE) {
+      return $r('sys.symbol.reverse_order');
+    }
+    return $r('sys.symbol.order_play');
+  }
+
   @Builder
   speedPanel() {
     Column() {
@@ -287,7 +390,7 @@ export struct PlayerOverlay {
             Button(PlayerController.rateLabel(rate))
               .width('30%')
               .height(40)
-              .backgroundColor(rate === this.playbackRate ? $r('app.color.material_tint_primary') : $r('app.color.btn_glass'))
+              .backgroundColor(rate === this.playbackRate ? this.tintBg() : $r('app.color.btn_glass'))
               .backdropBlur(20)
               .fontColor(rate === this.playbackRate ? $r('app.color.text_primary') : this.textPrimary())
               .borderRadius(20)
@@ -332,7 +435,7 @@ export struct PlayerOverlay {
             Button(PlayerController.modeLabel(mode))
               .width('44%')
               .height(40)
-              .backgroundColor(mode === this.playMode ? $r('app.color.material_tint_primary') : $r('app.color.btn_glass'))
+              .backgroundColor(mode === this.playMode ? this.tintBg() : $r('app.color.btn_glass'))
               .backdropBlur(20)
               .fontColor(mode === this.playMode ? $r('app.color.text_primary') : this.textPrimary())
               .borderRadius(20)
@@ -498,7 +601,7 @@ export struct PlayerOverlay {
           Button('确定')
             .layoutWeight(1)
             .height(40)
-            .backgroundColor($r('app.color.material_tint_primary'))
+            .backgroundColor(this.tintBg())
             .backdropBlur(20)
             .fontColor($r('app.color.text_primary'))
             .borderRadius(20)
@@ -595,23 +698,16 @@ export struct PlayerOverlay {
   build() {
     Stack() {
       Column() {
-        // 顶部操作行：仅保留收起按钮，标题居中；播放队列入口在下方控制行
-        Stack({ alignContent: Alignment.Center }) {
-          Row() {
-            SymbolGlyph($r('sys.symbol.chevron_down'))
-              .fontSize(22)
-              .fontColor([$r('app.color.text_primary')])
-              .padding(6)
-              .onClick(() => {
-                AppStorage.setOrCreate<boolean>(Constants.AS_SHOW_PLAYER_OVERLAY, false);
-              })
-            Blank()
-          }
-          .width('100%')
-
-          Text('正在播放')
-            .fontSize(13)
-            .fontColor(this.textSecondary())
+        // 顶栏：仅保留收起按钮（spec FR-007，无标题文字与功能图标）
+        Row() {
+          SymbolGlyph($r('sys.symbol.chevron_down'))
+            .fontSize(22)
+            .fontColor([$r('app.color.text_primary')])
+            .padding(6)
+            .onClick(() => {
+              AppStorage.setOrCreate<boolean>(Constants.AS_SHOW_PLAYER_OVERLAY, false);
+            })
+          Blank()
         }
         .width('100%')
         .padding({ left: 10, right: 10, top: this.statusBarHeight + 6, bottom: 4 })
@@ -651,12 +747,7 @@ export struct PlayerOverlay {
                   .radialGradient({
                     center: [225, 225],
                     radius: 225,
-                    colors: [
-                      [$r('app.color.halo_pink_0'), 0],
-                      [$r('app.color.halo_pink_1'), 0.45],
-                      [$r('app.color.halo_pink_2'), 0.75],
-                      [$r('app.color.halo_pink_3'), 1]
-                    ]
+                    colors: this.haloColors()
                   })
                   .position({ x: -75, y: -131 })
                   .opacity(this.glowStrength)
@@ -673,7 +764,7 @@ export struct PlayerOverlay {
                     Column() {
                       Text('♪')
                         .fontSize(56)
-                        .fontColor($r('app.color.primary_color'))
+                        .fontColor(this.accentColor)
                     }
                     .width(300)
                     .height(188)
@@ -683,20 +774,25 @@ export struct PlayerOverlay {
                     .alignItems(HorizontalAlign.Center)
                   }
 
-                  Button('播放视频')
-                    .height(26)
-                    .padding({ left: 12, right: 12 })
-                    .backgroundColor($r('app.color.btn_glass'))
-                    .backdropBlur(20)
-                    .fontColor(this.textPrimary())
-                    .borderRadius(13)
-                    .fontSize(11)
-                    .margin(8)
-                    .enabled(this.trackBvid !== '')
-                    .opacity(this.trackBvid !== '' ? 1.0 : 0.4)
-                    .onClick(() => {
-                      this.openOriginal();
-                    })
+                  Row({ space: 4 }) {
+                    SymbolGlyph($r('sys.symbol.play_round_rectangle'))
+                      .fontSize(12)
+                      .fontColor([this.textPrimary()])
+                    Text('视频')
+                      .fontSize(11)
+                      .fontColor(this.textPrimary())
+                  }
+                  .height(26)
+                  .padding({ left: 10, right: 10 })
+                  .backgroundColor($r('app.color.btn_glass'))
+                  .backdropBlur(20)
+                  .borderRadius(13)
+                  .margin(8)
+                  .enabled(this.trackBvid !== '')
+                  .opacity(this.trackBvid !== '' ? 1.0 : 0.4)
+                  .onClick(() => {
+                    this.openOriginal();
+                  })
                 }
                 .width(300)
                 .height(188)
@@ -708,7 +804,7 @@ export struct PlayerOverlay {
               }
               .width(300)
               .height(188)
-              .margin({ top: 32 })
+              .margin({ top: 8 })
               .alignSelf(ItemAlign.Center)
               .scale({ x: this.isPlaying ? 1 : 0.94, y: this.isPlaying ? 1 : 0.94 })
               .animation({ duration: 350, curve: Curve.FastOutSlowIn })
@@ -725,21 +821,22 @@ export struct PlayerOverlay {
 
                 if (this.trackIndex >= 0) {
                   Text('▼')
-                    .fontSize(12)
+                    .fontSize(16)
                     .fontColor(this.textSecondary())
-                    .margin({ left: 6 })
-                    .padding(4)
-                    .rotate({ angle: this.showDetail ? 180 : 0 })
+                    .margin({ left: 2 })
+                    .padding(12)
+                    .rotate({ angle: this.detailArrowUp ? 180 : 0 })
                     .animation({ duration: 200, curve: Curve.Smooth })
                 }
               }
               .width('92%')
-              .height(52)
               .alignItems(VerticalAlign.Center)
               .margin({ top: 16, bottom: 4 })
               .onClick(() => {
                 if (this.trackBvid !== '') {
+                  this.detailArrowUp = true;
                   this.showDetail = true;
+                  this.loadTrackDescIfNeeded();
                 }
               })
 
@@ -758,7 +855,7 @@ export struct PlayerOverlay {
                         Text(this.ownerName.charAt(0))
                           .fontSize(11)
                           .fontWeight(FontWeight.Medium)
-                          .fontColor($r('app.color.primary_color'))
+                          .fontColor(this.accentColor)
                       }
                       .width(22)
                       .height(22)
@@ -792,184 +889,16 @@ export struct PlayerOverlay {
                   .fontColor(this.textSecondary())
               }
 
-              Row() {
-                Text(this.formatTime(this.isSeeking ? this.sliderValue / 100 * this.duration : this.currentTime))
-                  .fontSize(12)
-                  .fontColor(this.textSecondary())
-                  .width(48)
-
-                Slider({
-                  value: this.sliderValue,
-                  min: 0,
-                  max: 100,
-                  step: 1,
-                })
-                  .layoutWeight(1)
-                  .trackColor($r('app.color.track_color'))
-                  .selectedColor($r('app.color.primary_color'))
-                  .blockColor($r('app.color.primary_color'))
-                  .onChange((value: number, mode: SliderChangeMode) => {
-                    this.sliderValue = value;
-                    if (mode === SliderChangeMode.Begin || mode === SliderChangeMode.Moving) {
-                      this.isSeeking = true;
-                    } else {
-                      this.isSeeking = false;
-                      if (this.duration > 0) {
-                        this.controller.seek(Math.floor(value / 100 * this.duration));
-                      }
-                    }
-                  })
-
-                Text(this.formatTime(this.duration))
-                  .fontSize(12)
-                  .fontColor(this.textSecondary())
-                  .width(48)
-                  .textAlign(TextAlign.End)
-              }
-              .width('92%')
-              .justifyContent(FlexAlign.Center)
-              .margin({ top: 20 })
-
-              Row({ space: 24 }) {
-                Button('上一首')
-                  .height(44)
-                  .padding({ left: 16, right: 16 })
-                  .backgroundColor($r('app.color.btn_glass'))
-                  .backdropBlur(20)
-                  .fontColor(this.textPrimary())
-                  .borderRadius(22)
-                  .fontSize(14)
-                  .scale({ x: this.prevBtnScale, y: this.prevBtnScale })
-                  .enabled(this.playlistCount > 0)
-                  .opacity(this.playlistCount > 0 ? 1.0 : 0.4)
-                  .onClick(() => {
-                    this.popPrev();
-                    this.controller.prev();
-                  })
-
-                Button(this.isPlaying || (this.isPreparing && this.playWhenReady) ? '暂停' : '播放')
-                  .width(72)
-                  .height(72)
-                  .borderRadius(36)
-                  .backgroundColor($r('app.color.material_tint_primary'))
-                  .backdropBlur(20)
-                  .fontColor($r('app.color.text_primary'))
-                  .fontSize(18)
-                  .shadow({ radius: 18, color: $r('app.color.shadow_play'), offsetY: 0 })
-                  .scale({ x: this.playBtnScale, y: this.playBtnScale })
-                  .enabled(this.isPrepared || this.trackIndex >= 0 || this.playlistCount > 0)
-                  .opacity(this.isPrepared || this.trackIndex >= 0 || this.playlistCount > 0 ? 1.0 : 0.4)
-                  .onClick(() => {
-                    this.popPlay();
-                    this.controller.togglePlay();
-                  })
-
-                Button('下一首')
-                  .height(44)
-                  .padding({ left: 16, right: 16 })
-                  .backgroundColor($r('app.color.btn_glass'))
-                  .backdropBlur(20)
-                  .fontColor(this.textPrimary())
-                  .borderRadius(22)
-                  .fontSize(14)
-                  .scale({ x: this.nextBtnScale, y: this.nextBtnScale })
-                  .enabled(this.playlistCount > 0)
-                  .opacity(this.playlistCount > 0 ? 1.0 : 0.4)
-                  .onClick(() => {
-                    this.popNext();
-                    this.controller.next();
-                  })
-
-                Row() {
-                  SymbolGlyph($r('sys.symbol.list_bullet'))
-                    .fontSize(22)
-                    .fontColor([this.textPrimary()])
-                }
-                .width(44)
-                .height(44)
-                .borderRadius(22)
-                .backgroundColor($r('app.color.btn_glass'))
-                .backdropBlur(20)
-                .justifyContent(FlexAlign.Center)
-                .onClick(() => {
-                  AppStorage.setOrCreate<boolean>(Constants.AS_SHOW_QUEUE_SHEET, true);
-                })
-              }
-              .margin({ top: 24 })
-              .justifyContent(FlexAlign.Center)
-
-              Row({ space: 12 }) {
-                Button(`倍速 ${PlayerController.rateLabel(this.playbackRate)}`)
-                  .height(36)
-                  .padding({ left: 14, right: 14 })
-                  .backgroundColor($r('app.color.btn_glass'))
-                  .backdropBlur(20)
-                  .fontColor(this.playbackRate === 1.0 ? this.textPrimary() : $r('app.color.primary_color'))
-                  .borderRadius(18)
-                  .fontSize(13)
-                  .onClick(() => {
-                    this.showSpeed = true;
-                  })
-
-                Button(PlayerController.modeLabel(this.playMode))
-                  .height(36)
-                  .padding({ left: 14, right: 14 })
-                  .backgroundColor($r('app.color.btn_glass'))
-                  .backdropBlur(20)
-                  .fontColor($r('app.color.primary_color'))
-                  .borderRadius(18)
-                  .fontSize(13)
-                  .onClick(() => {
-                    this.showMode = true;
-                  })
-
-                Button('取消收藏')
-                  .height(36)
-                  .padding({ left: 14, right: 14 })
-                  .backgroundColor($r('app.color.btn_glass'))
-                  .backdropBlur(20)
-                  .fontColor(this.textPrimary())
-                  .borderRadius(18)
-                  .fontSize(13)
-                  .enabled(this.canUnfavorite)
-                  .opacity(this.canUnfavorite ? 1.0 : 0.4)
-                  .onClick(() => {
-                    this.controller.unfavoriteCurrent();
-                  })
-
-                Button(this.sleepTimerActive ? this.formatRemaining(this.sleepTimerRemaining) : '定时关闭')
-                  .height(36)
-                  .padding({ left: 14, right: 14 })
-                  .backgroundColor($r('app.color.btn_glass'))
-                  .backdropBlur(20)
-                  .fontColor(this.sleepTimerActive ? $r('app.color.primary_color') : this.textPrimary())
-                  .borderRadius(18)
-                  .fontSize(13)
-                  .onClick(() => {
-                    this.showSleepTimer = true;
-                  })
-              }
-              .margin({ top: 16 })
-              .justifyContent(FlexAlign.Center)
-
-              Text(this.statusMsg)
-                .fontSize(13)
+              // 统计行（plan R8）：播放量 · 发布时间，居中次要色 12vp；无数据时沿用现有占位文案
+              Text(`播放 ${this.formatCount(this.trackView)} · ${this.formatPubDate(this.trackPubdate)}`)
+                .fontSize(12)
                 .fontColor(this.textSecondary())
-                .margin({ top: 16, bottom: 24 })
-                .maxLines(2)
-                .textOverflow({ overflow: TextOverflow.Ellipsis })
-                .width('92%')
-                .textAlign(TextAlign.Center)
-
-              if (this.isPreparing) {
-                LoadingProgress()
-                  .color($r('app.color.primary_color'))
-                  .width(36)
-                  .height(36)
-                  .margin({ bottom: 24 })
-              }
+                .margin({ top: 6 })
             }
             .width('100%')
+            // 信息区留白铺满（T007）：内容不足一屏时拉开分布铺满，超出仍可滚动（Scroll 行为不变）
+            .constraintSize({ minHeight: '100%' })
+            .justifyContent(FlexAlign.SpaceBetween)
             .alignItems(HorizontalAlign.Center)
           }
           .width('100%')
@@ -977,6 +906,283 @@ export struct PlayerOverlay {
           .align(Alignment.Top)
           .scrollBar(BarState.Off)
           .scrollable(ScrollDirection.Vertical)
+
+          // 固定底栏（plan R1）：进度条/时间行/控制栏/底部操作行/状态行常驻底部，不随信息区滚动
+          Column() {
+            // 进度区（spec FR-004 / plan R5）：细进度条 + 独立时间行，宽 92% 居中
+            Column() {
+              // 细进度条：轨道高 5vp、圆点直径 12vp；受控 sliderValue + isSeeking 防回弹
+              Slider({
+                value: this.sliderValue,
+                min: 0,
+                max: 100,
+                step: 1,
+              })
+                .trackThickness(5)
+                .blockSize({ width: 12, height: 12 })
+                .trackColor($r('app.color.track_color'))
+                .selectedColor(this.accentColor)
+                .blockColor(this.accentColor)
+                .width('100%')
+                .onChange((value: number, mode: SliderChangeMode) => {
+                  this.sliderValue = value;
+                  if (mode === SliderChangeMode.Begin || mode === SliderChangeMode.Moving) {
+                    this.isSeeking = true;
+                  } else {
+                    this.isSeeking = false;
+                    if (this.duration > 0) {
+                      this.controller.seek(Math.floor(value / 100 * this.duration));
+                    }
+                  }
+                })
+
+              // 时间行：左=当前时间（拖拽中显示拖拽位置）、右=总时长，13vp 次要色
+              Row() {
+                Text(this.formatTime(this.isSeeking ? this.sliderValue / 100 * this.duration : this.currentTime))
+                  .fontSize(13)
+                  .fontColor(this.textSecondary())
+
+                Blank()
+
+                Text(this.formatTime(this.duration))
+                  .fontSize(13)
+                  .fontColor(this.textSecondary())
+              }
+              .width('100%')
+              .alignItems(VerticalAlign.Center)
+              .margin({ top: 2 })
+            }
+            .width('92%')
+
+            // 控制栏（spec FR-005）：传输五键横排居中，播放键 72×72 主按钮，其余四键次级
+            Row({ space: 12 }) {
+              Row() {
+                SymbolGlyph($r('sys.symbol.backward_end_fill'))
+                  .fontSize(22)
+                  .fontColor([this.textPrimary()])
+              }
+              .width(44)
+              .height(44)
+              .borderRadius(22)
+              .backgroundColor($r('app.color.btn_glass'))
+              .backdropBlur(20)
+              .justifyContent(FlexAlign.Center)
+              .scale({ x: this.prevBtnScale, y: this.prevBtnScale })
+              .enabled(this.playlistCount > 0)
+              .opacity(this.playlistCount > 0 ? 1.0 : 0.4)
+              .onClick(() => {
+                this.popPrev();
+                this.controller.prev();
+              })
+
+              Row() {
+                SymbolGlyph($r('sys.symbol.gobackward_15'))
+                  .fontSize(22)
+                  .fontColor([this.textPrimary()])
+              }
+              .width(44)
+              .height(44)
+              .borderRadius(22)
+              .backgroundColor($r('app.color.btn_glass'))
+              .backdropBlur(20)
+              .justifyContent(FlexAlign.Center)
+              .enabled(this.isPrepared)
+              .opacity(this.isPrepared ? 1.0 : 0.4)
+              .onClick(() => {
+                this.controller.seekBy(-SEEK_STEP_MS);
+              })
+
+              // 播放键外扩 88×88 区域（T013）：缓冲中显示旋转弧线，其余时间常驻低透明装饰圆环
+              Stack() {
+                if (this.isPreparing && this.playWhenReady) {
+                  // 270° 弧线（圆心 44,44 半径 36，顶点起顺时针至左侧），SDK 无 ProgressType.Arc，用 Path 绘制
+                  Path()
+                    .commands('M 44 8 A 36 36 0 1 1 8 44')
+                    .fill(Color.Transparent)
+                    .stroke(this.accentColor)
+                    .strokeWidth(3)
+                    .strokeLineCap(LineCapStyle.Round)
+                    .width(88)
+                    .height(88)
+                    .rotate({ angle: this.arcAngle, centerX: '50%', centerY: '50%' })
+                    .transition(TransitionEffect.OPACITY.animation({ duration: 250 }))
+                    .hitTestBehavior(HitTestMode.None)
+                } else {
+                  Circle()
+                    .fill(Color.Transparent)
+                    .stroke(this.accentColor)
+                    .strokeWidth(1.5)
+                    .opacity(0.2)
+                    .width(88)
+                    .height(88)
+                    .transition(TransitionEffect.OPACITY.animation({ duration: 250 }))
+                    .hitTestBehavior(HitTestMode.None)
+                }
+
+                Stack() {
+                  if (this.isPlaying || (this.isPreparing && this.playWhenReady)) {
+                    SymbolGlyph($r('sys.symbol.pause_fill'))
+                      .fontSize(32)
+                      .fontColor([$r('app.color.text_primary')])
+                  } else {
+                    SymbolGlyph($r('sys.symbol.play_fill'))
+                      .fontSize(32)
+                      .fontColor([$r('app.color.text_primary')])
+                  }
+                }
+                .width(72)
+                .height(72)
+                .borderRadius(36)
+                .backgroundColor(this.tintBg())
+                .backdropBlur(20)
+                .shadow({ radius: 18, color: this.playBtnShadowColor(), offsetY: 0 })
+                .scale({ x: this.playBtnScale, y: this.playBtnScale })
+                .enabled(this.isPrepared || this.trackIndex >= 0 || this.playlistCount > 0)
+                .opacity(this.isPrepared || this.trackIndex >= 0 || this.playlistCount > 0 ? 1.0 : 0.4)
+                .onClick(() => {
+                  this.popPlay();
+                  this.controller.togglePlay();
+                })
+              }
+              .width(88)
+              .height(88)
+
+              Row() {
+                SymbolGlyph($r('sys.symbol.goforward_15'))
+                  .fontSize(22)
+                  .fontColor([this.textPrimary()])
+              }
+              .width(44)
+              .height(44)
+              .borderRadius(22)
+              .backgroundColor($r('app.color.btn_glass'))
+              .backdropBlur(20)
+              .justifyContent(FlexAlign.Center)
+              .enabled(this.isPrepared)
+              .opacity(this.isPrepared ? 1.0 : 0.4)
+              .onClick(() => {
+                this.controller.seekBy(SEEK_STEP_MS);
+              })
+
+              Row() {
+                SymbolGlyph($r('sys.symbol.forward_end_fill'))
+                  .fontSize(22)
+                  .fontColor([this.textPrimary()])
+              }
+              .width(44)
+              .height(44)
+              .borderRadius(22)
+              .backgroundColor($r('app.color.btn_glass'))
+              .backdropBlur(20)
+              .justifyContent(FlexAlign.Center)
+              .scale({ x: this.nextBtnScale, y: this.nextBtnScale })
+              .enabled(this.playlistCount > 0)
+              .opacity(this.playlistCount > 0 ? 1.0 : 0.4)
+              .onClick(() => {
+                this.popNext();
+                this.controller.next();
+              })
+            }
+            .width('100%')
+            .justifyContent(FlexAlign.Center)
+            .alignItems(VerticalAlign.Center)
+            .margin({ top: 12 })
+
+            // 底部操作行（spec FR-006 / plan R6）：倍速/播放模式/定时/队列，沿用现有浮层与 @StorageLink 开关
+            Row({ space: 12 }) {
+              Row({ space: 4 }) {
+                SymbolGlyph($r('sys.symbol.speed_multiple'))
+                  .fontSize(16)
+                  .fontColor([this.playbackRate === 1.0 ? this.textPrimary() : this.accentColor])
+                Text(PlayerController.rateLabel(this.playbackRate))
+                  .fontSize(13)
+                  .fontColor(this.playbackRate === 1.0 ? this.textPrimary() : this.accentColor)
+              }
+              .height(36)
+              .padding({ left: 14, right: 14 })
+              .backgroundColor($r('app.color.btn_glass'))
+              .backdropBlur(20)
+              .borderRadius(18)
+              .onClick(() => {
+                this.showSpeed = true;
+              })
+
+              Row() {
+                SymbolGlyph(this.playModeIcon())
+                  .fontSize(18)
+                  .fontColor([this.accentColor])
+              }
+              .height(36)
+              .padding({ left: 14, right: 14 })
+              .backgroundColor($r('app.color.btn_glass'))
+              .backdropBlur(20)
+              .borderRadius(18)
+              .onClick(() => {
+                this.showMode = true;
+              })
+
+              Row({ space: 4 }) {
+                SymbolGlyph($r('sys.symbol.timer'))
+                  .fontSize(16)
+                  .fontColor([this.sleepTimerActive ? this.accentColor : this.textPrimary()])
+                if (this.sleepTimerActive) {
+                  Text(this.formatRemaining(this.sleepTimerRemaining))
+                    .fontSize(13)
+                    .fontColor(this.accentColor)
+                }
+              }
+              .height(36)
+              .padding({ left: 14, right: 14 })
+              .backgroundColor($r('app.color.btn_glass'))
+              .backdropBlur(20)
+              .borderRadius(18)
+              .onClick(() => {
+                this.showSleepTimer = true;
+              })
+
+              Row() {
+                SymbolGlyph($r('sys.symbol.list_bullet'))
+                  .fontSize(22)
+                  .fontColor([this.textPrimary()])
+              }
+              .width(44)
+              .height(44)
+              .borderRadius(22)
+              .backgroundColor($r('app.color.btn_glass'))
+              .backdropBlur(20)
+              .justifyContent(FlexAlign.Center)
+              .onClick(() => {
+                AppStorage.setOrCreate<boolean>(Constants.AS_SHOW_QUEUE_SHEET, true);
+              })
+            }
+            .justifyContent(FlexAlign.Center)
+            .alignItems(VerticalAlign.Center)
+            .margin({ top: 14 })
+
+            // 状态行（plan R10）：statusMsg 常驻固定底栏，任意滚动位置可见；isPreparing 时行首显示加载指示
+            Row({ space: 6 }) {
+              if (this.isPreparing) {
+                LoadingProgress()
+                  .color(this.accentColor)
+                  .width(20)
+                  .height(20)
+              }
+
+              Text(this.statusMsg)
+                .fontSize(13)
+                .fontColor(this.textSecondary())
+                .maxLines(2)
+                .textOverflow({ overflow: TextOverflow.Ellipsis })
+                .textAlign(TextAlign.Center)
+                .constraintSize({ maxWidth: '80%' })
+            }
+            .width('100%')
+            .alignItems(VerticalAlign.Center)
+            .justifyContent(FlexAlign.Center)
+            .margin({ top: 10, bottom: 4 })
+          }
+          .width('100%')
+          .margin({ top: 8 })
         }
       }
       .width('100%')
@@ -1024,7 +1230,16 @@ export struct PlayerOverlay {
       dragBar: true,
       showClose: false,
       backgroundColor: $r('app.color.sheet_background'),
-      preferType: SheetType.BOTTOM
+      preferType: SheetType.BOTTOM,
+      // 手势下滑/遮罩关闭判定通过时：先即时翻转箭头再真正关闭（T011）
+      shouldDismiss: (sheetDismiss: SheetDismiss) => {
+        this.detailArrowUp = false;
+        sheetDismiss.dismiss();
+      },
+      // 兜底：任何其他关闭路径同步箭头状态
+      onDisappear: () => {
+        this.detailArrowUp = false;
+      }
     })
   }
 }

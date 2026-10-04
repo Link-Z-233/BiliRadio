@@ -87,7 +87,7 @@ struct SettingsPage {
   @State playHistoryItems: PlayHistoryItem[] = [];
   @State playHistoryVersion: number = -1;
 
-  @State autoPlayOnStart: boolean = true;
+  @State autoPlayOnStart: boolean = false;
   // —— 四个新增设置开关状态 ——
   @State interruptResume: boolean = false;
   @State dataSaver: boolean = false;
@@ -121,7 +121,7 @@ struct SettingsPage {
 
   aboutToAppear(): void {
     this.refreshLoginState();
-    this.autoPlayOnStart = AppStore.getNumber(Constants.KEY_AUTO_PLAY_ON_START, 1) === 1;
+    this.autoPlayOnStart = AppStore.getNumber(Constants.KEY_AUTO_PLAY_ON_START, 0) === 1;
     this.interruptResume = AppStore.getNumber(Constants.KEY_INTERRUPT_RESUME, 0) === 1;
     this.dataSaver = AppStore.getNumber(Constants.KEY_DATA_SAVER, 0) === 1;
     this.preferLowBitrate = AppStore.getNumber(Constants.KEY_PREFER_LOW_BITRATE, 0) === 1;
@@ -767,7 +767,7 @@ struct SettingsPage {
     .zIndex(3)
   }
 
-  // 播放历史浮层：半透明毛玻璃覆盖层，最近播放倒序，点击回放，清空需二次确认
+  // 播放历史面板（bindSheet 呈现，与播放页详情 Sheet 同构）：最近播放倒序，点击回放，清空需二次确认
   @Builder
   playHistoryPanel() {
     Column() {
@@ -788,27 +788,13 @@ struct SettingsPage {
             .fontColor($r('app.color.danger_red'))
             .borderRadius(16)
             .fontSize(12)
-            .margin({ right: 8 })
             .onClick(() => {
               this.confirmClearPlayHistory();
             })
         }
-
-        Button('关闭')
-          .height(32)
-          .padding({ left: 12, right: 12 })
-          .backgroundColor($r('app.color.btn_glass'))
-          .backdropBlur(20)
-          .border({ width: 1, color: $r('app.color.btn_border') })
-          .fontColor(this.textPrimary())
-          .borderRadius(16)
-          .fontSize(12)
-          .onClick(() => {
-            this.showPlayHistory = false;
-          })
       }
       .width('100%')
-      .padding({ left: 16, right: 16, top: 16, bottom: 8 })
+      .padding({ left: 16, right: 16, top: 8, bottom: 8 })
 
       if (this.playHistoryItems.length === 0) {
         Column() {
@@ -866,8 +852,6 @@ struct SettingsPage {
     .height('100%')
     .backgroundColor($r('app.color.sheet_background'))
     .backdropBlur(20)
-    .padding({ bottom: this.miniPlayerVisible ? Constants.MINI_PLAYER_CLEARANCE : 16 })
-    .zIndex(3)
   }
 
 
@@ -1400,13 +1384,16 @@ struct SettingsPage {
       if (this.showHistory) {
         this.historyPanel()
       }
-
-      if (this.showPlayHistory) {
-        this.playHistoryPanel()
-      }
       }
       .width('100%')
       .height('100%')
+      .bindSheet($$this.showPlayHistory, this.playHistoryPanel(), {
+        height: '62%',
+        dragBar: true,
+        showClose: false,
+        backgroundColor: $r('app.color.sheet_background'),
+        preferType: SheetType.BOTTOM
+      })
     }
     .title('设置')
     .onReady((ctx: NavDestinationContext) => {

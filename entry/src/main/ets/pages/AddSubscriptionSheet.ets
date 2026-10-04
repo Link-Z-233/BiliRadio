@@ -1,4 +1,5 @@
 import { promptAction } from '@kit.ArkUI';
+import { BusinessError } from '@kit.BasicServicesKit';
 import { BiliService, UpInfo, SeasonMeta } from '../service/BiliService';
 import { BiliSession } from '../service/BiliSession';
 import { Subscription } from '../model/Subscription';
@@ -256,10 +257,20 @@ export struct AddSubscriptionSheet {
         this.series = series;
       }).catch((): void => {
       });
-    }).catch((): void => {
+    }).catch((err: BusinessError): void => {
       this.uidBusy = false;
       this.mainBusy = false;
-      promptAction.showToast({ message: '查询UP主失败，请稍后重试' });
+      // 透出真实错误码：-352/-412/风控页等按「疑似风控」提示，其余直接附带错误信息
+      const msg: string = err.message;
+      if (msg.indexOf('-352') >= 0 || msg.indexOf('-412') >= 0 || msg.indexOf('风控') >= 0) {
+        const codeMatch: RegExpMatchArray | null = msg.match(/-\d{1,5}/);
+        const code: string = codeMatch !== null ? codeMatch[0] : '';
+        promptAction.showToast({
+          message: code !== '' ? `查询UP主失败(${code})，疑似风控，请稍后再试` : '查询UP主失败，疑似风控，请稍后再试'
+        });
+      } else {
+        promptAction.showToast({ message: `查询UP主失败: ${msg}` });
+      }
     });
   }
 

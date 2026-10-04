@@ -29,6 +29,9 @@ export const PLAY_MODES: PlayMode[] = [
   PlayMode.REVERSE
 ];
 
+// seekBy 连按合并防抖窗口（ms）：防抖期内的新调用基于最新进度叠加，到期仅执行最终一次 player.seek
+const SEEK_BY_DEBOUNCE_MS: number = 250;
+
 export class PlayerController {
   private static instance: PlayerController | undefined = undefined;
 
@@ -164,7 +167,6 @@ export class PlayerController {
           this.currentTime = restorePos;
           const item: BiliVideo = snapshot.items[restoreIndex];
           this.duration = item.duration > 0 ? item.duration * 1000 : 0;
-          this.statusMsg = '已恢复上次进度，点击播放继续';
           autoStartIndex = restoreIndex;
           autoStartPos = restorePos;
         }
@@ -214,7 +216,7 @@ export class PlayerController {
         (time: number): void => { this.seek(time); },
       ).catch((): void => {});
 
-      if (autoStartIndex >= 0 && AppStore.getNumber(Constants.KEY_AUTO_PLAY_ON_START, 1) === 1) {
+      if (autoStartIndex >= 0 && AppStore.getNumber(Constants.KEY_AUTO_PLAY_ON_START, 0) === 1) {
         this.statusMsg = '自动继续播放上次进度';
         this.playIndex(autoStartIndex, autoStartPos).catch((): void => {});
       }
@@ -294,6 +296,10 @@ export class PlayerController {
   }
 
   private onPlayerTime(time: number): void {
+    // seekBy 防抖期间保持乐观进度，避免播放 tick 将进度拉回旧位置（既有 seek 不经此窗口，语义不变）
+    if (this.seekByTimerId >= 0) {
+      return;
+    }
     this.currentTime = time;
     const now: number = Date.now();
     if (now - this.lastSaveTime > Constants.PROGRESS_SAVE_INTERVAL_MS) {
@@ -670,6 +676,40 @@ export class PlayerController {
       this.pendingSeekMs = ms;
     }
     this.emitUi();
+  }
+
+  // —— ±15s 进度微调（spec FR-013 / plan R3）——
+  // 防抖句柄与待提交目标：连按时合并为最终一次 player.seek，避免 AVPlayer seek 风暴
+  private seekByTimerId: number = -1;
+  private seekByTargetMs: number = 0;
+
+  seekBy(offsetMs: number): void {
+    if (this.duration <= 0 || !this.isPrepared) {
+      return;
+    }
+    // 防抖期内以已累积的待提交目标为基数叠加（等价于最新乐观进度，且不受播放 tick 回写影响）
+    const base: number = this.seekByTimerId >= 0 ? this.seekByTargetMs : this.currentTime;
+    let target: number = base + offsetMs;
+    if (target < 0) {
+      target = 0;
+    }
+    if (target > this.duration) {
+      target = this.duration;
+    }
+    this.seekByTargetMs = target;
+    // 乐观更新：进度条/时间行立即反映目标位置
+    this.currentTime = target;
+    this.refreshUi();
+    if (this.seekByTimerId >= 0) {
+      clearTimeout(this.seekByTimerId);
+    }
+    this.seekByTimerId = setTimeout((): void => {
+      this.seekByTimerId = -1;
+      // 到期时曲目可能已切换（isPrepared 被置 false），此时放弃本次微调
+      if (this.isPrepared) {
+        this.player.seek(this.seekByTargetMs);
+      }
+    }, SEEK_BY_DEBOUNCE_MS);
   }
 
   setPlayMode(mode: PlayMode): void {

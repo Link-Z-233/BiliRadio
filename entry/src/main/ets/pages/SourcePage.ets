@@ -1,4 +1,5 @@
 import { promptAction } from '@kit.ArkUI';
+import { BusinessError } from '@kit.BasicServicesKit';
 import { Subscription } from '../model/Subscription';
 import { BiliVideo } from '../model/BiliVideo';
 import { SubscriptionStore } from '../service/SubscriptionStore';
@@ -118,9 +119,9 @@ struct SourcePage {
     SubscriptionStore.refreshSubscription(this.sub).then((): void => {
       this.loadFromCache();
       this.refreshing = false;
-    }).catch((): void => {
+    }).catch((err: BusinessError): void => {
       this.refreshing = false;
-      promptAction.showToast({ message: '刷新失败，请稍后重试' });
+      promptAction.showToast({ message: `刷新失败: ${err.message}` });
     });
   }
 
@@ -148,9 +149,9 @@ struct SourcePage {
         }
       }
       this.loadingOlder = false;
-    }).catch((): void => {
+    }).catch((err: BusinessError): void => {
       this.loadingOlder = false;
-      promptAction.showToast({ message: '加载失败，请稍后重试' });
+      promptAction.showToast({ message: `加载失败: ${err.message}` });
     });
   }
 

@@ -57,7 +57,6 @@ export struct HomePage {
   @State refreshing: boolean = false;
   @State rowCount: number = 0;
   @State showAddSheet: boolean = false;
-  @State showMoreMenu: boolean = false;
   private subs: Subscription[] = [];
   private provider: SubDataSource = new SubDataSource();
   private refreshingNow: boolean = false;
@@ -233,48 +232,6 @@ export struct HomePage {
   }
 
   @Builder
-  private morePopupContent() {
-    Column() {
-      Text('设置')
-        .width('100%')
-        .height(44)
-        .padding({ left: 16, right: 16 })
-        .fontSize(14)
-        .fontColor($r('app.color.text_primary'))
-        .onClick(() => {
-          this.showMoreMenu = false;
-          this.navPathStack.pushPathByName('settingsPage', '');
-        })
-      Divider().color($r('app.color.track_color')).margin({ left: 16, right: 16 })
-      Text('播放历史')
-        .width('100%')
-        .height(44)
-        .padding({ left: 16, right: 16 })
-        .fontSize(14)
-        .fontColor($r('app.color.text_primary'))
-        .onClick(() => {
-          this.showMoreMenu = false;
-          this.navPathStack.pushPathByName('settingsPage', 'playHistory');
-        })
-      Divider().color($r('app.color.track_color')).margin({ left: 16, right: 16 })
-      Text('关于')
-        .width('100%')
-        .height(44)
-        .padding({ left: 16, right: 16 })
-        .fontSize(14)
-        .fontColor($r('app.color.text_primary'))
-        .onClick(() => {
-          this.showMoreMenu = false;
-          this.navPathStack.pushPathByName('settingsPage', 'about');
-        })
-    }
-    .width(160)
-    .borderRadius(12)
-    .backgroundColor($r('app.color.card_background'))
-    .shadow({ radius: 12, color: '#33000000', offsetY: 4 })
-  }
-
-  @Builder
   private emptyView() {
     Column() {
       Text('♪')
@@ -305,12 +262,12 @@ export struct HomePage {
         Blank()
         Row() {
           SymbolGlyph($r('sys.symbol.plus'))
-            .fontSize(18)
+            .fontSize(22)
             .fontColor([$r('app.color.text_primary')])
         }
-        .width(34)
-        .height(34)
-        .borderRadius(17)
+        .width(40)
+        .height(40)
+        .borderRadius(20)
         .backgroundColor($r('app.color.card_background'))
         .justifyContent(FlexAlign.Center)
         .onClick(() => {
@@ -318,28 +275,17 @@ export struct HomePage {
         })
         Row() {
           SymbolGlyph($r('sys.symbol.ellipsis_circle'))
-            .fontSize(18)
+            .fontSize(22)
             .fontColor([$r('app.color.text_primary')])
         }
-        .width(34)
-        .height(34)
-        .borderRadius(17)
+        .width(40)
+        .height(40)
+        .borderRadius(20)
         .backgroundColor($r('app.color.card_background'))
         .justifyContent(FlexAlign.Center)
         .margin({ left: 8 })
         .onClick(() => {
-          this.showMoreMenu = !this.showMoreMenu;
-        })
-        .bindPopup(this.showMoreMenu, {
-          builder: this.morePopupContent,
-          placement: Placement.BottomRight,
-          showInSubWindow: true,
-          maskColor: '#00000000',
-          onStateChange: (e: PopupStateChange): void => {
-            if (!e.isVisible) {
-              this.showMoreMenu = false;
-            }
-          }
+          this.navPathStack.pushPathByName('morePage', '');
         })
       }
       .width('100%')

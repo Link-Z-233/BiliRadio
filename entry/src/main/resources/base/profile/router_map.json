@@ -9,6 +9,11 @@
       "name": "settingsPage",
       "pageSourceFile": "src/main/ets/pages/SettingsPage.ets",
       "buildFunction": "SettingsPageBuilder"
+    },
+    {
+      "name": "morePage",
+      "pageSourceFile": "src/main/ets/pages/MorePage.ets",
+      "buildFunction": "MorePageBuilder"
     }
   ]
 }

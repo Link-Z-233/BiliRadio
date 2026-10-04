@@ -37,6 +37,33 @@ export class Appearance {
     return Appearance.isDark;
   }
 
+  // 全工程主题色衍生色计算唯一入口（纯函数）：
+  // 输入 6 位 hex 主题色（'#RRGGBB' 或 'RRGGBB'）与 alpha（0-1 浮点），
+  // 输出 8 位 ARGB 十六进制字符串 '#AARRGGBB'；
+  // 非法 hex 回退默认主题色，alpha 越界/NaN 截断到 [0, 1]
+  static hexWithAlpha(hex: string, alpha: number): string {
+    let normalized: string = hex;
+    if (typeof normalized !== 'string') {
+      normalized = Constants.ACCENT_DEFAULT;
+    }
+    if (normalized.startsWith('#')) {
+      normalized = normalized.substring(1);
+    }
+    if (!/^[0-9a-fA-F]{6}$/.test(normalized)) {
+      normalized = Constants.ACCENT_DEFAULT.substring(1);
+    }
+    let a: number = alpha;
+    if (!(a >= 0)) {
+      a = 0;
+    }
+    if (a > 1) {
+      a = 1;
+    }
+    const alphaByte: number = Math.round(a * 255);
+    const alphaHex: string = alphaByte < 16 ? `0${alphaByte.toString(16)}` : alphaByte.toString(16);
+    return `#${alphaHex}${normalized}`;
+  }
+
   // EntryAbility.onCreate：读取持久化外观并应用应用层颜色模式
   static init(context: common.Context): void {
     Appearance.userMode = Appearance.readUserMode(context);
