@@ -1,5 +1,5 @@
 import { AudioPlayer } from './AudioPlayer';
-import { BiliService, DownloadProgressCallback } from './BiliService';
+import { BiliService } from './BiliService';
 import { BiliSession } from './BiliSession';
 import { SecureStore } from './SecureStore';
 import { AppStore, PlaylistSnapshot } from './AppStore';
@@ -323,25 +323,58 @@ export class PlayerController {
     }
   }
 
-  private makeProgressCb(): DownloadProgressCallback {
-    const token: number = this.loadToken;
-    let lastPercent: number = -1;
-    return (received: number, total: number): void => {
+  // 元数据回填（US2）：cid/UP 主/播放量/发布时间/简介写回队列条目并刷新 UI
+  private applyTrackMeta(item: BiliVideo, video: BiliVideo): void {
+    if (video.cid > 0) {
+      item.cid = video.cid;
+    }
+    if (video.ownerName !== '') {
+      item.ownerMid = video.ownerMid;
+      item.ownerName = video.ownerName;
+      item.ownerFace = video.ownerFace;
+    }
+    if (video.view > 0) {
+      item.view = video.view;
+    }
+    if (video.pubdate > 0) {
+      item.pubdate = video.pubdate;
+    }
+    if (video.desc !== '') {
+      item.desc = video.desc;
+    }
+    this.emitUi();
+  }
+
+  // 缓存秒播路径的后台元数据刷新：不阻塞本地文件开播
+  private enrichTrackMeta(item: BiliVideo, token: number): void {
+    BiliService.fetchVideoInfo(item.bvid).then((video: BiliVideo): void => {
       if (token !== this.loadToken) {
         return;
       }
-      if (total > 0) {
-        const percent: number = Math.floor(received / total * 100);
-        if (percent !== lastPercent) {
-          lastPercent = percent;
-          this.statusMsg = `正在加载音频... ${percent}%`;
-          this.emitUi();
+      this.applyTrackMeta(item, video);
+    }).catch((): void => {});
+  }
+
+  // 流式开播带重试（US2）：同一 URL 重试一次仍失败则轮换下一备选直链；全部失败抛最后错误，
+  // 由 playIndex 统一提示，播放队列与列表状态不受影响
+  private async openStreamWithRetry(urls: string[]): Promise<void> {
+    let lastError: Error = new Error('No stream URL');
+    for (let i = 0; i < urls.length; i++) {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          hilog.info(Constants.LOG_DOMAIN, Constants.LOG_TAG,
+            'try stream url %{public}d/%{public}d attempt %{public}d', i + 1, urls.length, attempt + 1);
+          await this.player.setStreamSource(urls[i]);
+          return;
+        } catch (err) {
+          const error = err as BusinessError;
+          lastError = new Error(error.message);
+          hilog.warn(Constants.LOG_DOMAIN, Constants.LOG_TAG,
+            'stream open failed: %{public}s', error.message);
         }
-      } else {
-        this.statusMsg = `正在加载音频... ${(received / Constants.BYTES_PER_MB).toFixed(1)}MB`;
-        this.emitUi();
       }
-    };
+    }
+    throw lastError;
   }
 
   async loadPlaylistAndPlay(items: BiliVideo[], startIndex: number): Promise<void> {
@@ -439,40 +472,35 @@ export class PlayerController {
         }
       }
       const preferLow: boolean = AppStore.getNumber(Constants.KEY_PREFER_LOW_BITRATE, 0) === 1;
-      const video: BiliVideo = await BiliService.resolveAndDownload(item.bvid, this.makeProgressCb(), preferLow);
-      if (token !== this.loadToken) {
-        return;
-      }
-      item.audioUrl = video.audioUrl;
-      if (video.cid > 0) {
-        item.cid = video.cid;
-      }
-      if (video.ownerName !== '') {
-        item.ownerMid = video.ownerMid;
-        item.ownerName = video.ownerName;
-        item.ownerFace = video.ownerFace;
+      // 缓存优先（US2）：本地已有完整缓存文件直接秒播（现状本地播放路径保留）
+      const localPath: string = BiliService.cachedAudioPath(item.bvid);
+      if (localPath !== '') {
+        this.enrichTrackMeta(item, token);
+        item.audioUrl = localPath;
+        await this.player.setSource(localPath);
+      } else {
+        // 流式边下边播（US2）：现取直链（不持久化），缓冲态文案取代整段下载百分比；
+        // 视频信息只拉一次——先回填元数据拿到 cid，再解析直链
+        this.statusMsg = '正在缓冲...';
         this.emitUi();
+        const video: BiliVideo = await BiliService.fetchVideoInfo(item.bvid);
+        if (token !== this.loadToken) {
+          return;
+        }
+        this.applyTrackMeta(item, video);
+        const urls: string[] = await BiliService.resolveAudioUrlFromCid(item.bvid, video.cid, preferLow);
+        if (token !== this.loadToken) {
+          return;
+        }
+        await this.openStreamWithRetry(urls);
       }
-      if (video.view > 0) {
-        item.view = video.view;
-      }
-      if (video.pubdate > 0) {
-        item.pubdate = video.pubdate;
-      }
-      if (video.desc !== '') {
-        item.desc = video.desc;
-      }
-      if (video.view > 0 || video.pubdate > 0 || video.desc !== '') {
-        this.emitUi();
-      }
-      await this.player.setSource(video.audioUrl);
       if (token !== this.loadToken) {
         return;
       }
       this.mediaSession.updateTrack(item.bvid, item.title,
         item.duration > 0 ? item.duration * 1000 : 0, item.cover, item.ownerName);
       AppStore.savePlaylistFile(this.playlist, this.currentIndex, 0);
-      BiliService.cleanCache(video.audioUrl);
+      BiliService.cleanCache(localPath);
     } catch (err) {
       if (token !== this.loadToken) {
         return;

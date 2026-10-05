@@ -4,6 +4,10 @@ import { fileIo as fs } from '@kit.CoreFileKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { Constants, sleep } from './Constants';
+import { REFERER, USER_AGENT } from './BiliService';
+
+// 流式播放器级缓冲时长（秒）：首包出声与缓冲平滑的平衡点，取 3~5s 区间中值
+const STREAM_BUFFER_SECONDS: number = 4;
 
 export class AudioPlayer {
   private avPlayer: media.AVPlayer | undefined = undefined;
@@ -102,7 +106,9 @@ export class AudioPlayer {
     }
   }
 
-  async setSource(filePath: string): Promise<void> {
+  // 换源前公共重建：释放旧实例与 fd、复位状态标志，新建 AVPlayer 并挂回调
+  // （本地 fdSrc 与远程流式两条数据源路径共用）
+  private async recreatePlayer(): Promise<media.AVPlayer> {
     if (this.avPlayer !== undefined) {
       try {
         this.avPlayer.off('stateChange');
@@ -121,27 +127,55 @@ export class AudioPlayer {
     this._duration = 0;
     this.playerState = 'idle';
 
-    this.avPlayer = await media.createAVPlayer();
-    this.avPlayer.audioRendererInfo = {
+    const player: media.AVPlayer = await media.createAVPlayer();
+    this.avPlayer = player;
+    player.audioRendererInfo = {
       content: audio.ContentType.CONTENT_TYPE_MUSIC,
       usage: audio.StreamUsage.STREAM_USAGE_MUSIC,
       rendererFlags: 0
     };
     try {
-      this.avPlayer.audioInterruptMode = audio.InterruptMode.INDEPENDENT_MODE;
+      player.audioInterruptMode = audio.InterruptMode.INDEPENDENT_MODE;
     } catch (e) {
       hilog.warn(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'set audioInterruptMode failed');
     }
     this.setupCallbacks();
+    return player;
+  }
+
+  // 本地缓存文件数据源（fdSrc 路径，签名与行为不变）
+  async setSource(filePath: string): Promise<void> {
+    const player: media.AVPlayer = await this.recreatePlayer();
 
     const stat = fs.statSync(filePath);
     const file = fs.openSync(filePath, fs.OpenMode.READ_ONLY);
     this.currentFd = file.fd;
-    this.avPlayer.fdSrc = { fd: file.fd, offset: 0, length: stat.size } as media.AVFileDescriptor;
+    player.fdSrc = { fd: file.fd, offset: 0, length: stat.size } as media.AVFileDescriptor;
 
     await this.waitForState('initialized', 8000);
 
-    await this.avPlayer.prepare();
+    await player.prepare();
+  }
+
+  // 远程流式数据源（US2）：CDN 直链 + Referer/UA 请求头，播放器内核边下边播、按需分段拉取（seek 由内核处理）；
+  // 每次调用全量重建 AVPlayer，失败重试安全；prepared/error 等回调复用既有订阅机制
+  async setStreamSource(url: string): Promise<void> {
+    const player: media.AVPlayer = await this.recreatePlayer();
+
+    const headers: Record<string, string> = {
+      'Referer': REFERER,
+      'User-Agent': USER_AGENT,
+    };
+    const mediaSource: media.MediaSource = media.createMediaSourceWithUrl(url, headers);
+    const strategy: media.PlaybackStrategy = {
+      preferredBufferDuration: STREAM_BUFFER_SECONDS,
+    };
+
+    await player.setMediaSource(mediaSource, strategy);
+
+    await this.waitForState('initialized', 8000);
+
+    await player.prepare();
   }
 
   async play(): Promise<void> {

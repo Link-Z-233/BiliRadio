@@ -27,15 +27,14 @@ const BILI_CARD_URL: string = 'https://api.bilibili.com/x/web-interface/card';
 const BILI_SERIES_META_URL: string = 'https://api.bilibili.com/x/series/series';
 const BILI_QR_GENERATE_URL: string = 'https://passport.bilibili.com/x/passport-login/web/qrcode/generate';
 const BILI_QR_POLL_URL: string = 'https://passport.bilibili.com/x/passport-login/web/qrcode/poll';
-const REFERER: string = 'https://www.bilibili.com';
-const USER_AGENT: string = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36';
+export const REFERER: string = 'https://www.bilibili.com';
+export const USER_AGENT: string = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36';
 // 空间接口风控三件套：PC Safari UA + space Referer/Origin（接口参数为公开事实性配置）
 const SPACE_ORIGIN: string = 'https://space.bilibili.com';
 const SPACE_USER_AGENT: string =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15';
 
 
-export type DownloadProgressCallback = (receivedBytes: number, totalBytes: number) => void;
 export type PageProgressCallback = (fetchedCount: number, totalCount: number) => void;
 
 export class QrLoginInfo {
@@ -1337,129 +1336,37 @@ export class BiliService {
     return candidates;
   }
 
-  static async downloadToFile(remoteUrl: string, destPath: string,
-    onProgress: DownloadProgressCallback | undefined): Promise<string> {
-    const localPath: string = destPath;
-
-    if (fs.accessSync(localPath)) {
-      if (isValidMediaFile(localPath)) {
-        hilog.info(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'reuse cached file: %{public}s', localPath);
-        return localPath;
-      }
-      try { fs.unlinkSync(localPath); } catch (e) {}
-    }
-
-    const httpRequest: http.HttpRequest = http.createHttp();
-    const file: fs.File = fs.openSync(localPath,
-      fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
-    let totalBytes: number = -1;
-    let receivedBytes: number = 0;
-    let dataEnded: boolean = false;
-    try {
-      httpRequest.on('headersReceive', (header: Object) => {
-        try {
-          const rec: Record<string, Object> = header as Record<string, Object>;
-          let lenValue: Object | undefined = rec['content-length'];
-          if (lenValue === undefined) {
-            lenValue = rec['Content-Length'];
-          }
-          if (lenValue !== undefined) {
-            const n: number = Number(lenValue);
-            if (!Number.isNaN(n) && n > 0) {
-              totalBytes = n;
-            }
-          }
-        } catch (e) {}
-      });
-      httpRequest.on('dataReceive', (data: ArrayBuffer) => {
-        fs.writeSync(file.fd, data);
-        receivedBytes += data.byteLength;
-        if (onProgress !== undefined) {
-          onProgress(receivedBytes, totalBytes);
-        }
-      });
-      httpRequest.on('dataEnd', () => {
-        dataEnded = true;
-      });
-
-      const responseCode: number = await httpRequest.requestInStream(remoteUrl, {
-        method: http.RequestMethod.GET,
-        header: {
-          'Referer': REFERER,
-          'User-Agent': USER_AGENT,
-        },
-        usingCache: false,
-        connectTimeout: Constants.CONNECT_TIMEOUT_MS,
-        readTimeout: Constants.STREAM_TIMEOUT_MS,
-      });
-      if (responseCode !== 200) {
-        throw new Error(`Download HTTP ${responseCode}`);
-      }
-      const deadline: number = Date.now() + 10000;
-      while (!dataEnded) {
-        if (Date.now() > deadline) {
-          throw new Error('Download data timeout');
-        }
-        await sleep(20);
-      }
-      if (!isValidMediaFile(localPath)) {
-        throw new Error('Downloaded file is not valid media');
-      }
-      hilog.info(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'downloaded %{public}s, size=%{public}d', localPath, receivedBytes);
-      return localPath;
-    } catch (err) {
-      const error = err as BusinessError;
-      hilog.warn(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'download failed: %{public}s', error.message);
-      try { fs.unlinkSync(localPath); } catch (e) {}
-      throw new Error(`Download failed: ${error.message}`);
-    } finally {
-      try { fs.closeSync(file); } catch (e) {}
-      try {
-        httpRequest.off('headersReceive');
-        httpRequest.off('dataReceive');
-        httpRequest.off('dataEnd');
-      } catch (e) {}
-      httpRequest.destroy();
-    }
-  }
-
-  static async downloadToCache(remoteUrl: string, fileName: string,
-    onProgress: DownloadProgressCallback | undefined): Promise<string> {
-    const context = getContext() as common.UIAbilityContext;
-    const localPath: string = `${context.cacheDir}/${fileName}`;
-    return BiliService.downloadToFile(remoteUrl, localPath, onProgress);
-  }
-
-  static async downloadFirstSuccess(candidates: string[], fileName: string,
-    onProgress: DownloadProgressCallback | undefined): Promise<string> {
-    let lastError: Error = new Error('No download candidate');
-    for (let i = 0; i < candidates.length; i++) {
-      try {
-        hilog.info(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'try download candidate %{public}d/%{public}d', i + 1, candidates.length);
-        return await BiliService.downloadToCache(candidates[i], fileName, onProgress);
-      } catch (err) {
-        const error = err as BusinessError;
-        lastError = new Error(error.message);
-      }
-    }
-    throw lastError;
-  }
-
-  static async resolveAndDownload(bvid: string, onProgress?: DownloadProgressCallback, preferLowBitrate: boolean = false): Promise<BiliVideo> {
+  // 流式直链解析（US2）：取视频 cid 后走 dash 音轨直链（mcdn 过滤），失败降级 durl；
+  // 不做任何下载，直链由播放器带 Referer/UA 请求头边下边播
+  static async resolveAudioUrl(bvid: string, preferLowBitrate: boolean = false): Promise<string[]> {
     const video: BiliVideo = await BiliService.fetchVideoInfo(bvid);
+    return BiliService.resolveAudioUrlFromCid(bvid, video.cid, preferLowBitrate);
+  }
 
-    let localPath: string = '';
+  // resolveAudioUrl 的核心：调用方已持有 cid（如 playIndex 元数据刷新已拉过视频信息）时避免重复请求
+  static async resolveAudioUrlFromCid(bvid: string, cid: number, preferLowBitrate: boolean = false): Promise<string[]> {
     try {
-      const audioCandidates: string[] = await BiliService.fetchDashAudioCandidates(video.bvid, video.cid, preferLowBitrate);
-      localPath = await BiliService.downloadFirstSuccess(audioCandidates, `${bvid}.m4a`, onProgress);
+      return await BiliService.fetchDashAudioCandidates(bvid, cid, preferLowBitrate);
     } catch (e) {
-      hilog.warn(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'dash audio failed, fallback to durl mp4');
-      const durlCandidates: string[] = await BiliService.fetchDurlCandidates(video.bvid, video.cid);
-      localPath = await BiliService.downloadFirstSuccess(durlCandidates, `${bvid}.mp4`, onProgress);
+      hilog.warn(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'dash audio failed, fallback to durl: %{public}s', bvid);
+      return await BiliService.fetchDurlCandidates(bvid, cid);
     }
+  }
 
-    video.audioUrl = localPath;
-    return video;
+  // 缓存优先（US2）：本地已有完整可用的缓存文件（dash 下载期的 .m4a / durl 兜底的 .mp4）则返回路径，否则空串
+  static cachedAudioPath(bvid: string): string {
+    try {
+      const context = getContext() as common.UIAbilityContext;
+      const names: string[] = [`${bvid}.m4a`, `${bvid}.mp4`];
+      for (let i = 0; i < names.length; i++) {
+        const path: string = `${context.cacheDir}/${names[i]}`;
+        if (fs.accessSync(path) && isValidMediaFile(path)) {
+          hilog.info(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'stream: reuse cached file: %{public}s', path);
+          return path;
+        }
+      }
+    } catch (e) {}
+    return '';
   }
 
   static cacheSizeMB(): number {
