@@ -55,8 +55,6 @@ export struct PlayerOverlay {
   @State playBtnScale: number = 1;
   @State prevBtnScale: number = 1;
   @State nextBtnScale: number = 1;
-  // 缓冲弧线旋转角度（T013）：isPreparing && playWhenReady 时 0→360 无限循环
-  @State arcAngle: number = 0;
   @State trackIndex: number = -1;
   @State playlistCount: number = 0;
   @State showDetail: boolean = false;
@@ -71,8 +69,6 @@ export struct PlayerOverlay {
   @State trackDesc: string = '';
   private trackBvid: string = '';
   private wasPlaying: boolean = false;
-  // 缓冲弧线旋转是否进行中（T013）：变化时启停无限旋转动画
-  private wasSpinning: boolean = false;
   // 简介懒加载（T014）：进行中标志防并发；已尝试的 bvid 防重复请求
   private descLoading: boolean = false;
   private descTriedBvid: string = '';
@@ -108,25 +104,7 @@ export struct PlayerOverlay {
     return Appearance.hexWithAlpha(this.accentColor, this.isDarkMode() ? 0.451 : 0.549);
   }
 
-  // ===== 播放按钮尺寸同源（US1）：按钮直径为唯一尺寸源，缓冲弧线/常驻圆环由此派生，任一调整不再脱节 =====
-
-  // 弧线/圆环半径：按钮半径 + 均匀呼吸间隙
-  private playArcRadius(): number {
-    return Constants.PLAY_BTN_DIAMETER / 2 + Constants.PLAY_ARC_GAP;
-  }
-
-  // 弧线/圆环所在容器边长：弧线直径 + 线宽余量
-  private playArcSize(): number {
-    return this.playArcRadius() * 2 + Constants.PLAY_ARC_STROKE;
-  }
-
-  // 270° 缓冲弧线 Path 命令：圆心取容器中心，顶点起顺时针至左侧（SDK 无 ProgressType.Arc，用 Path 绘制）
-  private playArcCommands(): string {
-    const size: number = this.playArcSize();
-    const radius: number = this.playArcRadius();
-    const center: number = size / 2;
-    return `M ${center} ${center - radius} A ${radius} ${radius} 0 1 1 ${center - radius} ${center}`;
-  }
+  // ===== 播放按钮尺寸同源（US1）：按钮直径为唯一尺寸源，缓冲加载指示尺寸由此派生 =====
 
   // 封面光晕梯度：主题色 + halo_pink_0..3 原 alpha 序列（浅色 [0x80,0x3D,0x14,0x00] / 深色 [0x66,0x29,0x0D,0x00]）
   private haloColors(): Array<[ResourceColor, number]> {
@@ -145,17 +123,25 @@ export struct PlayerOverlay {
     this.syncFrom(this.controller);
     this.wasPlaying = this.isPlaying;
     this.updateGlow();
-    this.controller.subscribe((): void => {
+    this.unsubscribePlayer = this.controller.subscribe((): void => {
       this.syncFrom(this.controller);
       if (this.isPlaying !== this.wasPlaying) {
         this.wasPlaying = this.isPlaying;
         this.updateGlow();
       }
-    });
+    }, 'PlayerOverlay');
     SleepTimerController.getInstance().subscribe((): void => {
       this.syncSleepTimer();
     });
     this.syncSleepTimer();
+  }
+
+  // 进度广播退订句柄（US2/KI-1）：aboutToDisappear 中调用，避免监听器累积截断广播
+  private unsubscribePlayer: () => void = (): void => {};
+
+  aboutToDisappear(): void {
+    this.unsubscribePlayer();
+    this.unsubscribePlayer = (): void => {};
   }
 
   private syncSleepTimer(): void {
@@ -214,23 +200,6 @@ export struct PlayerOverlay {
     }, 120);
   }
 
-  // 缓冲弧线旋转启停（T013）：进入缓冲时 0→360 线性无限旋转；结束时归零待下次缓冲
-  private updateArcSpin(): void {
-    if (this.isPreparing && this.playWhenReady) {
-      this.getUIContext().animateTo({
-        duration: 1200,
-        curve: Curve.Linear,
-        iterations: -1,
-        playMode: PlayMode.Normal
-      }, (): void => {
-        this.arcAngle = 360;
-      });
-    } else {
-      this.arcAngle = 0;
-    }
-  }
-
-
   // 详情简介懒加载（T014）：空简介时后台拉取；回填写入队列条目避免下次 syncFrom 覆盖本地态；
   // 失败静默保留「暂无简介」占位（无 toast），每个 bvid 单次会话内只尝试一次
   private loadTrackDescIfNeeded(): void {
@@ -262,6 +231,11 @@ export struct PlayerOverlay {
     this.playWhenReady = c.playWhenReady;
     this.currentTime = c.currentTime;
     this.duration = c.duration;
+    // US2：切剧瞬间（controller 进入 preparing）复位拖拽状态，
+    // 避免切剧时正在拖动进度条导致 sliderValue 永久停更
+    if (c.isPreparing && this.isSeeking) {
+      this.isSeeking = false;
+    }
     if (!this.isSeeking) {
       this.sliderValue = c.duration > 0 ? c.currentTime / c.duration * 100 : 0;
     }
@@ -291,12 +265,6 @@ export struct PlayerOverlay {
       this.trackView = 0;
       this.trackPubdate = 0;
       this.trackDesc = '';
-    }
-    // 缓冲态切换时启停弧线旋转（T013）
-    const spinning: boolean = this.isPreparing && this.playWhenReady;
-    if (spinning !== this.wasSpinning) {
-      this.wasSpinning = spinning;
-      this.updateArcSpin();
     }
   }
 
@@ -1011,62 +979,37 @@ export struct PlayerOverlay {
                 this.controller.seekBy(-Constants.SEEK_STEP_MS);
               })
 
-              // 播放键同心容器（US1 尺寸同源）：弧线/圆环与按钮居中对齐紧贴按钮边缘，
-              // 缓冲中显示旋转弧线，其余时间常驻低透明装饰圆环
-              Stack({ alignContent: Alignment.Center }) {
+              // 播放键（US1 尺寸同源）：缓冲中（isPreparing && playWhenReady）以系统 LoadingProgress
+              // 反馈加载状态（US4，跨 API 版本表现一致），其余时间显示播放/暂停图标
+              Stack() {
                 if (this.isPreparing && this.playWhenReady) {
-                  // 270° 弧线：圆心为容器中心、半径按按钮直径派生（按钮半径 + ~2px 呼吸间隙），
-                  // Path 命令由 playArcCommands() 按常量计算生成，不再散落硬编码坐标
-                  Path()
-                    .commands(this.playArcCommands())
-                    .fill(Color.Transparent)
-                    .stroke(this.accentColor)
-                    .strokeWidth(Constants.PLAY_ARC_STROKE)
-                    .strokeLineCap(LineCapStyle.Round)
-                    .width(this.playArcSize())
-                    .height(this.playArcSize())
-                    .rotate({ angle: this.arcAngle, centerX: '50%', centerY: '50%' })
-                    .transition(TransitionEffect.OPACITY.animation({ duration: 250 }))
-                    .hitTestBehavior(HitTestMode.None)
+                  LoadingProgress()
+                    .color(this.accentColor)
+                    .width(Constants.PLAY_BTN_DIAMETER * 0.5)
+                    .height(Constants.PLAY_BTN_DIAMETER * 0.5)
+                } else if (this.isPlaying) {
+                  SymbolGlyph($r('sys.symbol.pause_fill'))
+                    .fontSize(32)
+                    .fontColor([$r('app.color.text_primary')])
                 } else {
-                  Circle()
-                    .fill(Color.Transparent)
-                    .stroke(this.accentColor)
-                    .strokeWidth(Constants.PLAY_RING_STROKE)
-                    .opacity(0.2)
-                    .width(this.playArcSize())
-                    .height(this.playArcSize())
-                    .transition(TransitionEffect.OPACITY.animation({ duration: 250 }))
-                    .hitTestBehavior(HitTestMode.None)
+                  SymbolGlyph($r('sys.symbol.play_fill'))
+                    .fontSize(32)
+                    .fontColor([$r('app.color.text_primary')])
                 }
-
-                Stack() {
-                  if (this.isPlaying || (this.isPreparing && this.playWhenReady)) {
-                    SymbolGlyph($r('sys.symbol.pause_fill'))
-                      .fontSize(32)
-                      .fontColor([$r('app.color.text_primary')])
-                  } else {
-                    SymbolGlyph($r('sys.symbol.play_fill'))
-                      .fontSize(32)
-                      .fontColor([$r('app.color.text_primary')])
-                  }
-                }
-                .width(Constants.PLAY_BTN_DIAMETER)
-                .height(Constants.PLAY_BTN_DIAMETER)
-                .borderRadius(Constants.PLAY_BTN_DIAMETER / 2)
-                .backgroundColor(this.tintBg())
-                .backdropBlur(20)
-                .shadow({ radius: 18, color: this.playBtnShadowColor(), offsetY: 0 })
-                .scale({ x: this.playBtnScale, y: this.playBtnScale })
-                .enabled(this.isPrepared || this.trackIndex >= 0 || this.playlistCount > 0)
-                .opacity(this.isPrepared || this.trackIndex >= 0 || this.playlistCount > 0 ? 1.0 : 0.4)
-                .onClick(() => {
-                  this.popPlay();
-                  this.controller.togglePlay();
-                })
               }
-              .width(this.playArcSize())
-              .height(this.playArcSize())
+              .width(Constants.PLAY_BTN_DIAMETER)
+              .height(Constants.PLAY_BTN_DIAMETER)
+              .borderRadius(Constants.PLAY_BTN_DIAMETER / 2)
+              .backgroundColor(this.tintBg())
+              .backdropBlur(20)
+              .shadow({ radius: 18, color: this.playBtnShadowColor(), offsetY: 0 })
+              .scale({ x: this.playBtnScale, y: this.playBtnScale })
+              .enabled(this.isPrepared || this.trackIndex >= 0 || this.playlistCount > 0)
+              .opacity(this.isPrepared || this.trackIndex >= 0 || this.playlistCount > 0 ? 1.0 : 0.4)
+              .onClick(() => {
+                this.popPlay();
+                this.controller.togglePlay();
+              })
 
               Row() {
                 SymbolGlyph($r('sys.symbol.goforward_15'))
@@ -1226,9 +1169,11 @@ export struct PlayerOverlay {
         this.sleepTimerPicker()
       }
 
-      // 播放队列抽屉：渲染在播放层内，保证覆盖在播放页内容之上
+      // 播放队列抽屉：渲染在播放层内；显式最高 zIndex（US1）压过倍速/模式/睡眠面板与内容层，
+      // 修复 API 24 平板 zIndex 失效导致抽屉被遮挡的问题（全平台行为一致）
       if (this.showQueueSheet) {
         QueueDrawer()
+          .zIndex(100)
       }
     }
     .width('100%')

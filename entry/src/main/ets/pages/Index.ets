@@ -16,6 +16,7 @@ struct Index {
   @StorageProp('navBarHeight') navBarHeight: number = 0;
   @StorageLink('showPlayerOverlay') showPlayerOverlay: boolean = false; // key 与 Constants.AS_SHOW_PLAYER_OVERLAY 对应
   @StorageLink('showQueueSheet') showQueueSheet: boolean = false; // key 与 Constants.AS_SHOW_QUEUE_SHEET 对应
+  @StorageLink('onSettingsPage') onSettingsPage: boolean = false; // key 与 Constants.AS_ON_SETTINGS_PAGE 对应
   private navPathStack: NavPathStack = new NavPathStack();
   private pageWidth: number = 0;
   private wideListener: mediaquery.MediaQueryListener | undefined = undefined;
@@ -30,6 +31,8 @@ struct Index {
     AppStorage.setOrCreate<boolean>(Constants.AS_PLAYLIST_SELECT_MODE, false);
     AppStorage.setOrCreate<boolean>(Constants.AS_SHOW_PLAYER_OVERLAY, false);
     AppStorage.setOrCreate<boolean>(Constants.AS_SHOW_QUEUE_SHEET, false);
+    // US7：设置页在台标志初始化（SettingsPage aboutToAppear/Disappear 维护）
+    AppStorage.setOrCreate<boolean>(Constants.AS_ON_SETTINGS_PAGE, false);
     this.wideListener = mediaquery.matchMediaSync('(min-width: 600vp)');
     AppStorage.setOrCreate<boolean>(Constants.AS_IS_WIDE_SCREEN, false);
     this.wideListener.on('change', (result: mediaquery.MediaQueryResult): void => {
@@ -159,12 +162,14 @@ struct Index {
       .padding({ top: this.statusBarHeight, bottom: this.navBarHeight })
 
       // 悬浮播放胶囊：底部对齐覆盖在内容之上，内容可从其后方滚过；
-      // 用 Visibility 而非卸载，避免 MiniPlayer 反复 mount 造成 PlayerController 订阅累积
+      // 用 Visibility 而非卸载，避免 MiniPlayer 反复 mount 造成 PlayerController 订阅累积；
+      // 播放浮层展开或设置页在台时隐藏（US7）
       Column() {
         MiniPlayer()
       }
       .width('100%')
-      .visibility(this.showPlayerOverlay ? Visibility.None : Visibility.Visible)
+      .padding({ left: 16, right: 16 })
+      .visibility(this.showPlayerOverlay || this.onSettingsPage ? Visibility.None : Visibility.Visible)
 
       // 队列抽屉：仅内容层渲染；播放页展开时改由 PlayerOverlay 层渲染，避免被封面图层遮挡
       if (this.showQueueSheet && !this.showPlayerOverlay) {

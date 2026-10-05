@@ -15,14 +15,19 @@ export struct MiniPlayer {
   @State isPlaying: boolean = false;
   @State isPreparing: boolean = false;
 
+  // 进度广播退订句柄（US2/KI-1）：aboutToDisappear 中调用，避免监听器累积
+  private unsubscribePlayer: () => void = (): void => {};
+
   aboutToAppear(): void {
-    PlayerController.getInstance().subscribe((): void => {
+    this.unsubscribePlayer = PlayerController.getInstance().subscribe((): void => {
       this.syncFromPlayer();
-    });
+    }, 'MiniPlayer');
     this.syncFromPlayer();
   }
 
   aboutToDisappear(): void {
+    this.unsubscribePlayer();
+    this.unsubscribePlayer = (): void => {};
     AppStorage.setOrCreate<boolean>(Constants.AS_MINI_PLAYER_VISIBLE, false);
   }
 
@@ -125,7 +130,7 @@ export struct MiniPlayer {
       .backgroundColor($r('app.color.miniplayer_background'))
       .backdropBlur(24)
       .borderRadius(24)
-      .margin({ left: 16, right: 16, bottom: this.navBarHeight + 8 })
+      .margin({ bottom: this.navBarHeight + 8 })
       .shadow({ radius: 12, color: '#33000000', offsetX: 0, offsetY: 2 })
       .onClick(() => {
         AppStorage.setOrCreate<boolean>(Constants.AS_SHOW_PLAYER_OVERLAY, true);
@@ -148,7 +153,7 @@ export struct MiniPlayer {
       .backgroundColor($r('app.color.miniplayer_background'))
       .backdropBlur(24)
       .borderRadius(24)
-      .margin({ left: 16, right: 16, bottom: this.navBarHeight + 8 })
+      .margin({ bottom: this.navBarHeight + 8 })
       .shadow({ radius: 12, color: '#33000000', offsetX: 0, offsetY: 2 })
       .onClick(() => {
         AppStorage.setOrCreate<boolean>(Constants.AS_SHOW_PLAYER_OVERLAY, true);

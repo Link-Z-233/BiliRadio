@@ -1,5 +1,6 @@
 import { promptAction } from '@kit.ArkUI';
 import { BusinessError } from '@kit.BasicServicesKit';
+import { inputMethod } from '@kit.IMEKit';
 import { BiliService, UpInfo, SeasonMeta } from '../service/BiliService';
 import { BiliSession } from '../service/BiliSession';
 import { Subscription } from '../model/Subscription';
@@ -141,6 +142,12 @@ export struct AddSubscriptionSheet {
   }
 
   private handleMainInput(): void {
+    // US5：提交查询统一收起软键盘（覆盖按钮点击/输入法提交/非法输入全部分支）
+    try {
+      inputMethod.getController().stopInputSession();
+    } catch (e) {
+      // 收起失败静默：不影响查询主流程
+    }
     const trimmed: string = this.mainInput.trim();
     if (trimmed.indexOf('b23.tv') >= 0) {
       if (this.mainBusy) {
@@ -260,13 +267,13 @@ export struct AddSubscriptionSheet {
     }).catch((err: BusinessError): void => {
       this.uidBusy = false;
       this.mainBusy = false;
-      // 透出真实错误码：-352/-412/风控页等按「疑似风控」提示，其余直接附带错误信息
+      // 透出真实错误码：-352/-412/风控页等按「疑似风控+建议登录」提示，其余直接附带错误信息
       const msg: string = err.message;
       if (msg.indexOf('-352') >= 0 || msg.indexOf('-412') >= 0 || msg.indexOf('风控') >= 0) {
         const codeMatch: RegExpMatchArray | null = msg.match(/-\d{1,5}/);
         const code: string = codeMatch !== null ? codeMatch[0] : '';
         promptAction.showToast({
-          message: code !== '' ? `查询UP主失败(${code})，疑似风控，请稍后再试` : '查询UP主失败，疑似风控，请稍后再试'
+          message: code !== '' ? `查询UP主失败(${code})，疑似风控，建议登录后重试` : '查询UP主失败，疑似风控，建议登录后重试'
         });
       } else {
         promptAction.showToast({ message: `查询UP主失败: ${msg}` });
@@ -497,6 +504,10 @@ export struct AddSubscriptionSheet {
         .backgroundColor($r('app.color.card_background'))
         .borderRadius(12)
         .layoutWeight(1)
+        .enterKeyType(EnterKeyType.Search)
+        .onSubmit(() => {
+          this.handleMainInput();
+        })
         .onChange((value: string) => {
           this.mainInput = value;
         })
@@ -507,7 +518,7 @@ export struct AddSubscriptionSheet {
           .color(this.accentColor)
           .margin({ left: 10 })
       } else {
-        Text('添加')
+        Text('载入')
           .fontSize(14)
           .fontWeight(FontWeight.Medium)
           .fontColor(this.accentColor)

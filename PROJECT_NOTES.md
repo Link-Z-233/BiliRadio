@@ -13,7 +13,7 @@
 - **建议修复**：
   1. 给 `PlayerController` 增加 `unsubscribe(fn: () => void)`（或让 `subscribe` 返回订阅令牌），并在各订阅组件的 `aboutToDisappear` 中解除订阅；或
   2. 让订阅方持有**同一函数引用**（而非每次新建闭包），以便现有 `indexOf` 去重逻辑生效。
-- **状态**：未修复（仅登记）。
+- **状态**：**已修复（2026-10 第 4 轮，US2）**。`subscribe(fn, owner?)` 改为返回退订闭包，`MiniPlayer`/`QueueSheet`/`PlayerOverlay`/`SettingsPage` 四处调用方均持有句柄并在 `aboutToDisappear` 中调用（`PlayerOverlay` 为此新增了原本缺失的 `aboutToDisappear`）；同时 `emitUi` 对每个监听器单独 try/catch（异常 hilog 警告 + Logger 'player' 记录，不中断广播循环），订阅/退订生命周期带调用方标识写入 Logger。配套修复：`playIndex` 进入时重置 `lastEmittedSec` 并取消挂起的 seekBy 防抖、`AudioPlayer` 实例代际号杜绝旧实例残余事件串扰、`PlayerOverlay.syncFrom` 切剧瞬间复位 `isSeeking`。同型的 KI-2（SleepTimerController）见下条，仍待办。
 
 ### KI-2 `SleepTimerController.subscribe` 无退订（与 KI-1 同型）
 
@@ -60,6 +60,7 @@
 - **与 KI-1/KI-2 的关系**：KI-1 监听器累积可造成类似表现，但本次为进程内首次打开浮层（无陈旧监听器堆积）且 MiniPlayer 在浮层之前已正常收到广播，不能完全归因 KI-1，故单独登记。
 - **下一步**：真机复验是否复现；若复现，完成全量系统日志异常搜索，排查浮层 backdropBlur/Path 动画重特效下「渲染子树停止重绘 / a11y 值缓存随渲染停滞」的机制。
 - **状态**：未定论（仅登记）。
+- **第 4 轮补充（2026-10，US1/US2 应用层加固）**：虽然根因未定论，本轮已落地多层应用层加固并观察——① 抽屉层级：`PlayerOverlay` 根 Stack 的队列抽屉分支显式 `.zIndex(100)` 压过全部面板与内容层；② 抽屉动画：`QueueDrawer` 进出场由 `TransitionEffect.translate` 改为挂载时 `animateTo` 驱动的显式位移状态（`panelOffsetX` 100%→0%，退出反向后再卸载），遮罩保留 OPACITY 过渡；③ 订阅链路：见 KI-1 的退订 + 异常隔离 + 代际号修复。**观察结论：层级失效仅在 API 24 平板（MatePad Pro 11 模拟器 / HarmonyOS 6.1.1）复现，其余设备未见**；上述修复需全平台表现一致且不回退其他平台，待实机回归验证后如仍复现，继续按原「下一步」排查框架层原因。
 
 ## 二、已移除与禁用功能
 

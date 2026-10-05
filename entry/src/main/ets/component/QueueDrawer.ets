@@ -1,11 +1,52 @@
 import { QueueSheet } from './QueueSheet';
 
+// 抽屉滑入/滑出动画时长（ms）：与遮罩 OPACITY 过渡一致；关闭延时比动画略长，保证滑出完整
+const DRAWER_SLIDE_MS: number = 250;
+const DRAWER_CLOSE_DELAY_MS: number = 260;
+
 // 右侧滑出播放队列抽屉：点击遮罩关闭；面板从右侧平移进出场（退出时反向滑出）。
+// 进出场由挂载时 animateTo 驱动的显式位移状态实现（US1：TransitionEffect.translate
+// 在 API 24 平板 zIndex 失效场景下表现不可靠，改为状态驱动保证全平台一致）；遮罩保留 OPACITY 过渡。
 // 仅负责“打开态”绘制，挂载到哪一图层（Index 内容层 / PlayerOverlay 播放层）由调用方决定。
 @Component
 export struct QueueDrawer {
   @StorageLink('showQueueSheet') showQueueSheet: boolean = false; // key 与 Constants.AS_SHOW_QUEUE_SHEET 对应
   @StorageProp('statusBarHeight') statusBarHeight: number = 38; // key 与 Constants.AS_STATUS_BAR_HEIGHT 对应
+  // 面板水平位移：进场 '100%'（屏幕右侧外）动画至 '0%'，退出反向；translate 百分比相对面板自身宽度
+  @State panelOffsetX: string = '100%';
+  private closing: boolean = false;
+  private closeTimer: number = -1;
+
+  aboutToAppear(): void {
+    this.getUIContext().animateTo({ duration: DRAWER_SLIDE_MS, curve: Curve.EaseOut }, (): void => {
+      this.panelOffsetX = '0%';
+    });
+  }
+
+  aboutToDisappear(): void {
+    if (this.closeTimer >= 0) {
+      clearTimeout(this.closeTimer);
+      this.closeTimer = -1;
+    }
+  }
+
+  // 遮罩点击关闭：面板先反向滑出，动画结束后再真正卸载（置 showQueueSheet=false）
+  private closeWithSlide(): void {
+    if (this.closing) {
+      return;
+    }
+    this.closing = true;
+    this.getUIContext().animateTo({ duration: DRAWER_SLIDE_MS, curve: Curve.EaseOut }, (): void => {
+      this.panelOffsetX = '100%';
+    });
+    if (this.closeTimer >= 0) {
+      clearTimeout(this.closeTimer);
+    }
+    this.closeTimer = setTimeout((): void => {
+      this.closeTimer = -1;
+      this.showQueueSheet = false;
+    }, DRAWER_CLOSE_DELAY_MS);
+  }
 
   build() {
     Stack({ alignContent: Alignment.End }) {
@@ -14,12 +55,12 @@ export struct QueueDrawer {
         .width('100%')
         .height('100%')
         .backgroundColor($r('app.color.mask_heavy'))
-        .transition(TransitionEffect.OPACITY.animation({ duration: 250 }))
+        .transition(TransitionEffect.OPACITY.animation({ duration: DRAWER_SLIDE_MS }))
         .onClick(() => {
-          this.showQueueSheet = false;
+          this.closeWithSlide();
         })
 
-      // 队列面板：右对齐，从右侧滑入 / 反向滑出；顶部留出状态栏高度，内容不压状态栏
+      // 队列面板：右对齐，位移由 panelOffsetX 状态驱动；顶部留出状态栏高度，内容不压状态栏
       Column() {
         QueueSheet()
       }
@@ -31,10 +72,7 @@ export struct QueueDrawer {
       .backdropBlur(20)
       .borderRadius({ topLeft: 16, bottomLeft: 16 })
       .clip(true)
-      .transition(
-        TransitionEffect.translate({ x: '100%' })
-          .animation({ duration: 250, curve: Curve.EaseOut })
-      )
+      .translate({ x: this.panelOffsetX })
     }
     .width('100%')
     .height('100%')

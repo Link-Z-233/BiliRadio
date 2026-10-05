@@ -108,17 +108,21 @@ export struct QueueSheet {
   private listScroller: Scroller = new Scroller();
   private flashTimer: number = -1;
   private swipeStartIndex: number = -1;
+  // 进度广播退订句柄（US2/KI-1）：aboutToDisappear 中调用，避免监听器累积
+  private unsubscribePlayer: () => void = (): void => {};
 
   aboutToAppear(): void {
     this.syncFrom(this.controller);
-    this.controller.subscribe((): void => {
+    this.unsubscribePlayer = this.controller.subscribe((): void => {
       this.syncFrom(this.controller);
       this.addMsg = this.controller.statusMsg;
 
-    });
+    }, 'QueueSheet');
   }
 
   aboutToDisappear(): void {
+    this.unsubscribePlayer();
+    this.unsubscribePlayer = (): void => {};
     if (this.flashTimer >= 0) {
       clearTimeout(this.flashTimer);
       this.flashTimer = -1;

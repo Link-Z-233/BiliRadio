@@ -55,6 +55,7 @@ export class Constants {
   static readonly AS_SHOW_PLAYER_OVERLAY: string = 'showPlayerOverlay';
   static readonly AS_SHOW_QUEUE_SHEET: string = 'showQueueSheet';
   static readonly AS_MINI_PLAYER_VISIBLE: string = 'miniPlayerVisible';
+  static readonly AS_ON_SETTINGS_PAGE: string = 'onSettingsPage';
 
   // —— 受限色值（窗口层 API / Canvas 2D 不接受颜色资源引用，只能写字面量） ——
   // 仅能在此唯一定义，禁止其他文件重复声明
@@ -98,12 +99,22 @@ export class Constants {
   static readonly SEEK_BY_DEBOUNCE_MS: number = 250;
   // 应用内日志环形缓冲上限（条）：超限淘汰最旧（US9）
   static readonly LOG_BUFFER_MAX: number = 500;
+  // 日志落盘文件名（US9）：位于应用沙箱 filesDir，单行可读格式追加写入
+  static readonly LOG_FILE_NAME: string = 'biliradio_log.txt';
+  // 日志落盘硬上限（字节）：超限保留最新一半重写（滚动淘汰），文件占用有界
+  static readonly LOG_FILE_MAX_BYTES: number = 512 * 1024;
 
-  // —— 播放按钮尺寸同源（US1）：按钮直径为唯一尺寸源，缓冲弧线/常驻圆环尺寸由此派生，调整不再脱节 ——
+  // —— B 站端点与 UA（US3：未登录查询 UP 投稿风控修复） ——
+  // APP 投稿端点：BiliDroid 客户端渠道，无需 cookie/WBI 即可查询投稿列表
+  static readonly BILI_APP_ARCHIVE_URL: string = 'https://app.bilibili.com/x/v2/space/archive/cursor';
+  // ExClimbWuzhi 风控网关：buvid 激活（PiliPlus 同源路径）
+  static readonly BILI_EXCLIMB_WUZHI_URL: string = 'https://api.bilibili.com/x/internal/gaia-gateway/ExClimbWuzhi';
+  // BiliDroid 客户端 UA（与 PiliPlus constants.dart 同源）：APP 端点与 ExClimbWuzhi 激活共用
+  static readonly BILI_APP_USER_AGENT: string =
+    'Mozilla/5.0 BiliDroid/8.43.0 (bbcallen@gmail.com) os/android model/android mobi_app/android build/8430300 channel/master innerVer/8430300 osVer/15 network/2';
+
+  // —— 播放按钮尺寸同源（US1/US4）：按钮直径为唯一尺寸源，缓冲加载指示尺寸由此派生，调整不再脱节 ——
   static readonly PLAY_BTN_DIAMETER: number = 72;   // 播放按钮直径
-  static readonly PLAY_ARC_GAP: number = 2;         // 弧线与按钮边缘的均匀呼吸间隙
-  static readonly PLAY_ARC_STROKE: number = 3;      // 缓冲弧线线宽
-  static readonly PLAY_RING_STROKE: number = 1.5;   // 常驻装饰圆环线宽
 }
 
 // 延时工具：全库唯一实现，供各处「等待固定时长」复用。

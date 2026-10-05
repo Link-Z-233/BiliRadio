@@ -124,15 +124,19 @@ struct SettingsPage {
   private controller: PlayerController = PlayerController.getInstance();
   private playHistorySource: HistoryDataSource = new HistoryDataSource();
   private navPathStack: NavPathStack = new NavPathStack();
+  // 进度广播退订句柄（US2/KI-1）：aboutToDisappear 中调用，避免监听器累积
+  private unsubscribePlayer: () => void = (): void => {};
 
   aboutToAppear(): void {
+    // US7：设置页在台标志——驱动首页播放胶囊在本页隐藏
+    AppStorage.setOrCreate<boolean>(Constants.AS_ON_SETTINGS_PAGE, true);
     this.refreshLoginState();
     this.autoPlayOnStart = AppStore.getNumber(Constants.KEY_AUTO_PLAY_ON_START, 0) === 1;
     this.interruptResume = AppStore.getNumber(Constants.KEY_INTERRUPT_RESUME, 0) === 1;
     this.dataSaver = AppStore.getNumber(Constants.KEY_DATA_SAVER, 0) === 1;
     this.preferLowBitrate = AppStore.getNumber(Constants.KEY_PREFER_LOW_BITRATE, 0) === 1;
     this.wifiOnlyDownload = AppStore.getNumber(Constants.KEY_WIFI_ONLY_DOWNLOAD, 0) === 1;
-    this.controller.subscribe((): void => {
+    this.unsubscribePlayer = this.controller.subscribe((): void => {
       this.refreshLoginState();
       if (this.showHistory && this.historyVersion !== this.controller.historyVersion) {
         this.historyVersion = this.controller.historyVersion;
@@ -143,12 +147,16 @@ struct SettingsPage {
         this.playHistoryItems = this.controller.playHistory.slice(0);
         this.playHistorySource.setItems(this.playHistoryItems);
       }
-    });
+    }, 'SettingsPage');
     this.refreshCacheText();
     this.logCount = Logger.count();
   }
 
   aboutToDisappear(): void {
+    // US7：离开设置页恢复胶囊展示
+    AppStorage.setOrCreate<boolean>(Constants.AS_ON_SETTINGS_PAGE, false);
+    this.unsubscribePlayer();
+    this.unsubscribePlayer = (): void => {};
     this.stopPoll();
   }
 

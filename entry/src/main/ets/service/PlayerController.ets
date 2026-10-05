@@ -11,6 +11,7 @@ import { PlayHistoryItem } from '../model/PlayHistoryItem';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { Constants } from './Constants';
+import { Logger } from './Logger';
 import { NetUtil } from './NetUtil';
 
 export enum PlayMode {
@@ -94,15 +95,35 @@ export class PlayerController {
     return `${label}x`;
   }
 
-  subscribe(fn: () => void): void {
+  // 订阅 UI 刷新（US2/KI-1）：返回退订句柄，调用方须在 aboutToDisappear 中调用，
+  // 避免页面销毁后监听器累积导致进度广播截断；owner 为调用方标识，用于生命周期日志追溯。
+  subscribe(fn: () => void, owner: string = ''): () => void {
     if (this.uiListeners.indexOf(fn) < 0) {
       this.uiListeners.push(fn);
     }
+    Logger.log('player', `subscribe${owner !== '' ? ` owner=${owner}` : ''}`,
+      `listeners=${this.uiListeners.length}`);
+    return (): void => {
+      const idx: number = this.uiListeners.indexOf(fn);
+      if (idx >= 0) {
+        this.uiListeners.splice(idx, 1);
+      }
+      Logger.log('player', `unsubscribe${owner !== '' ? ` owner=${owner}` : ''}`,
+        `listeners=${this.uiListeners.length}`);
+    };
   }
 
   private emitUi(): void {
     for (let i = 0; i < this.uiListeners.length; i++) {
-      this.uiListeners[i]();
+      try {
+        this.uiListeners[i]();
+      } catch (e) {
+        // US2/KI-1：单监听器异常不得中断广播循环，其余监听器照常刷新
+        const error = e as BusinessError;
+        hilog.warn(Constants.LOG_DOMAIN, Constants.LOG_TAG,
+          'emitUi listener error: %{public}s', error.message);
+        Logger.log('player', 'emitUi listener error', error.message);
+      }
     }
   }
 
@@ -233,6 +254,7 @@ export class PlayerController {
   private onPlayerState(state: string): void {
     hilog.info(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'player state: %{public}s, playWhenReady=%{public}d',
       state, this.playWhenReady ? 1 : 0);
+    Logger.log('player', 'state', `${state} playWhenReady=${this.playWhenReady ? 1 : 0}`);
     if (state === 'prepared') {
       this.isPrepared = true;
       this.isPreparing = false;
@@ -450,6 +472,15 @@ export class PlayerController {
     }
     this.currentIndex = index;
     const item: BiliVideo = this.playlist[index];
+    // US2：切剧入口初始化——重置秒级节流计数并取消挂起的 seekBy 防抖，
+    // 杜绝上一集残留的广播状态导致新剧集进度条冻结
+    this.lastEmittedSec = -1;
+    if (this.seekByTimerId >= 0) {
+      clearTimeout(this.seekByTimerId);
+      this.seekByTimerId = -1;
+      Logger.log('player', 'seekBy cancel', 'playIndex');
+    }
+    Logger.log('player', 'playIndex', `index=${index} bvid=${item.bvid} seekMs=${seekMs}`);
     this.pendingSeekMs = seekMs;
     this.currentTime = seekMs;
     this.duration = item.duration > 0 ? item.duration * 1000 : 0;
@@ -746,6 +777,9 @@ export class PlayerController {
       // 到期时曲目可能已切换（isPrepared 被置 false），此时放弃本次微调
       if (this.isPrepared) {
         this.player.seek(this.seekByTargetMs);
+        Logger.log('player', 'seekBy fire', `target=${this.seekByTargetMs}`);
+      } else {
+        Logger.log('player', 'seekBy drop', 'not prepared');
       }
     }, Constants.SEEK_BY_DEBOUNCE_MS);
   }

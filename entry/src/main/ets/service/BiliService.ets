@@ -101,6 +101,9 @@ function buildHeaders(): Record<string, string> {
   if (session.buvid4 !== '') {
     cookie = cookie === '' ? `buvid4=${session.buvid4}` : `${cookie}; buvid4=${session.buvid4}`;
   }
+  if (session.bNut !== '') {
+    cookie = cookie === '' ? `b_nut=${session.bNut}` : `${cookie}; b_nut=${session.bNut}`;
+  }
   if (cookie !== '') {
     headers['Cookie'] = cookie;
   }
@@ -123,6 +126,55 @@ function parseDurationLen(len: string): number {
     seconds = seconds * 60 + (Number(parts[i]) || 0);
   }
   return seconds;
+}
+
+// US3：base64 编码（ArkTS 运行时无 btoa/Buffer，自实现标准字母表编码）
+const B64_ALPHABET: string = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+
+function base64EncodeBytes(bytes: Uint8Array): string {
+  let out: string = '';
+  for (let i: number = 0; i < bytes.length; i += 3) {
+    const b0: number = bytes[i];
+    const b1: number = i + 1 < bytes.length ? bytes[i + 1] : 0;
+    const b2: number = i + 2 < bytes.length ? bytes[i + 2] : 0;
+    out += B64_ALPHABET.charAt((b0 >> 2) & 0x3F);
+    out += B64_ALPHABET.charAt(((b0 & 0x3) << 4) | ((b1 >> 4) & 0x0F));
+    out += i + 1 < bytes.length ? B64_ALPHABET.charAt(((b1 & 0x0F) << 2) | ((b2 >> 6) & 0x03)) : '=';
+    out += i + 2 < bytes.length ? B64_ALPHABET.charAt(b2 & 0x3F) : '=';
+  }
+  return out;
+}
+
+// US3：dm_img 风控指纹随机串（与 PiliPlus 同源做法）——随机字节域 0x26..0x7E（避开 '%'），
+// base64 后截去末 2 字符；minBytes/maxBytes 控制随机长度区间
+function randomDmImgStr(minBytes: number, maxBytes: number): string {
+  const span: number = maxBytes - minBytes;
+  const count: number = span > 0 ? minBytes + Math.floor(Math.random() * (span + 1)) : minBytes;
+  const bytes: Uint8Array = new Uint8Array(count);
+  for (let i: number = 0; i < count; i++) {
+    bytes[i] = 0x26 + Math.floor(Math.random() * 0x59);
+  }
+  return base64EncodeBytes(bytes).slice(0, -2);
+}
+
+// US3：空间投稿查询参数——在既有参数上补齐 dm_img 全套风控指纹
+// （dm_img_list/dm_img_str/dm_cover_img_str/dm_img_inter/web_location/order_avoided/tid），
+// 每次调用随机值刷新（PiliPlus 每次请求重新生成）
+function buildUpQueryParams(mid: number): Record<string, string> {
+  return {
+    'mid': mid.toString(),
+    'ps': '30',
+    'pn': '1',
+    'order': 'pubdate',
+    'platform': 'web',
+    'tid': '0',
+    'web_location': '333.1387',
+    'order_avoided': 'true',
+    'dm_img_list': '[]',
+    'dm_img_str': randomDmImgStr(16, 64),
+    'dm_cover_img_str': randomDmImgStr(32, 128),
+    'dm_img_inter': '{"ds":[],"wh":[0,0,0],"of":[0,0,0]}',
+  };
 }
 
 // US9：日志只记 host+path，截掉可能含 cookie/token 的 query string
@@ -637,19 +689,144 @@ export class BiliService {
     return items;
   }
 
+  // US3：APP 端点投稿查询（app.bilibili.com BiliDroid 渠道）——无 cookie/WBI 依赖，
+  // 未登录亦可靠查询；仅携带 BiliDroid UA
+  private static async fetchUpVideosViaApp(mid: number): Promise<BiliVideo[]> {
+    const params: Record<string, string> = {
+      'vmid': mid.toString(),
+      'ps': '30',
+      'pn': '1',
+      'build': '8430300',
+      'mobi_app': 'android',
+      'platform': 'android',
+    };
+    const headers: Record<string, string> = {
+      'User-Agent': Constants.BILI_APP_USER_AGENT,
+    };
+    const resultStr: string = await BiliService.fetchUpVideosOnce(
+      Constants.BILI_APP_ARCHIVE_URL, params, headers);
+    return BiliService.parseAppArchiveList(resultStr, mid);
+  }
+
+  // US3：APP 端点响应解析——真实 BiliDroid 响应为 data.item[]（author/play/duration 为顶层字段、
+  // aid 以字符串 param 透出），兼容 data.archives[]（owner{}/stat{} 嵌套）命名；
+  // title 经 cleanTitle、cover 经 normalizeCover 规范化
+  private static parseAppArchiveList(resultStr: string, mid: number): BiliVideo[] {
+    const root: Record<string, Object> = JSON.parse(resultStr) as Record<string, Object>;
+    const code: number = root['code'] as number;
+    if (code !== 0) {
+      // 透出真实错误码，供降级链分类与上层提示
+      throw new Error(`Bili API error ${code}`);
+    }
+    const data: Record<string, Object> = root['data'] as Record<string, Object>;
+    const items: BiliVideo[] = [];
+    let arrRaw: Object = data['item'];
+    if (arrRaw === undefined || arrRaw === null) {
+      arrRaw = data['archives'];
+    }
+    if (arrRaw === undefined || arrRaw === null) {
+      return items;
+    }
+    const arr: Object[] = arrRaw as Object[];
+    for (let i: number = 0; i < arr.length; i++) {
+      const rec: Record<string, Object> = arr[i] as Record<string, Object>;
+      const bvidRaw: Object = rec['bvid'];
+      const bvid: string = bvidRaw === undefined || bvidRaw === null ? '' : bvidRaw as string;
+      if (bvid === '') {
+        continue;
+      }
+      const item: BiliVideo = new BiliVideo();
+      item.bvid = bvid;
+      // aid：整数 aid 或字符串 param
+      const aidRaw: Object = rec['aid'];
+      if (aidRaw !== undefined && aidRaw !== null) {
+        item.aid = Number(aidRaw);
+      } else {
+        const paramRaw: Object = rec['param'];
+        if (paramRaw !== undefined && paramRaw !== null) {
+          item.aid = Number(paramRaw);
+        }
+      }
+      const titleRaw: Object = rec['title'];
+      item.title = titleRaw === undefined || titleRaw === null ? '' : cleanTitle(titleRaw as string);
+      item.cover = BiliService.normalizeCover(rec);
+      // duration：APP 端点为秒（可能为 -1），Web 兼容 'm:ss' 字符串
+      const durRaw: Object = rec['duration'];
+      if (durRaw !== undefined && durRaw !== null) {
+        if (typeof durRaw === 'number') {
+          const dur: number = durRaw as number;
+          item.duration = dur > 0 ? dur : 0;
+        } else {
+          item.duration = parseDurationLen(durRaw as string);
+        }
+      }
+      // pubdate：APP 端点为 pubdate，Web 兼容 created
+      const pubRaw: Object = rec['pubdate'];
+      if (pubRaw !== undefined && pubRaw !== null) {
+        item.pubdate = Number(pubRaw);
+      } else {
+        const createdRaw: Object = rec['created'];
+        if (createdRaw !== undefined && createdRaw !== null) {
+          item.pubdate = Number(createdRaw);
+        }
+      }
+      // UP 主：APP item[] 为顶层 author/mid；Web archives[] 为 owner{mid,name,face}
+      const ownerRaw: Object = rec['owner'];
+      if (ownerRaw !== undefined && ownerRaw !== null) {
+        const owner: Record<string, Object> = ownerRaw as Record<string, Object>;
+        const ownerMidRaw: Object = owner['mid'];
+        item.ownerMid = ownerMidRaw === undefined || ownerMidRaw === null ? mid : Number(ownerMidRaw);
+        const ownerNameRaw: Object = owner['name'];
+        item.ownerName = ownerNameRaw === undefined || ownerNameRaw === null ? '' : ownerNameRaw as string;
+        const ownerFaceRaw: Object = owner['face'];
+        item.ownerFace = ownerFaceRaw === undefined || ownerFaceRaw === null ? '' : ownerFaceRaw as string;
+      } else {
+        item.ownerMid = mid;
+        const authorRaw: Object = rec['author'];
+        if (authorRaw !== undefined && authorRaw !== null) {
+          item.ownerName = authorRaw as string;
+        }
+      }
+      // 播放量：Web archives[] 为 stat.view；APP item[] 为顶层 play
+      const statRaw: Object = rec['stat'];
+      if (statRaw !== undefined && statRaw !== null) {
+        const stat: Record<string, Object> = statRaw as Record<string, Object>;
+        const viewRaw: Object = stat['view'];
+        if (viewRaw !== undefined && viewRaw !== null) {
+          item.view = Number(viewRaw);
+        }
+      } else {
+        const playRaw: Object = rec['play'];
+        if (playRaw !== undefined && playRaw !== null) {
+          item.view = Number(playRaw);
+        }
+      }
+      items.push(item);
+    }
+    return items;
+  }
+
   // UP 主最新投稿（单页 30 条，新集在前）
   // ponytail: 只取第一页——播客「近期节目」语义；升级路径：SourcePage 滚动到底按需追加页
-  // 风控降级链：最多 3 轮，每轮「无签名 arc/search → WBI 签名」两步；
+  // 风控降级链（US3）：APP 端点优先（BiliDroid 渠道，无 cookie/WBI），失败降级 Web 链——
+  // 最多 3 轮，每轮「无签名 arc/search → WBI 签名」两步；
   // -352/-412/风控页/网络错误等可重试错误重置 buvid 指数退避后进下一轮，
   // -404/-400/-101 等业务错误立即失败；全败时抛出最后一轮真实错误（含错误码）
   static async fetchUpVideos(mid: number): Promise<BiliVideo[]> {
-    const params: Record<string, string> = {
-      'mid': mid.toString(),
-      'ps': '30',
-      'pn': '1',
-      'order': 'pubdate',
-      'platform': 'web',
-    };
+    // US3：APP 端点优先——BiliDroid 渠道不依赖 cookie/WBI，未登录查询首选；
+    // 业务性失败（-404/-400/-101）直接透出，风控/网络错误降级 Web 链
+    try {
+      const appItems: BiliVideo[] = await BiliService.fetchUpVideosViaApp(mid);
+      Logger.log('net', 'UP投稿列表', `APP端点成功 mid=${mid} count=${appItems.length}`);
+      return appItems;
+    } catch (appErr) {
+      const appError: Error = appErr instanceof Error ? appErr : new Error(String(appErr));
+      Logger.log('error', 'UP投稿列表', `APP端点失败 mid=${mid}: ${appError.message}`);
+      if (isUpQueryFatal(appError)) {
+        throw appError;
+      }
+    }
+
     const spaceHeaders: Record<string, string> = buildSpaceHeaders(mid);
     let lastError: Error = new Error('查询UP主投稿失败');
     for (let attempt: number = 0; attempt < 3; attempt++) {
@@ -657,6 +834,8 @@ export class BiliService {
         BiliSession.getInstance().resetBuvid();
         await sleep(2000 * attempt);
       }
+      // US3：每轮注入全套 dm_img 风控指纹参数（随机值按轮刷新）
+      const params: Record<string, string> = buildUpQueryParams(mid);
       try {
         const plainResult: string = await BiliService.fetchUpVideosOnce(`${BILI_SPACE_ARC_URL}`, params, spaceHeaders);
         Logger.log('net', 'UP投稿列表', `第${attempt + 1}轮直连成功 mid=${mid}`);
@@ -1110,12 +1289,106 @@ export class BiliService {
         }
         if (session.hasBuvid()) {
           hilog.info(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'buvid fetched');
+          // US3：buvid 获取成功后执行一次 ExClimbWuzhi 激活（fire-and-forget，失败静默）
+          BiliService.activateBuvid().catch((): void => {});
           return;
         }
       } catch (err) {
         const error = err as BusinessError;
         hilog.warn(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'buvid fetch failed: %{public}s', error.message);
       }
+    }
+  }
+
+  // US3：buvid 激活状态（每进程仅激活一次；失败不重试，下次进程启动可再试）
+  private static buvidActivated: boolean = false;
+
+  // US3：ExClimbWuzhi 风控网关 buvid 激活（PiliPlus 最小伪装 payload）：
+  // JSON body `{payload: <json串>}`，携带 buvid3 Cookie 与 BiliDroid UA；
+  // 从响应 Set-Cookie 被动收集 b_nut 存入 BiliSession；全程失败静默不阻塞主流程
+  static async activateBuvid(): Promise<void> {
+    if (BiliService.buvidActivated) {
+      return;
+    }
+    const session: BiliSession = BiliSession.getInstance();
+    if (session.buvid3 === '') {
+      return;
+    }
+    BiliService.buvidActivated = true;
+    try {
+      // payload 种子：32 随机字节 + 4 零字节 + 'IEND' + 4 随机字节，base64 后取末 50 字符
+      const seed: Uint8Array = new Uint8Array(44);
+      for (let i: number = 0; i < 32; i++) {
+        seed[i] = Math.floor(Math.random() * 256);
+      }
+      seed[36] = 73; // 'I'
+      seed[37] = 69; // 'E'
+      seed[38] = 78; // 'N'
+      seed[39] = 68; // 'D'
+      for (let i: number = 40; i < 44; i++) {
+        seed[i] = Math.floor(Math.random() * 256);
+      }
+      const b64: string = base64EncodeBytes(seed);
+      const payload: string = b64.substring(b64.length - 50);
+      const gaia3c43: Record<string, Object> = {
+        'adca': 'Linux',
+        'bfe9': payload,
+      };
+      const gaia: Record<string, Object> = {
+        '3064': 1,
+        '39c8': '333.1387.fp.risk',
+        '3c43': gaia3c43,
+      };
+      const body: Record<string, Object> = { 'payload': JSON.stringify(gaia) };
+      const setCookie: string =
+        await BiliService.postExClimbWuzhi(JSON.stringify(body), session.buvid3);
+      if (setCookie !== '') {
+        session.collectSetCookie(setCookie);
+      }
+      hilog.info(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'buvid activated');
+    } catch (e) {
+      hilog.warn(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'buvid activate failed');
+    }
+  }
+
+  // US3：ExClimbWuzhi POST（JSON body + buvid3 Cookie + BiliDroid UA）；
+  // 不校验响应码/响应体（激活结果不敏感），仅收集 Set-Cookie 返回
+  private static async postExClimbWuzhi(body: string, buvid3: string): Promise<string> {
+    const httpRequest: http.HttpRequest = http.createHttp();
+    const headers: Record<string, string> = {
+      'User-Agent': Constants.BILI_APP_USER_AGENT,
+      'Content-Type': 'application/json',
+      'Cookie': `buvid3=${buvid3}`,
+    };
+    try {
+      const response: http.HttpResponse = await httpRequest.request(Constants.BILI_EXCLIMB_WUZHI_URL, {
+        method: http.RequestMethod.POST,
+        header: headers,
+        extraData: body,
+        usingCache: false,
+        expectDataType: http.HttpDataType.STRING,
+        connectTimeout: Constants.CONNECT_TIMEOUT_MS,
+        readTimeout: Constants.READ_TIMEOUT_MS,
+      });
+      Logger.log('net', logUrl(Constants.BILI_EXCLIMB_WUZHI_URL), `HTTP ${response.responseCode}`);
+      let setCookie: string = '';
+      const header: Record<string, Object> = response.header as Record<string, Object>;
+      let sc: Object = header['set-cookie'];
+      if (sc === undefined) {
+        sc = header['Set-Cookie'];
+      }
+      if (typeof sc === 'string') {
+        setCookie = sc;
+      } else if (Array.isArray(sc)) {
+        const arr: Object[] = sc as Object[];
+        for (let i: number = 0; i < arr.length; i++) {
+          const part: string = arr[i] as string;
+          setCookie = setCookie === '' ? part : `${setCookie}\n${part}`;
+        }
+      }
+      return setCookie;
+    } finally {
+      httpRequest.destroy();
     }
   }
 

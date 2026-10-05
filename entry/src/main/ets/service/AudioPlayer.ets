@@ -18,6 +18,9 @@ export class AudioPlayer {
   private _isPrepared: boolean = false;
   private currentFd: number = -1;
   private desiredRate: number = 1.0;
+  // 实例代际号（US2）：每次重建/销毁递增；setupCallbacks 捕获当代代际，
+  // 回调先比对代际再更新共享状态，杜绝旧实例残余事件（timeUpdate/stateChange 等）串扰新剧集
+  private generation: number = 0;
   onStateChange: ((state: string) => void) | undefined = undefined;
   onTimeUpdate: ((time: number) => void) | undefined = undefined;
   onError: ((msg: string) => void) | undefined = undefined;
@@ -37,7 +40,9 @@ export class AudioPlayer {
 
   private setupCallbacks(): void {
     if (this.avPlayer === undefined) return;
+    const gen: number = this.generation;
     this.avPlayer.on('stateChange', (state: string) => {
+      if (gen !== this.generation) return;
       this.playerState = state;
       if (state === 'prepared') {
         this._isPrepared = true;
@@ -70,12 +75,14 @@ export class AudioPlayer {
       }
     });
     this.avPlayer.on('timeUpdate', (time: number) => {
+      if (gen !== this.generation) return;
       this._currentTime = time;
       if (this.onTimeUpdate !== undefined) {
         this.onTimeUpdate(time);
       }
     });
     this.avPlayer.on('error', (err: BusinessError) => {
+      if (gen !== this.generation) return;
       this.playerState = 'error';
       this._isPrepared = false;
       this._isPlaying = false;
@@ -84,6 +91,7 @@ export class AudioPlayer {
       }
     });
     this.avPlayer.on('audioInterrupt', (event: audio.InterruptEvent) => {
+      if (gen !== this.generation) return;
       hilog.info(Constants.LOG_DOMAIN, Constants.LOG_TAG,
         'audioInterrupt eventType=%{public}d forceType=%{public}d hintType=%{public}d',
         Number(event.eventType), Number(event.forceType), Number(event.hintType));
@@ -109,6 +117,8 @@ export class AudioPlayer {
   // 换源前公共重建：释放旧实例与 fd、复位状态标志，新建 AVPlayer 并挂回调
   // （本地 fdSrc 与远程流式两条数据源路径共用）
   private async recreatePlayer(): Promise<media.AVPlayer> {
+    // 重建即换代际：旧实例（含尚未完成异步 release 的残余回调）立即失效
+    this.generation++;
     if (this.avPlayer !== undefined) {
       try {
         this.avPlayer.off('stateChange');
@@ -201,6 +211,7 @@ export class AudioPlayer {
   }
 
   async resetPlayer(): Promise<void> {
+    this.generation++;
     if (this.avPlayer !== undefined) {
       try {
         this.avPlayer.off('stateChange');
@@ -235,6 +246,7 @@ export class AudioPlayer {
   }
 
   async release(): Promise<void> {
+    this.generation++;
     if (this.avPlayer !== undefined) {
       try {
         this.avPlayer.off('stateChange');
