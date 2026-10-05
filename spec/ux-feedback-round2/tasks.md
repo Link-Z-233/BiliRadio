@@ -137,7 +137,7 @@
 
 **Purpose**: 全部非流式改动整体入库，为流式改造提供可回退基线。
 
-- [ ] T020 执行 git 提交：`git add -A` 暂存全部改动（上一轮 player-redesign 的 PlayerOverlay/PlayerController 改动 + spec/ 文档 + 本轮 T002-T019 全部非流式改动），`git commit` 使用简洁中文提交信息（概述：播放页重设计 + 第二轮体验优化非流式部分）。提交前核对 `git status` 无意外文件（构建产物等不入库）。提交后才允许开始流式相关代码修改。
+- [X] T020 执行 git 提交：`git add -A` 暂存全部改动（上一轮 player-redesign 的 PlayerOverlay/PlayerController 改动 + spec/ 文档 + 本轮 T002-T019 全部非流式改动），`git commit` 使用简洁中文提交信息（概述：播放页重设计 + 第二轮体验优化非流式部分）。提交前核对 `git status` 无意外文件（构建产物等不入库）。提交后才允许开始流式相关代码修改。
 
 ---
 
@@ -147,10 +147,10 @@
 
 **Independent Test**: 清缓存点播长音频数秒出声；缓存曲目秒播；seek 即时；断网重试后提示且队列完好。
 
-- [ ] T021 [P] [US2] `entry/src/main/ets/service/BiliService.ets` 新增 resolveAudioUrl(bvid: string): Promise<string[]>：复用 fetchVideoInfo 取 cid 与 fetchDashAudioCandidates 的 URL 收集/mcdn 过滤逻辑，返回直链+备选列表（dash 优先，fetchDurlCandidates 的 durl 兜底），不做任何下载；音轨选择沿用现有最高/最低逻辑（preferLowBitrate 开关）。
-- [ ] T022 [P] [US2] `entry/src/main/ets/service/AudioPlayer.ets` 新增远程流式数据源：用 media.createMediaSourceWithUrl(url, { 'Referer': 'https://www.bilibili.com', 'User-Agent': <现有桌面UA常量> }) 构造 MediaSource，setMediaSource(mediaSource, { preferredBufferDuration: 3-5s }) 开播；本地 fdSrc 路径签名与行为完全不变；prepared/error 等状态回调复用既有订阅机制。
-- [ ] T023 [US2] `entry/src/main/ets/service/PlayerController.ets` playIndex 流式分支：缓存文件存在（cacheDir/{bvid}.m4a）优先本地播放（现状路径保留）；否则 resolveAudioUrl → AudioPlayer 流式开播，状态行改缓冲态文案（"正在缓冲..."），移除下载百分比进度消息链路；流式失败自动重试（同 URL 重试一次，再轮换 backupUrl），彻底失败状态行提示且播放队列/列表状态不破坏。
-- [ ] T024 [US2] 下载链路退役与收尾：`entry/src/main/ets/service/BiliService.ets` 将 downloadToFile/downloadFirstSuccess 从播放链路移除（若无其他调用方则删除）；缓存文件复用校验保留；`entry/src/main/ets/service/PlayerController.ets` 清理下载进度回调相关死代码；对 BiliService.ets/AudioPlayer.ets/PlayerController.ets 运行 `arkts_check` 修复全部诊断。
+- [X] T021 [P] [US2] `entry/src/main/ets/service/BiliService.ets` 新增 resolveAudioUrl(bvid: string): Promise<string[]>：复用 fetchVideoInfo 取 cid 与 fetchDashAudioCandidates 的 URL 收集/mcdn 过滤逻辑，返回直链+备选列表（dash 优先，fetchDurlCandidates 的 durl 兜底），不做任何下载；音轨选择沿用现有最高/最低逻辑（preferLowBitrate 开关）。
+- [X] T022 [P] [US2] `entry/src/main/ets/service/AudioPlayer.ets` 新增远程流式数据源：用 media.createMediaSourceWithUrl(url, { 'Referer': 'https://www.bilibili.com', 'User-Agent': <现有桌面UA常量> }) 构造 MediaSource，setMediaSource(mediaSource, { preferredBufferDuration: 3-5s }) 开播；本地 fdSrc 路径签名与行为完全不变；prepared/error 等状态回调复用既有订阅机制。
+- [X] T023 [US2] `entry/src/main/ets/service/PlayerController.ets` playIndex 流式分支：缓存文件存在（cacheDir/{bvid}.m4a）优先本地播放（现状路径保留）；否则 resolveAudioUrl → AudioPlayer 流式开播，状态行改缓冲态文案（"正在缓冲..."），移除下载百分比进度消息链路；流式失败自动重试（同 URL 重试一次，再轮换 backupUrl），彻底失败状态行提示且播放队列/列表状态不破坏。
+- [X] T024 [US2] 下载链路退役与收尾：`entry/src/main/ets/service/BiliService.ets` 将 downloadToFile/downloadFirstSuccess 从播放链路移除（若无其他调用方则删除）；缓存文件复用校验保留；`entry/src/main/ets/service/PlayerController.ets` 清理下载进度回调相关死代码；对 BiliService.ets/AudioPlayer.ets/PlayerController.ets 运行 `arkts_check` 修复全部诊断。
 
 **Checkpoint**: 流式播放完整可用，既有缓存秒播不回退，全部故事完成。
 
@@ -158,13 +158,15 @@
 
 ## Phase 12: Verification
 
-<!-- verification_scope: build+ui -->
+<!-- verification_scope: build-only -->
 
-**Purpose**: 构建验证 + 模拟器部署 + 逐故事 UI 验证。模拟器使用 MatePad Pro 11；⚠️ 注意宿主机内存瓶颈——启动模拟器前确保内存充足、验证期间避免并发重负载任务（如并行构建），模拟器启动失败或 OOM 则跳过 UI 验证、不阻塞交付。
+**❌ 状态：已取消（2026-10-04）。** 用户已在实机完成构建、部署与全部功能运行（发现的问题进入 Round 3 处理），流式改动已补提交 `382e789`；按用户决策 T025-T027 取消，验证并入 Round 3（ux-feedback-round3）完成后统一执行。
 
-- [ ] T025 执行 `devecocli build` 构建工程并修复全部编译错误（迭代 修复→重建 直至成功）。
-- [ ] T026 启动 MatePad Pro 11 模拟器并执行 `devecocli run --skip-build` 部署应用（注意内存瓶颈；模拟器启动失败则标记跳过，T027 不执行）。
-- [ ] T027 逐用户故事 UI 验证（verify→fix→re-verify 循环，每故事最多 3 次尝试）：US1 订阅此前失败 mid、US2 流式秒播/缓存秒播/seek、US3 主题色六色板切换与留白、US4 图标化/箭头/队列、US5 弧线动画、US6 简介填充、US7 更多页直达、US8 历史背景、US9 启动默认行为。（仅当 T026 成功后执行）
+**Purpose**: （已取消）原计划仅构建级验证——编译构建 + ArkTS 严格模式静态检查。
+
+- [ ] ~~T025 执行 `devecocli build` 构建工程并修复全部编译错误~~（已取消，并入 Round 3 验证）
+- [ ] ~~T026 对改动 `.ets` 文件执行 `arkts_check` 严格模式静态检查零诊断~~（已取消，并入 Round 3 验证）
+- [ ] ~~T027 产出验证报告与残余风险清单~~（已取消，用户已实机验证，问题反馈至 Round 3）
 
 ---
 
@@ -268,7 +270,7 @@ Task: "T023 [US2] PlayerController playIndex 流式分支（entry/src/main/ets/s
 2. US3 主题色/留白 → US4 图标化/箭头/队列 → US5 弧线 → US6 简介 → US7 更多页 → US8/9 收尾，逐故事可独立目测验证
 3. Polish（T019）→ git 基线提交（T020，分水岭）
 4. US2 流式压轴（T021-T024）→ 独立验证秒播/缓存/seek/重试
-5. Verification（T025-T027）：构建 → 模拟器部署（内存瓶颈注意）→ 逐故事 UI 验证
+5. Verification（T025-T027，build-only）：构建 → ArkTS 严格模式静态检查零诊断 → 验证报告与残余风险清单（UI 验证已按用户决策取消）
 
 ---
 

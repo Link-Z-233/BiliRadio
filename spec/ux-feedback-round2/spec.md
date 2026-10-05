@@ -1,7 +1,7 @@
 # Feature Specification: 第二轮体验反馈批次（ux-feedback-round2）
 
 **Created**: 2026-10-04
-**Status**: Draft
+**Status**: Completed（T001-T024 实现完成并经用户实机验证；非流式基线 ee0d70f、流式补提交 382e789；Phase 5 验证 T025-T027 已取消，验证并入 Round 3 ux-feedback-round3）
 **Input**: 用户实测反馈：订阅 UP 主报错（文案"查询UP主失败，请稍后重试"）；音频动态加载诉求（经 PiliPlus 调研后决策本轮实现流式边下边播）；播放页 8 项 UI/UX 优化；首页/历史页/设置 3 项优化。
 
 ## Overview
