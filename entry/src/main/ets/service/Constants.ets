@@ -90,6 +90,20 @@ export class Constants {
   static readonly SLEEP_TIMER_TICK_MS: number = 1000;
   // 悬浮播放胶囊占位高度：胶囊高约 60 + 底部 8 偏移 + 余量，供各滚动页底部预留
   static readonly MINI_PLAYER_CLEARANCE: number = 88;
+
+  // —— 播放微调与防抖（自 PlayerOverlay/PlayerController 迁入；播放页按钮与播控中心快进快退共用同一来源） ——
+  // ±15s 进度微调步长（ms）：固定 15 秒，不可配置（spec FR-013）
+  static readonly SEEK_STEP_MS: number = 15000;
+  // seekBy 连按合并防抖窗口（ms）：防抖期内的新调用基于最新进度叠加，到期仅执行最终一次 player.seek
+  static readonly SEEK_BY_DEBOUNCE_MS: number = 250;
+  // 应用内日志环形缓冲上限（条）：超限淘汰最旧（US9）
+  static readonly LOG_BUFFER_MAX: number = 500;
+
+  // —— 播放按钮尺寸同源（US1）：按钮直径为唯一尺寸源，缓冲弧线/常驻圆环尺寸由此派生，调整不再脱节 ——
+  static readonly PLAY_BTN_DIAMETER: number = 72;   // 播放按钮直径
+  static readonly PLAY_ARC_GAP: number = 2;         // 弧线与按钮边缘的均匀呼吸间隙
+  static readonly PLAY_ARC_STROKE: number = 3;      // 缓冲弧线线宽
+  static readonly PLAY_RING_STROKE: number = 1.5;   // 常驻装饰圆环线宽
 }
 
 // 延时工具：全库唯一实现，供各处「等待固定时长」复用。

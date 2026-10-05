@@ -49,12 +49,13 @@ class SubDataSource implements IDataSource {
   }
 }
 
-// 主页：订阅源列表（下拉刷新 / 新集徽标 / 长按置顶删除 / 空态）
+// 主页：订阅源列表（新集徽标 / 长按置顶删除 / 空态）；下拉刷新已注释禁用（[DISABLED 2026-10]，见 PROJECT_NOTES.md）
 @Component
 export struct HomePage {
   @StorageProp('accentColor') accentColor: string = Constants.ACCENT_DEFAULT;
   @StorageProp('miniPlayerVisible') miniPlayerVisible: boolean = false; // key 与 Constants.AS_MINI_PLAYER_VISIBLE 对应
-  @State refreshing: boolean = false;
+  // [DISABLED 2026-10] 首页下拉刷新暂时禁用，恢复方式见 PROJECT_NOTES.md「已移除与禁用功能」
+  // @State refreshing: boolean = false;
   @State rowCount: number = 0;
   @State showAddSheet: boolean = false;
   private subs: Subscription[] = [];
@@ -99,23 +100,25 @@ export struct HomePage {
     });
   }
 
-  private manualRefresh(): void {
-    if (this.refreshingNow) {
-      this.refreshing = false;
-      return;
-    }
-    this.refreshingNow = true;
-    SubscriptionStore.refreshAll(this.subs, true, (sub: Subscription, ok: boolean): void => {
-      SubscriptionStore.saveSubscriptions(this.subs);
-      this.rebuild();
-    }).then((): void => {
-      this.refreshingNow = false;
-      this.refreshing = false;
-    }).catch((): void => {
-      this.refreshingNow = false;
-      this.refreshing = false;
-    });
-  }
+  // [DISABLED 2026-10] 随首页下拉刷新一并禁用（恢复时取消下方整段注释即可；
+  // 恢复步骤详见 PROJECT_NOTES.md「已移除与禁用功能」）
+  // private manualRefresh(): void {
+  //   if (this.refreshingNow) {
+  //     this.refreshing = false;
+  //     return;
+  //   }
+  //   this.refreshingNow = true;
+  //   SubscriptionStore.refreshAll(this.subs, true, (sub: Subscription, ok: boolean): void => {
+  //     SubscriptionStore.saveSubscriptions(this.subs);
+  //     this.rebuild();
+  //   }).then((): void => {
+  //     this.refreshingNow = false;
+  //     this.refreshing = false;
+  //   }).catch((): void => {
+  //     this.refreshingNow = false;
+  //     this.refreshing = false;
+  //   });
+  // }
 
   private pinToTop(row: SubRow): void {
     let min: number = 0;
@@ -285,7 +288,8 @@ export struct HomePage {
         .justifyContent(FlexAlign.Center)
         .margin({ left: 8 })
         .onClick(() => {
-          this.navPathStack.pushPathByName('morePage', '');
+          // 更多按钮直达设置页（US4）：播放历史/关于本就是设置页内入口，独立更多页已删除
+          this.navPathStack.pushPathByName('settingsPage', '');
         })
       }
       .width('100%')
@@ -294,21 +298,24 @@ export struct HomePage {
       if (this.rowCount === 0) {
         this.emptyView()
       } else {
-        Refresh({ refreshing: $$this.refreshing }) {
-          List({ space: 8 }) {
-            LazyForEach(this.provider, (row: SubRow) => {
-              ListItem() {
-                this.subRowItem(row)
-              }
-            }, (row: SubRow) => row.sub.id)
-          }
-          .width('100%')
-          .padding({ left: 12, right: 12, top: 4, bottom: this.miniPlayerVisible ? Constants.MINI_PLAYER_CLEARANCE : 12 })
+        // [DISABLED 2026-10] 首页下拉刷新暂时禁用，恢复方式见 PROJECT_NOTES.md「已移除与禁用功能」。
+        // 恢复步骤：①取消下方 refreshing 状态与 manualRefresh() 的注释；
+        // ②取消 Refresh 包裹层注释并把 List 的 layoutWeight(1) 移回 Refresh 上。
+        // Refresh({ refreshing: $$this.refreshing }) {
+        List({ space: 8 }) {
+          LazyForEach(this.provider, (row: SubRow) => {
+            ListItem() {
+              this.subRowItem(row)
+            }
+          }, (row: SubRow) => row.sub.id)
         }
-        .onRefreshing(() => {
-          this.manualRefresh();
-        })
+        .width('100%')
+        .padding({ left: 12, right: 12, top: 4, bottom: this.miniPlayerVisible ? Constants.MINI_PLAYER_CLEARANCE : 12 })
         .layoutWeight(1)
+        // } // Refresh 包裹层结束
+        // .onRefreshing(() => {
+        //   this.manualRefresh();
+        // })
       }
     }
     .width('100%')

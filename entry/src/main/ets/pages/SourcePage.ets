@@ -163,7 +163,8 @@ struct SourcePage {
   }
 
   private playEpisode(index: number): void {
-    this.controller.loadPlaylistAndPlay(this.episodes, index);
+    // US6：点单集仅把该集作为队列播放（与「全部播放」整季连播区分），避免误触发整季连播
+    this.controller.loadPlaylistAndPlay([this.episodes[index]], 0);
   }
 
   private unsubscribe(): void {

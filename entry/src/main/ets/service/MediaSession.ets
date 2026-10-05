@@ -23,7 +23,8 @@ export class MediaSession {
 
   async init(onPlay: MediaCommandCallback, onPause: MediaCommandCallback,
     onNext: MediaCommandCallback, onPrev: MediaCommandCallback,
-    onSeek: (time: number) => void): Promise<void> {
+    onSeek: (time: number) => void,
+    onFastForward: MediaCommandCallback, onRewind: MediaCommandCallback): Promise<void> {
     if (this.session !== undefined) {
       return;
     }
@@ -35,7 +36,21 @@ export class MediaSession {
       this.session.on('playNext', onNext);
       this.session.on('playPrevious', onPrev);
       this.session.on('seek', onSeek);
+      this.session.on('fastForward', onFastForward);
+      this.session.on('rewind', onRewind);
       await this.session.activate();
+      // [API24-COMPAT] setMediaCenterControlType 为 API 26 新增接口，API<26 设备运行时抛 TypeError：
+      // 此处独立 try/catch 静默降级（仅媒体控制中心少显示微调按钮，不影响会话本身，避免波及外层 init）；
+      // 未来 API 26 基线化后按 PROJECT_NOTES.md 登记统一移除该守卫。
+      try {
+        const controls: avSession.AVMediaCenterControlType[] =
+          ['playPrevious', 'playNext', 'fastForward', 'rewind'];
+        await this.session.setMediaCenterControlType(controls);
+      } catch (err) {
+        const compatError = err as BusinessError;
+        hilog.warn(Constants.LOG_DOMAIN, Constants.LOG_TAG,
+          'setMediaCenterControlType unsupported on this API level: %{public}s', compatError.message);
+      }
       hilog.info(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'AVSession created and activated');
     } catch (err) {
       const error = err as BusinessError;

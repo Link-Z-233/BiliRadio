@@ -3,7 +3,7 @@ import { AppStore } from '../service/AppStore';
 import { Constants } from '../service/Constants';
 import { CoverThumb } from './CoverThumb';
 
-// 底部迷你播放条：队列有内容时常驻；点按左侧区域唤起全屏播放层
+// 底部迷你播放条：队列有内容时显示曲目信息，为空时显示占位条（US2）；点按唤起全屏播放层
 @Component
 export struct MiniPlayer {
   @StorageProp('accentColor') accentColor: string = Constants.ACCENT_DEFAULT;
@@ -31,10 +31,11 @@ export struct MiniPlayer {
     const idxOk: boolean = c.currentIndex >= 0 && c.currentIndex < c.playlist.length;
     const dataSaver: boolean = AppStore.getNumber(Constants.KEY_DATA_SAVER, 0) === 1;
     const has: boolean = c.playlist.length > 0;
-    // 悬浮胶囊可见性上报：供各滚动页计算底部避让（值变化时才写，避免秒级 tick 抖动）
+    // 悬浮胶囊可见性上报（US2）：空态渲染占位条，与内容条占据相同底部空间，
+    // 列表避让高度一致，故恒上报可见（值变化时才写，避免秒级 tick 抖动）
     const prevVisible: boolean = AppStorage.get<boolean>(Constants.AS_MINI_PLAYER_VISIBLE) === true;
-    if (has !== prevVisible) {
-      AppStorage.setOrCreate<boolean>(Constants.AS_MINI_PLAYER_VISIBLE, has);
+    if (!prevVisible) {
+      AppStorage.setOrCreate<boolean>(Constants.AS_MINI_PLAYER_VISIBLE, true);
     }
     const cover: string = idxOk && !dataSaver ? c.playlist[c.currentIndex].cover : '';
     const title: string = idxOk ? c.playlist[c.currentIndex].title : '';
@@ -121,6 +122,29 @@ export struct MiniPlayer {
       }
       .width('100%')
       .padding({ left: 10, right: 6, top: 8, bottom: 8 })
+      .backgroundColor($r('app.color.miniplayer_background'))
+      .backdropBlur(24)
+      .borderRadius(24)
+      .margin({ left: 16, right: 16, bottom: this.navBarHeight + 8 })
+      .shadow({ radius: 12, color: '#33000000', offsetX: 0, offsetY: 2 })
+      .onClick(() => {
+        AppStorage.setOrCreate<boolean>(Constants.AS_SHOW_PLAYER_OVERLAY, true);
+      })
+    } else {
+      // 空态占位条（US2）：队列无内容时显示占位封面+提示，不显示残留歌曲信息；
+      // 点击同样唤起播放层（播放层空态有完整引导文案）
+      Row() {
+        CoverThumb({ cover: '', thumbSize: 44, radius: 8 })
+        Text('暂无播放内容')
+          .fontSize(14)
+          .fontColor($r('app.color.text_secondary'))
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .margin({ left: 10, right: 6 })
+      }
+      .width('100%')
+      .padding({ left: 10, right: 10, top: 8, bottom: 8 })
+      .alignItems(VerticalAlign.Center)
       .backgroundColor($r('app.color.miniplayer_background'))
       .backdropBlur(24)
       .borderRadius(24)

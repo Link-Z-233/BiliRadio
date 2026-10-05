@@ -19,8 +19,7 @@ const GLOW_BREATH_MS: number = 3200;
 // 下滑退出播放层的位移阈值（vp）：内容已到顶部时，下滑超过该距离才退出
 const PLAYER_DISMISS_SWIPE: number = 80;
 
-// ±15s 进度微调步长（ms）：固定 15 秒，不可配置（spec FR-013）
-const SEEK_STEP_MS: number = 15000;
+// ±15s 进度微调步长已收敛至 Constants.SEEK_STEP_MS（全库唯一常量点，与播控中心共用）
 
 @Component
 export struct PlayerOverlay {
@@ -107,6 +106,26 @@ export struct PlayerOverlay {
   // 播放键阴影：主题色 + shadow_play 原 alpha（浅色 0x8C ≈ 0.549 / 深色 0x73 ≈ 0.451）
   private playBtnShadowColor(): string {
     return Appearance.hexWithAlpha(this.accentColor, this.isDarkMode() ? 0.451 : 0.549);
+  }
+
+  // ===== 播放按钮尺寸同源（US1）：按钮直径为唯一尺寸源，缓冲弧线/常驻圆环由此派生，任一调整不再脱节 =====
+
+  // 弧线/圆环半径：按钮半径 + 均匀呼吸间隙
+  private playArcRadius(): number {
+    return Constants.PLAY_BTN_DIAMETER / 2 + Constants.PLAY_ARC_GAP;
+  }
+
+  // 弧线/圆环所在容器边长：弧线直径 + 线宽余量
+  private playArcSize(): number {
+    return this.playArcRadius() * 2 + Constants.PLAY_ARC_STROKE;
+  }
+
+  // 270° 缓冲弧线 Path 命令：圆心取容器中心，顶点起顺时针至左侧（SDK 无 ProgressType.Arc，用 Path 绘制）
+  private playArcCommands(): string {
+    const size: number = this.playArcSize();
+    const radius: number = this.playArcRadius();
+    const center: number = size / 2;
+    return `M ${center} ${center - radius} A ${radius} ${radius} 0 1 1 ${center - radius} ${center}`;
   }
 
   // 封面光晕梯度：主题色 + halo_pink_0..3 原 alpha 序列（浅色 [0x80,0x3D,0x14,0x00] / 深色 [0x66,0x29,0x0D,0x00]）
@@ -643,8 +662,6 @@ export struct PlayerOverlay {
         .fontSize(18)
         .fontWeight(FontWeight.Bold)
         .fontColor($r('app.color.text_primary'))
-        .maxLines(2)
-        .textOverflow({ overflow: TextOverflow.Ellipsis })
         .textAlign(TextAlign.Center)
         .width('100%')
         .margin({ top: 4 })
@@ -712,23 +729,25 @@ export struct PlayerOverlay {
         .width('100%')
         .padding({ left: 10, right: 10, top: this.statusBarHeight + 6, bottom: 4 })
 
-        if (this.trackIndex < 0 && this.playlistCount === 0) {
+        // 空态判定（US2 统一口径）：无当前曲目（trackIndex<0）或队列为空任一成立即显示占位，
+        // 与播放键 enabled 条件（isPrepared || trackIndex>=0 || playlistCount>0）对称
+        if (this.trackIndex < 0 || this.playlistCount === 0) {
           Column() {
-            Text('BiliRadio')
-              .fontSize(24)
+            Text('暂无播放内容')
+              .fontSize(22)
               .fontWeight(FontWeight.Bold)
               .fontColor(this.textPrimary())
               .margin({ top: 60 })
 
-            Text('未在播放')
-              .fontSize(16)
+            Text('在首页点「＋」粘贴BV号直接播放\n或订阅UP主/收藏夹/合集后收听')
+              .fontSize(14)
               .fontColor(this.textSecondary())
-              .margin({ top: 40 })
+              .textAlign(TextAlign.Center)
+              .margin({ top: 24 })
 
-            Text('在首页点「＋」粘贴BV号直接播放\n或订阅UP主/收藏夹/合集')
+            Text('添加内容后即可开始收听')
               .fontSize(13)
               .fontColor(this.textDisabled())
-              .textAlign(TextAlign.Center)
               .margin({ top: 12 })
           }
           .width('100%')
@@ -804,7 +823,7 @@ export struct PlayerOverlay {
               }
               .width(300)
               .height(188)
-              .margin({ top: 8 })
+              .margin({ top: 24 }) // US10：原 8 过挤，展开态封面与状态栏留出呼吸感
               .alignSelf(ItemAlign.Center)
               .scale({ x: this.isPlaying ? 1 : 0.94, y: this.isPlaying ? 1 : 0.94 })
               .animation({ duration: 350, curve: Curve.FastOutSlowIn })
@@ -989,21 +1008,23 @@ export struct PlayerOverlay {
               .enabled(this.isPrepared)
               .opacity(this.isPrepared ? 1.0 : 0.4)
               .onClick(() => {
-                this.controller.seekBy(-SEEK_STEP_MS);
+                this.controller.seekBy(-Constants.SEEK_STEP_MS);
               })
 
-              // 播放键外扩 88×88 区域（T013）：缓冲中显示旋转弧线，其余时间常驻低透明装饰圆环
-              Stack() {
+              // 播放键同心容器（US1 尺寸同源）：弧线/圆环与按钮居中对齐紧贴按钮边缘，
+              // 缓冲中显示旋转弧线，其余时间常驻低透明装饰圆环
+              Stack({ alignContent: Alignment.Center }) {
                 if (this.isPreparing && this.playWhenReady) {
-                  // 270° 弧线（圆心 44,44 半径 36，顶点起顺时针至左侧），SDK 无 ProgressType.Arc，用 Path 绘制
+                  // 270° 弧线：圆心为容器中心、半径按按钮直径派生（按钮半径 + ~2px 呼吸间隙），
+                  // Path 命令由 playArcCommands() 按常量计算生成，不再散落硬编码坐标
                   Path()
-                    .commands('M 44 8 A 36 36 0 1 1 8 44')
+                    .commands(this.playArcCommands())
                     .fill(Color.Transparent)
                     .stroke(this.accentColor)
-                    .strokeWidth(3)
+                    .strokeWidth(Constants.PLAY_ARC_STROKE)
                     .strokeLineCap(LineCapStyle.Round)
-                    .width(88)
-                    .height(88)
+                    .width(this.playArcSize())
+                    .height(this.playArcSize())
                     .rotate({ angle: this.arcAngle, centerX: '50%', centerY: '50%' })
                     .transition(TransitionEffect.OPACITY.animation({ duration: 250 }))
                     .hitTestBehavior(HitTestMode.None)
@@ -1011,10 +1032,10 @@ export struct PlayerOverlay {
                   Circle()
                     .fill(Color.Transparent)
                     .stroke(this.accentColor)
-                    .strokeWidth(1.5)
+                    .strokeWidth(Constants.PLAY_RING_STROKE)
                     .opacity(0.2)
-                    .width(88)
-                    .height(88)
+                    .width(this.playArcSize())
+                    .height(this.playArcSize())
                     .transition(TransitionEffect.OPACITY.animation({ duration: 250 }))
                     .hitTestBehavior(HitTestMode.None)
                 }
@@ -1030,9 +1051,9 @@ export struct PlayerOverlay {
                       .fontColor([$r('app.color.text_primary')])
                   }
                 }
-                .width(72)
-                .height(72)
-                .borderRadius(36)
+                .width(Constants.PLAY_BTN_DIAMETER)
+                .height(Constants.PLAY_BTN_DIAMETER)
+                .borderRadius(Constants.PLAY_BTN_DIAMETER / 2)
                 .backgroundColor(this.tintBg())
                 .backdropBlur(20)
                 .shadow({ radius: 18, color: this.playBtnShadowColor(), offsetY: 0 })
@@ -1044,8 +1065,8 @@ export struct PlayerOverlay {
                   this.controller.togglePlay();
                 })
               }
-              .width(88)
-              .height(88)
+              .width(this.playArcSize())
+              .height(this.playArcSize())
 
               Row() {
                 SymbolGlyph($r('sys.symbol.goforward_15'))
@@ -1061,7 +1082,7 @@ export struct PlayerOverlay {
               .enabled(this.isPrepared)
               .opacity(this.isPrepared ? 1.0 : 0.4)
               .onClick(() => {
-                this.controller.seekBy(SEEK_STEP_MS);
+                this.controller.seekBy(Constants.SEEK_STEP_MS);
               })
 
               Row() {

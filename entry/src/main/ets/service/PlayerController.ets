@@ -29,8 +29,7 @@ export const PLAY_MODES: PlayMode[] = [
   PlayMode.REVERSE
 ];
 
-// seekBy 连按合并防抖窗口（ms）：防抖期内的新调用基于最新进度叠加，到期仅执行最终一次 player.seek
-const SEEK_BY_DEBOUNCE_MS: number = 250;
+// seekBy 连按合并防抖窗口已收敛至 Constants.SEEK_BY_DEBOUNCE_MS（全库唯一常量点）
 
 export class PlayerController {
   private static instance: PlayerController | undefined = undefined;
@@ -214,6 +213,9 @@ export class PlayerController {
         (): void => { this.next(); },
         (): void => { this.prev(); },
         (time: number): void => { this.seek(time); },
+        // US8：媒体控制中心快进/快退按钮走既有 seekBy 防抖路径
+        (): void => { this.seekBy(Constants.SEEK_STEP_MS); },
+        (): void => { this.seekBy(-Constants.SEEK_STEP_MS); },
       ).catch((): void => {});
 
       if (autoStartIndex >= 0 && AppStore.getNumber(Constants.KEY_AUTO_PLAY_ON_START, 0) === 1) {
@@ -290,6 +292,14 @@ export class PlayerController {
     }
     if (this.playMode === PlayMode.REPEAT_ONE) {
       this.player.play();
+      return;
+    }
+    // US7：顺序模式播到最后一集 / 倒序模式回到第一集时停止，不回绕到另一端（手动切歌仍经 next() 回绕）
+    const lastIndex: number = this.playlist.length - 1;
+    if (lastIndex >= 0 &&
+      ((this.playMode === PlayMode.SEQUENTIAL && this.currentIndex >= lastIndex) ||
+        (this.playMode === PlayMode.REVERSE && this.currentIndex <= 0))) {
+      this.statusMsg = '播放结束';
       return;
     }
     this.next();
@@ -737,7 +747,7 @@ export class PlayerController {
       if (this.isPrepared) {
         this.player.seek(this.seekByTargetMs);
       }
-    }, SEEK_BY_DEBOUNCE_MS);
+    }, Constants.SEEK_BY_DEBOUNCE_MS);
   }
 
   setPlayMode(mode: PlayMode): void {

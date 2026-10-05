@@ -9,6 +9,7 @@ import { Season } from '../model/Season';
 import { BiliSession } from './BiliSession';
 import { Constants, sleep } from './Constants';
 import { WbiSigner } from './WbiSigner';
+import { Logger } from './Logger';
 
 const BILI_VIDEO_INFO_URL: string = 'https://api.bilibili.com/x/web-interface/view';
 const BILI_PLAY_URL_API: string = 'https://api.bilibili.com/x/player/playurl';
@@ -124,13 +125,21 @@ function parseDurationLen(len: string): number {
   return seconds;
 }
 
+// US9：日志只记 host+path，截掉可能含 cookie/token 的 query string
+function logUrl(url: string): string {
+  const qIdx: number = url.indexOf('?');
+  return qIdx >= 0 ? url.substring(0, qIdx) : url;
+}
+
 function checkJsonBody(url: string, result: string): string {
   const trimmed: string = result.trim();
   if (trimmed === '') {
+    Logger.log('error', logUrl(url), '空响应');
     throw new Error(`接口返回空响应: ${url.substring(0, 60)}`);
   }
   if (trimmed.charAt(0) !== '{' && trimmed.charAt(0) !== '[') {
     hilog.warn(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'non-json body: %{public}s', url.substring(0, 80));
+    Logger.log('error', logUrl(url), '风控页(非JSON)');
     throw new Error('接口返回异常(疑似B站风控)，请稍后再试');
   }
   return trimmed;
@@ -149,6 +158,7 @@ function isUpQueryFatal(err: Object): boolean {
 
 function httpGet(url: string, headers: Record<string, string> | undefined = undefined): Promise<string> {
   const httpRequest: http.HttpRequest = http.createHttp();
+  let logged: boolean = false; // US9：then 已记录响应码后，catch 不再重复记录
   return httpRequest.request(url, {
     method: http.RequestMethod.GET,
     header: headers === undefined ? buildHeaders() : headers,
@@ -160,18 +170,24 @@ function httpGet(url: string, headers: Record<string, string> | undefined = unde
     const result: string = response.result as string;
     const code: number = response.responseCode;
     httpRequest.destroy();
+    Logger.log('net', logUrl(url), `HTTP ${code}`);
+    logged = true;
     if (code !== 200) {
       throw new Error(`HTTP ${code}`);
     }
     return checkJsonBody(url, result);
   }).catch((err: BusinessError) => {
     httpRequest.destroy();
+    if (!logged) {
+      Logger.log('error', logUrl(url), err.message);
+    }
     throw new Error(`HTTP request failed: ${err.message}`);
   });
 }
 
 function httpGetWithCookies(url: string): Promise<QrPollHttpResult> {
   const httpRequest: http.HttpRequest = http.createHttp();
+  let logged: boolean = false; // US9：then 已记录响应码后，catch 不再重复记录
   return httpRequest.request(url, {
     method: http.RequestMethod.GET,
     header: buildHeaders(),
@@ -198,6 +214,8 @@ function httpGetWithCookies(url: string): Promise<QrPollHttpResult> {
       }
     }
     httpRequest.destroy();
+    Logger.log('net', logUrl(url), `HTTP ${code}`);
+    logged = true;
     if (code !== 200) {
       throw new Error(`HTTP ${code}`);
     }
@@ -207,6 +225,9 @@ function httpGetWithCookies(url: string): Promise<QrPollHttpResult> {
     return out;
   }).catch((err: BusinessError) => {
     httpRequest.destroy();
+    if (!logged) {
+      Logger.log('error', logUrl(url), err.message);
+    }
     throw new Error(`HTTP request failed: ${err.message}`);
   });
 }
@@ -214,6 +235,7 @@ function httpGetWithCookies(url: string): Promise<QrPollHttpResult> {
 function httpPostForm(url: string, body: string): Promise<string> {
   const httpRequest: http.HttpRequest = http.createHttp();
   const headers: Record<string, string> = buildHeaders();
+  let logged: boolean = false; // US9：then 已记录响应码后，catch 不再重复记录
   headers['Content-Type'] = 'application/x-www-form-urlencoded';
   return httpRequest.request(url, {
     method: http.RequestMethod.POST,
@@ -227,12 +249,17 @@ function httpPostForm(url: string, body: string): Promise<string> {
     const result: string = response.result as string;
     const code: number = response.responseCode;
     httpRequest.destroy();
+    Logger.log('net', logUrl(url), `HTTP ${code}`);
+    logged = true;
     if (code !== 200) {
       throw new Error(`HTTP ${code}`);
     }
     return checkJsonBody(url, result);
   }).catch((err: BusinessError) => {
     httpRequest.destroy();
+    if (!logged) {
+      Logger.log('error', logUrl(url), err.message);
+    }
     throw new Error(`HTTP request failed: ${err.message}`);
   });
 }
@@ -632,10 +659,12 @@ export class BiliService {
       }
       try {
         const plainResult: string = await BiliService.fetchUpVideosOnce(`${BILI_SPACE_ARC_URL}`, params, spaceHeaders);
+        Logger.log('net', 'UP投稿列表', `第${attempt + 1}轮直连成功 mid=${mid}`);
         return BiliService.parseUpVideoList(plainResult);
       } catch (plainErr) {
         const plainError: Error = plainErr instanceof Error ? plainErr : new Error(String(plainErr));
         lastError = plainError;
+        Logger.log('error', 'UP投稿列表', `第${attempt + 1}轮直连失败 mid=${mid}: ${plainError.message}`);
         if (isUpQueryFatal(plainError)) {
           throw plainError;
         }
@@ -645,15 +674,18 @@ export class BiliService {
         const signedQuery: string = await WbiSigner.signParams(params, mixinKey);
         const wbiResult: string = await BiliService.fetchUpVideosOnce(
           `${BILI_SPACE_ARC_SEARCH_URL}?${signedQuery}`, {}, spaceHeaders);
+        Logger.log('net', 'UP投稿列表', `第${attempt + 1}轮WBI成功 mid=${mid}`);
         return BiliService.parseUpVideoList(wbiResult);
       } catch (wbiErr) {
         const wbiError: Error = wbiErr instanceof Error ? wbiErr : new Error(String(wbiErr));
         lastError = wbiError;
+        Logger.log('error', 'UP投稿列表', `第${attempt + 1}轮WBI失败 mid=${mid}: ${wbiError.message}`);
         if (isUpQueryFatal(wbiError)) {
           throw wbiError;
         }
       }
     }
+    Logger.log('error', 'UP投稿列表', `3轮均失败 mid=${mid}: ${lastError.message}`);
     throw lastError;
   }
 
@@ -731,6 +763,7 @@ export class BiliService {
       });
       httpRequest.destroy();
       const body: string = response.result as string;
+      Logger.log('net', logUrl(shortUrl), `HTTP ${response.responseCode}`);
       const bvMatch: RegExpMatchArray | null = body.match(/BV[0-9A-Za-z]{10}/);
       if (bvMatch !== null) {
         return `https://www.bilibili.com/video/${bvMatch[0]}`;
@@ -742,6 +775,7 @@ export class BiliService {
       return shortUrl;
     } catch (_err) {
       httpRequest.destroy();
+      Logger.log('error', logUrl(shortUrl), '短链解析失败');
       return shortUrl;
     }
   }
@@ -764,12 +798,14 @@ export class BiliService {
         const signedQuery: string = await WbiSigner.signParams(params, mixinKey);
         try {
           const resultStr: string = await httpGet(`${BILI_SPACE_ACC_INFO_URL}?${signedQuery}`, buildSpaceHeaders(mid));
+          Logger.log('net', 'UP主信息', `第${attempt + 1}轮acc/info成功 mid=${mid}`);
           return BiliService.parseUpInfo(parseApiData(resultStr), mid);
         } catch (accErr) {
           const accError: Error = accErr instanceof Error ? accErr : new Error(String(accErr));
           hilog.warn(Constants.LOG_DOMAIN, Constants.LOG_TAG,
             'acc/info failed (mid=%{public}d, attempt %{public}d): %{public}s, fallback to card',
             mid, attempt + 1, accError.message);
+          Logger.log('error', 'UP主信息', `第${attempt + 1}轮acc/info失败 mid=${mid}: ${accError.message}`);
           if (isUpQueryFatal(accError)) {
             throw accError;
           }
@@ -780,6 +816,7 @@ export class BiliService {
           if (cardRaw === undefined || cardRaw === null) {
             throw new Error('未获取到UP主信息');
           }
+          Logger.log('net', 'UP主信息', `第${attempt + 1}轮card兜底成功 mid=${mid}`);
           return BiliService.parseUpInfo(cardRaw as Record<string, Object>, mid);
         }
       } catch (roundErr) {
@@ -790,6 +827,7 @@ export class BiliService {
         }
       }
     }
+    Logger.log('error', 'UP主信息', `3轮均失败 mid=${mid}: ${lastError.message}`);
     throw lastError;
   }
 

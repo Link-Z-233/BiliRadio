@@ -14,6 +14,8 @@ import { photoAccessHelper } from '@kit.MediaLibraryKit';
 import { fileIo as fs } from '@kit.CoreFileKit';
 import { CoverThumb } from '../component/CoverThumb';
 import { Constants } from '../service/Constants';
+import { Logger } from '../service/Logger';
+import { LogSheet } from '../component/LogSheet';
 import { UnfavoriteRecord } from '../model/UnfavoriteRecord';
 import { PlayHistoryItem } from '../model/PlayHistoryItem';
 import { BiliVideo } from '../model/BiliVideo';
@@ -87,6 +89,10 @@ struct SettingsPage {
   @State playHistoryItems: PlayHistoryItem[] = [];
   @State playHistoryVersion: number = -1;
 
+  // —— 应用内日志（US9） ——
+  @State showLogSheet: boolean = false;
+  @State logCount: number = 0;
+
   @State autoPlayOnStart: boolean = false;
   // —— 四个新增设置开关状态 ——
   @State interruptResume: boolean = false;
@@ -139,6 +145,7 @@ struct SettingsPage {
       }
     });
     this.refreshCacheText();
+    this.logCount = Logger.count();
   }
 
   aboutToDisappear(): void {
@@ -172,6 +179,12 @@ struct SettingsPage {
     this.playHistoryItems = this.controller.playHistory.slice(0);
     this.playHistorySource.setItems(this.playHistoryItems);
     this.showPlayHistory = true;
+  }
+
+  // 打开日志面板（US9）：先刷新角标计数；面板数据由 LogSheet 自己在 aboutToAppear 读取
+  private openLogSheet(): void {
+    this.logCount = Logger.count();
+    this.showLogSheet = true;
   }
 
   private formatPlayedAt(playedAt: number): string {
@@ -854,6 +867,12 @@ struct SettingsPage {
     .backdropBlur(20)
   }
 
+  // 日志面板（US9）：bindSheet 承载 LogSheet 组件，数据读取与清空均在组件内完成
+  @Builder
+  logSheetPanel() {
+    LogSheet()
+  }
+
 
   build() {
     NavDestination() {
@@ -1316,6 +1335,30 @@ struct SettingsPage {
         })
 
         Row() {
+          Text('日志查询')
+            .fontSize(15)
+            .fontColor(this.textPrimary())
+          Blank()
+          Text(this.logCount > 0 ? `${this.logCount} 条` : '')
+            .fontSize(13)
+            .fontColor(this.textSecondary())
+          Text('›')
+            .fontSize(16)
+            .fontColor(this.textSecondary())
+            .margin({ left: 4 })
+        }
+        .width('92%')
+        .padding(14)
+        .backgroundColor($r('app.color.btn_glass'))
+        .backdropBlur(20)
+        .border({ width: 1, color: $r('app.color.btn_border') })
+        .borderRadius(12)
+        .margin({ top: 12 })
+        .onClick(() => {
+          this.openLogSheet();
+        })
+
+        Row() {
           Text('取消收藏历史')
             .fontSize(15)
             .fontColor(this.textPrimary())
@@ -1370,6 +1413,17 @@ struct SettingsPage {
       .width('100%')
       .alignItems(HorizontalAlign.Center)
       .padding({ top: 12, bottom: this.miniPlayerVisible ? Constants.MINI_PLAYER_CLEARANCE : 24 })
+      .bindSheet($$this.showLogSheet, this.logSheetPanel(), {
+        height: '62%',
+        dragBar: true,
+        showClose: false,
+        backgroundColor: $r('app.color.sheet_background'),
+        preferType: SheetType.BOTTOM,
+        onDisappear: (): void => {
+          // 面板内清空/新增日志后同步角标计数
+          this.logCount = Logger.count();
+        }
+      })
     }
     .width('100%')
     .height('100%')
@@ -1409,6 +1463,10 @@ struct SettingsPage {
       }
     })
     .onBackPressed((): boolean => {
+      if (this.showLogSheet) {
+        this.showLogSheet = false;
+        return true;
+      }
       if (this.showPlayHistory) {
         this.showPlayHistory = false;
         return true;

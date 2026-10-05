@@ -309,6 +309,9 @@ export struct QueueSheet {
   build() {
     Stack({ alignContent: Alignment.Top }) {
       Column() {
+        // 两行头部容器（US5）：标题/操作两行包在子 Column 内沿用原头部内边距，输入行与多选行保持在容器外不受影响
+        Column() {
+        // 标题行（US5）：「播放队列」标题独占一行，右侧带计数
         Row() {
           Text('播放队列')
             .fontSize(20)
@@ -320,10 +323,13 @@ export struct QueueSheet {
             Text(`共 ${this.items.length} 首`)
               .fontSize(13)
               .fontColor(this.textSecondary())
-              .margin({ right: 4 })
           }
+        }
+        .width('100%')
 
-          if (!this.selectMode) {
+        // 操作行（US5）：定位/搜索/多选/清空独占第二行；多选模式下整行隐藏（多选操作行独立如旧）
+        if (!this.selectMode) {
+          Row({ space: 8 }) {
             if (this.currentIndex >= 0) {
               Button('定位')
                 .height(30)
@@ -334,7 +340,6 @@ export struct QueueSheet {
                 .fontColor(this.textPrimary())
                 .borderRadius(15)
                 .fontSize(12)
-                .margin({ right: 8 })
                 .onClick(() => {
                   this.locateCurrent();
                 })
@@ -349,44 +354,45 @@ export struct QueueSheet {
               .fontColor(this.textPrimary())
               .borderRadius(15)
               .fontSize(12)
-              .margin({ right: 8 })
               .onClick(() => {
                 this.showSearch = true;
               })
-          }
 
-          if (this.items.length > 0 && !this.selectMode) {
-            Button('多选')
-              .height(30)
-              .padding({ left: 12, right: 12 })
-              .backgroundColor($r('app.color.btn_glass'))
-              .backdropBlur(20)
-              .border({ width: 1, color: $r('app.color.btn_border') })
-              .fontColor(this.textPrimary())
-              .borderRadius(15)
-              .fontSize(12)
-              .margin({ right: 8 })
-              .onClick(() => {
-                this.selectMode = true;
-                this.selectedBvids = [];
-              })
+            if (this.items.length > 0) {
+              Button('多选')
+                .height(30)
+                .padding({ left: 12, right: 12 })
+                .backgroundColor($r('app.color.btn_glass'))
+                .backdropBlur(20)
+                .border({ width: 1, color: $r('app.color.btn_border') })
+                .fontColor(this.textPrimary())
+                .borderRadius(15)
+                .fontSize(12)
+                .onClick(() => {
+                  this.selectMode = true;
+                  this.selectedBvids = [];
+                })
 
-            Button('清空')
-              .height(30)
-              .padding({ left: 12, right: 12 })
-              .backgroundColor($r('app.color.btn_glass'))
-              .backdropBlur(20)
-              .border({ width: 1, color: $r('app.color.btn_border') })
-              .fontColor(this.textPrimary())
-              .borderRadius(15)
-              .fontSize(12)
-              .onClick(() => {
-                this.clearQueue();
-              })
+              Button('清空')
+                .height(30)
+                .padding({ left: 12, right: 12 })
+                .backgroundColor($r('app.color.btn_glass'))
+                .backdropBlur(20)
+                .border({ width: 1, color: $r('app.color.btn_border') })
+                .fontColor(this.textPrimary())
+                .borderRadius(15)
+                .fontSize(12)
+                .onClick(() => {
+                  this.clearQueue();
+                })
+            }
           }
+          .width('100%')
+          .margin({ top: 10 })
         }
-        .width('100%')
-        .padding({ left: 16, right: 16, top: 20, bottom: 8 })
+      }
+      .width('100%')
+      .padding({ left: 16, right: 16, top: 20, bottom: 8 })
 
         if (!this.selectMode) {
           Row() {
