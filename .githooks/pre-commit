@@ -1,0 +1,15 @@
+#!/bin/sh
+# BiliRadio pre-commit hook — 证书隔离第 3 层：提交拦截（FR-013）
+# 本文件随仓库传播（被 git 追踪）；由 hvigorfile.ts 在首次构建时自动执行
+# git config core.hooksPath .githooks 完成激活，详见 SECURITY.md「pre-commit 钩子」。
+TARGET="build-profile.json5"
+FEATURES='certpath|storeFile|storePassword|keyPassword|keyAlias|material|\.ohos[\\/]config'
+if git diff --cached --name-only -- "$TARGET" | grep -q .; then
+  if git show ":$TARGET" | grep -nEi "$FEATURES" >/dev/null 2>&1; then
+    echo "[pre-commit] 拒绝提交：根 build-profile.json5 的暂存内容包含签名材料特征。" >&2
+    echo "请把 signingConfigs 材料块移到 signing.local.json5（或 build-profile.local.json5），" >&2
+    echo "将根文件 signingConfigs 恢复为空数组 [] 后重新提交。详见 SECURITY.md「签名与证书隔离」。" >&2
+    exit 1
+  fi
+fi
+exit 0

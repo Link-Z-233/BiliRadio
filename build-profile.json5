@@ -1,6 +1,7 @@
-// 工程级构建配置（git 追踪文件）：signingConfigs 恒为空数组，严禁写入任何签名材料。
-// 签名材料只存放于被 .gitignore 忽略的外置文件（signing.local.json5 / build-profile.local.json5），
-// 由 hvigorfile.ts 构建时动态加载（官方签名服务 FAQ 方式二）；.git/hooks/pre-commit 会拦截含签名材料的提交。
+// 工程级构建配置（git 追踪文件）：signingConfigs 基线为空数组。
+// 签名材料优先存放于被 .gitignore 忽略的外置文件（signing.local.json5 / build-profile.local.json5），
+// 由 hvigorfile.ts 构建时动态加载（官方签名服务 FAQ 方式二）；DevEco 自动签名临时写入本文件的内联材料
+// 构建时会作保底生效（自动补 product 引用），但提交前必须移出/清空——.githooks/pre-commit 会拦截（首次构建自动安装）。
 {
   "app": {
     "signingConfigs": [],

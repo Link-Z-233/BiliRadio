@@ -1,6 +1,7 @@
 // 签名配置模板（示例）：复制本文件为 build-profile.json5，填入你自己的签名材料后使用。
 // 切勿将真实签名密码、证书路径提交到版本控制——本仓库不包含任何签名凭据。
-// 本地调试可直接依赖 DevEco Studio 的自动 debug 签名，无需手动配置 signingConfigs。
+// 本地调试：用 DevEco Studio 自动生成 debug 签名后可直接构建（hvigorfile.ts 保底自动补 product 引用）；
+// 更符合隔离约定的做法是把材料移到 signing.local.json5（构建时注入，详见 SECURITY.md「签名与证书隔离」）。
 {
   "app": {
     "signingConfigs": [

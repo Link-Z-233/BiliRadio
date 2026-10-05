@@ -97,6 +97,7 @@ BiliRadio
 
 ## 常见问题
 
+- **构建提示「未检测到签名配置」？** 说明既没有 `signing.local.json5`，根 `build-profile.json5` 也没有签名材料。用 DevEco Studio 自动生成 debug 签名（File > Project Structure > Signing Configs）后再构建即可——`hvigorfile.ts` 会自动补上 DevEco 漏写的 product 引用；按 [SECURITY.md](SECURITY.md) 把材料移到 `signing.local.json5` 更符合本仓库的隔离约定。
 - **为什么不能登录/加载不出内容？** 本软件调用的是 B 站接口，需要能正常联网；部分接口可能因 B 站策略调整而失效。
 - **音频听不了？** 确认手机已联网，且视频本身有可播放的音频。
 - **这不是官方 App，可能违反 B 站部分条款，请仅用于个人学习，勿用于商业用途。**
@@ -109,7 +110,7 @@ BiliRadio
 
 欢迎提交 Issue 或 Pull Request。提交前请注意：
 
-- 提交代码时会经过 pre-commit 钩子检查：把签名材料写入根 `build-profile.json5` 的提交会被直接拒绝（详见 [SECURITY.md](SECURITY.md)）。
+- 提交代码时会经过 pre-commit 钩子检查：把签名材料写入根 `build-profile.json5` 的提交会被直接拒绝（钩子随仓库传播，首次构建时自动安装，详见 [SECURITY.md](SECURITY.md)）。
 - 不要在 Issue 或 PR 中粘贴真实 Cookie 或签名口令。
 
 ## License
