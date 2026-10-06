@@ -24,13 +24,27 @@ export class SleepTimerController {
   private endTime: number = 0;
   private timerId: number = -1;
   private listeners: Array<() => void> = [];
+  // 与 listeners 按下标对应的 owner 标识（KI-5）：支撑同 owner 单槽覆盖
+  private listenerOwners: Array<string> = [];
   private lastEmittedSec: number = -1;
 
   // 订阅 UI 刷新（KI-2）：返回退订句柄，调用方须在 aboutToDisappear 中调用，
   // 避免播放层反复挂载导致监听器累积；owner 为调用方标识，用于生命周期日志追溯。
+  // KI-5：非空 owner 采用单槽覆盖——同 owner 重复订阅时先移除旧监听器再压入新的，
+  // 防止 API 24 伪 aboutToDisappear 时序下漏退订造成的累积（与 PlayerController.subscribe 同型）。
   subscribe(fn: () => void, owner: string = ''): () => void {
-    if (this.listeners.indexOf(fn) < 0) {
+    if (owner !== '') {
+      for (let i = this.listeners.length - 1; i >= 0; i--) {
+        if (this.listenerOwners[i] === owner) {
+          this.listeners.splice(i, 1);
+          this.listenerOwners.splice(i, 1);
+        }
+      }
       this.listeners.push(fn);
+      this.listenerOwners.push(owner);
+    } else if (this.listeners.indexOf(fn) < 0) {
+      this.listeners.push(fn);
+      this.listenerOwners.push('');
     }
     hilog.info(Constants.LOG_DOMAIN, Constants.LOG_TAG,
       'sleep timer subscribe%{public}s listeners=%{public}d',
@@ -39,6 +53,7 @@ export class SleepTimerController {
       const idx: number = this.listeners.indexOf(fn);
       if (idx >= 0) {
         this.listeners.splice(idx, 1);
+        this.listenerOwners.splice(idx, 1);
       }
       hilog.info(Constants.LOG_DOMAIN, Constants.LOG_TAG,
         'sleep timer unsubscribe%{public}s listeners=%{public}d',

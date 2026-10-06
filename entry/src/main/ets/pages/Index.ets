@@ -135,11 +135,6 @@ struct Index {
     return false;
   }
 
-  @Builder
-  private playerOverlayBuilder() {
-    PlayerOverlay()
-  }
-
   build() {
     Stack({ alignContent: Alignment.Bottom }) {
       Column()
@@ -175,12 +170,20 @@ struct Index {
       if (this.showQueueSheet && !this.showPlayerOverlay) {
         QueueDrawer()
       }
+
+      // 全屏播放层（KI-5 方案B）：API 24 上 bindContentCover(ModalPage) 挂载后渲染管线即断开
+      // （仅渲染首帧、组件伪 aboutToDisappear 同步出现，全量刷机后依旧），改用树内条件渲染承载，
+      // 生命周期与渲染管线回归常规路径；expandSafeArea 延伸系统栏区域复现 ModalPage 全窗口视觉，
+      // 底部滑入/滑出转场近似原 ModalTransition.DEFAULT 手感
+      if (this.showPlayerOverlay) {
+        PlayerOverlay()
+          .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+          .transition(TransitionEffect.translate({ y: '100%' })
+            .animation({ duration: 350, curve: Curve.Friction }))
+      }
     }
     .width('100%')
     .height('100%')
-    .bindContentCover($$this.showPlayerOverlay, this.playerOverlayBuilder(), {
-      modalTransition: ModalTransition.DEFAULT
-    })
     .onAreaChange((oldArea: Area, newArea: Area) => {
       this.pageWidth = newArea.width as number;
     })

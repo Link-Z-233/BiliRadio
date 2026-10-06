@@ -2,6 +2,7 @@ import { PlayerController, PlayMode as MusicPlayMode, PLAYBACK_RATES, PLAY_MODES
 import { BiliVideo } from '../model/BiliVideo';
 import { common, Want } from '@kit.AbilityKit';
 import { BusinessError } from '@kit.BasicServicesKit';
+import { hilog } from '@kit.PerformanceAnalysisKit';
 import { AppStore } from '../service/AppStore';
 import { BiliService } from '../service/BiliService';
 import { Constants } from '../service/Constants';
@@ -45,6 +46,9 @@ export struct PlayerOverlay {
   @StorageLink('showSleepTimer') showSleepTimer: boolean = false; // key 与 Constants.AS_SHOW_SLEEP_TIMER 对应
   @StorageLink('showSleepTimerPicker') showSleepTimerPicker: boolean = false; // key 与 Constants.AS_SHOW_SLEEP_TIMER_PICKER 对应
   @StorageLink('showQueueSheet') showQueueSheet: boolean = false; // key 与 Constants.AS_SHOW_QUEUE_SHEET 对应
+  // 浮层显示标志（KI-5，key 与 Constants.AS_SHOW_PLAYER_OVERLAY 对应）：与 Index 树内条件渲染的
+  // 显隐同源；任何关闭路径先将该标志置 false，随后组件卸载触发 aboutToDisappear
+  @StorageLink('showPlayerOverlay') showOverlayActive: boolean = false;
   @StorageProp('statusBarHeight') statusBarHeight: number = 38; // key 与 Constants.AS_STATUS_BAR_HEIGHT 对应
   @StorageProp('navBarHeight') navBarHeight: number = 0; // key 与 Constants.AS_NAV_BAR_HEIGHT 对应
   // 主题色（key 与 Constants.AS_ACCENT_COLOR 对应）：全部着色点运行时跟随，衍生色经 Appearance.hexWithAlpha 计算
@@ -128,7 +132,13 @@ export struct PlayerOverlay {
   aboutToAppear(): void {
     this.syncFrom(this.controller);
     this.wasPlaying = this.isPlaying;
-    this.updateGlow();
+    // KI-5：aboutToAppear 运行于节点构建中，此处调用 animateTo 会触发框架告警
+    // （"node stack is not empty, not suitable for animateTo"），
+    // 且疑似在 API 24 上引发 ModalPage 渲染管线挂载后冻结（仅渲染首帧）——
+    // 光晕初始化延后到构建完成后的下一拍执行，延迟一帧对视觉无感知影响
+    setTimeout((): void => {
+      this.updateGlow();
+    }, 0);
     this.unsubscribePlayer = this.controller.subscribe((): void => {
       this.syncFrom(this.controller);
       if (this.isPlaying !== this.wasPlaying) {
@@ -148,6 +158,17 @@ export struct PlayerOverlay {
   private unsubscribeSleepTimer: () => void = (): void => {};
 
   aboutToDisappear(): void {
+    // KI-5：API 24 上 bindContentCover 内容组件挂载后 ~10ms 会收到伪 aboutToDisappear（浮层实际仍显示）。
+    // 此时必须跳过退订，监听器保活才能继续接收 emitUi，否则 @State 冻结在挂载快照、按钮 UI 不再刷新。
+    // 真关闭时 $$ 双向绑定先将 showOverlayActive 置 false，走到这里的退订才是真销毁；
+    // 若真销毁时序反了（先回调后翻转），漏退订的旧监听器由 subscribe 的同 owner 单槽覆盖兜底清理。
+    if (this.showOverlayActive) {
+      // KI-5 诊断：API 24 上该伪回调若持续出现且渲染仍冻结，
+      // 则需放弃 bindContentCover（ModalPage）改用树内条件渲染承载播放层
+      hilog.info(Constants.LOG_DOMAIN, Constants.LOG_TAG,
+        'PlayerOverlay aboutToDisappear skipped: overlay still visible (KI-5 probe)');
+      return;
+    }
     this.unsubscribePlayer();
     this.unsubscribePlayer = (): void => {};
     this.unsubscribeSleepTimer();

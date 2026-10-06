@@ -67,6 +67,8 @@ export class PlayerController {
   // 上次向 UI 广播进度时所在的秒数，用于进度 tick 秒级节流
   private lastEmittedSec: number = -1;
   private uiListeners: Array<() => void> = [];
+  // 与 uiListeners 按下标对应的 owner 标识（KI-5）：支撑同 owner 单槽覆盖
+  private uiListenerOwners: Array<string> = [];
   unfavoriteHistory: UnfavoriteRecord[] = [];
   historyVersion: number = 0;
   playHistory: PlayHistoryItem[] = [];
@@ -106,9 +108,22 @@ export class PlayerController {
 
   // 订阅 UI 刷新（US2/KI-1）：返回退订句柄，调用方须在 aboutToDisappear 中调用，
   // 避免页面销毁后监听器累积导致进度广播截断；owner 为调用方标识，用于生命周期日志追溯。
+  // KI-5：非空 owner 采用单槽覆盖——同 owner 重复订阅时先移除旧监听器再压入新的。
+  // 前提是 API 24 上 bindContentCover 内容组件可能收到伪 aboutToDisappear 导致漏退订，
+  // 单槽覆盖保证即便如此，重复挂载也不会累积监听器。
   subscribe(fn: () => void, owner: string = ''): () => void {
-    if (this.uiListeners.indexOf(fn) < 0) {
+    if (owner !== '') {
+      for (let i = this.uiListeners.length - 1; i >= 0; i--) {
+        if (this.uiListenerOwners[i] === owner) {
+          this.uiListeners.splice(i, 1);
+          this.uiListenerOwners.splice(i, 1);
+        }
+      }
       this.uiListeners.push(fn);
+      this.uiListenerOwners.push(owner);
+    } else if (this.uiListeners.indexOf(fn) < 0) {
+      this.uiListeners.push(fn);
+      this.uiListenerOwners.push('');
     }
     Logger.log('player', `subscribe${owner !== '' ? ` owner=${owner}` : ''}`,
       `listeners=${this.uiListeners.length}`);
@@ -116,6 +131,7 @@ export class PlayerController {
       const idx: number = this.uiListeners.indexOf(fn);
       if (idx >= 0) {
         this.uiListeners.splice(idx, 1);
+        this.uiListenerOwners.splice(idx, 1);
       }
       Logger.log('player', `unsubscribe${owner !== '' ? ` owner=${owner}` : ''}`,
         `listeners=${this.uiListeners.length}`);

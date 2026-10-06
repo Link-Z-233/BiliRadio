@@ -31,18 +31,23 @@
   - 抽取到目标后统一交给 `recognizeInput`，补齐 `av` 号、`medialist/space` 等类型覆盖。
 - **状态**：未修复（仅登记）。
 
-### KI-5 PlayerOverlay @State 滞留（未定论，疑似环境/框架问题）
+### KI-5 播放层 UI 冻结（已定位并修复：API 24 ModalPage 渲染管线挂载即断开）
 
-- **现象**：播放层（`PlayerOverlay`，`bindContentCover` 内容）的标题/进度/`isPrepared` 停留在打开浮层时 `aboutToAppear` 初始 `syncFrom` 的快照，不随播放更新；±15s 按钮因 `isPrepared` 陈旧为 false 而不可见（a11y 树中缺席）。
+- **现象**：播放层（`PlayerOverlay`）的标题/进度/播放图标停留在打开浮层时的快照，所有按钮按下后功能正常执行但 UI 无任何变化；±15s 按钮因 `isPrepared` 陈旧为 false 而不可见（a11y 树中缺席）。
 - **证据（2026-10-05，MatePad Pro 11 模拟器 / HarmonyOS 6.1.1 API 24，三组对照实验）**：
   1. 模拟器全量重启后现象复现 → 排除「屏幕合成冻结」；
   2. `next()` 切到不同 bvid 且 hilog 确认 playing，浮层仍显示旧标题旧进度 → 排除「流停滞」；
   3. 同一 `PlayerController`/`emitUi` 广播下，**MiniPlayer 数据正确新鲜**（新标题已更新）→ 问题隔离为浮层组件特有。
-- **疑点**：同构建在 14:33–14:38 期间浮层更新曾正常工作，后失效，触发条件未定位；bundle 过滤日志未搜到 JS 异常；全量系统日志异常搜索未完成（验证会话被中断）。无证据表明 2026-10 Round 3 改动引入（本轮未动浮层订阅/渲染管线）。
 - **与监听器累积的关系**：监听器累积（已随第 4 轮修复）可造成类似表现，但本次为进程内首次打开浮层（无陈旧监听器堆积）且 MiniPlayer 在浮层之前已正常收到广播，不能归因于监听器问题，故单独登记。
-- **下一步**：真机复验是否复现；若复现，完成全量系统日志异常搜索，排查浮层 backdropBlur/Path 动画重特效下「渲染子树停止重绘 / a11y 值缓存随渲染停滞」的机制。
-- **状态**：未定论（仅登记）。
-- **第 4 轮补充（2026-10，US1/US2 应用层加固）**：虽然根因未定论，本轮已落地多层应用层加固并观察——① 抽屉层级：`PlayerOverlay` 根 Stack 的队列抽屉分支显式 `.zIndex(100)` 压过全部面板与内容层；② 抽屉动画：`QueueDrawer` 进出场由 `TransitionEffect.translate` 改为挂载时 `animateTo` 驱动的显式位移状态（`panelOffsetX` 100%→0%，退出反向后再卸载），遮罩保留 OPACITY 过渡；③ 订阅链路：PlayerController 订阅退订 + 异常隔离 + 代际号修复（第 4 轮 US2 落地）。**观察结论：层级失效仅在 API 24 平板（MatePad Pro 11 模拟器 / HarmonyOS 6.1.1）复现，其余设备未见**；上述修复需全平台表现一致且不回退其他平台，待实机回归验证后如仍复现，继续按原「下一步」排查框架层原因。
+- **第 4 轮补充（2026-10，US1/US2 应用层加固）**：虽然根因未定论，本轮已落地多层应用层加固（抽屉 zIndex(100)、QueueDrawer 进出场改 animateTo 驱动、订阅退订+异常隔离+代际号）。**观察结论：仅在 API 24 平板复现，其余设备未见**；应用层加固未消除该问题。
+- **第 5 轮最终定位（2026-10-06，MatePad Pro 真机 192.168.11.123，HarmonyOS 6.1.1 API 24）**：
+  - **根因**：`bindContentCover`（ModalPage）内容组件在该设备上**挂载后渲染管线即断开**——hilog 实测三层异常：① 挂载后 10-21ms 收到伪 `aboutToDisappear`（浮层实际仍显示，探针日志实锤）；② 真关闭时 `aboutToDisappear` 反而**不触发**（无退订日志）；③ @State 更新与 `animateTo` 动画创建均正常执行但 ModalPage 表面**仅渲染首帧**（触摸命中走节点树仍有效，故「功能执行而 UI 冻结」）。
+  - **排除链**：系统包损坏 ×（全量刷机后逐字复现）；animateTo 构建期调用 ×（aboutToAppear 延后修复无效）；订阅链路 ×（守卫+单槽覆盖后 listeners 保持 1、光晕动画正常创建，冻结依旧）。
+  - **溯源**：`bindContentCover` 为 BiliRadio 自研引入（@efbc92f，2026-10-03 播放层改造），BiliMusic 原版 `PlayerPage` 为常规页面架构无此问题——KI-5 属自研回归而非上游继承。
+- **修复（方案 B，2026-10-06）**：`Index.ets` 放弃 `bindContentCover`，改 **Stack 内条件渲染**承载播放层——`if (showPlayerOverlay) PlayerOverlay().expandSafeArea(SYSTEM, TOP+BOTTOM).transition(TransitionEffect.translate({y:'100%'}).animation(350ms Friction))`，生命周期与渲染管线回归常规路径（同 MiniPlayer/QueueDrawer 的健康通路）；expandSafeArea 复现 ModalPage 全窗口视觉，底部滑入滑出近似原 ModalTransition.DEFAULT 手感。**配套防御保留**：① PlayerOverlay `aboutToDisappear` 可见性守卫（`@StorageLink showPlayerOverlay`，浮层显示中跳过退订，兼作其他平台伪回调哨兵）；② PlayerController/SleepTimerController `subscribe` 同 owner 单槽覆盖（防漏退订累积）；③ aboutToAppear 中 `updateGlow` 延后一拍（消除构建期 animateTo 框架告警）。
+- **验证（2026-10-06 真机）**：播放/暂停图标互换、进度条走动、开关浮层全部恢复正常；hilog 订阅退订完全对称（开→subscribe listeners=1，关→unsubscribe listeners=0），伪 `aboutToDisappear` 消失，无监听器累积。
+- **遗留观察**：封面光晕呼吸效果（`updateGlow`，3200ms 往复）用户自最初构建从未观察到，可能亮色模式下不显眼或存在独立问题，登记后续单独检查。
+- **状态**：已修复（方案 B 全平台生效，无需按设备分支）。
 
 ## 二、已移除与禁用功能
 
