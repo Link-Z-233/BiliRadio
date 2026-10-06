@@ -7,6 +7,7 @@ import { MediaSession } from './MediaSession';
 import { BiliVideo } from '../model/BiliVideo';
 import { UnfavoriteRecord } from '../model/UnfavoriteRecord';
 import { PlayHistoryItem } from '../model/PlayHistoryItem';
+import { AudioTrack, AudioQuality, QualityTier, ResolvedAudio } from '../model/AudioQuality';
 
 import { BusinessError } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
@@ -73,6 +74,14 @@ export class PlayerController {
   goToPlayerTab: (() => void) | undefined = undefined;
   confirmCellularDownload: (() => Promise<boolean>) | undefined = undefined;
   private loadToken: number = 0;
+
+  // —— 音质状态（audio-quality-settings，随 emitUi 广播供页面 syncFrom 读取）——
+  availableTracks: AudioTrack[] = [];      // 当前曲目 dash 可用音轨（durl/local 为空数组）
+  currentQualityCode: number = 0;          // 实际生效 qn 码（30250/30251/30280/30232/30216；durl/local=0）
+  currentTrackSource: string = '';         // 'dash' | 'durl' | 'local'；未播放为 ''
+  private currentCid: number = 0;          // 当前曲目 cid（切档零额外视频信息请求）
+  // 最近一次取流请求档位：网络稳定切换目标档与之相同则跳过（避免无谓换流中断）
+  private currentRequestedTier: QualityTier = QualityTier.MAX;
 
   static modeLabel(mode: PlayMode): string {
     if (mode === PlayMode.SEQUENTIAL) {
@@ -173,6 +182,17 @@ export class PlayerController {
       }
       this.player.setRate(this.playbackRate);
 
+      // 音质档位存量迁移（audio-quality-settings FR-005）：-1 哨兵区分未初始化（迁移幂等）；
+      // Wi-Fi 首次写入 MAX（最高），蜂窝按旧「优先低码率」开关映射 64K/132K，此后旧键不再读取
+      if (AppStore.getNumber(Constants.KEY_WIFI_AUDIO_QUALITY, -1) < 0) {
+        AppStore.putNumber(Constants.KEY_WIFI_AUDIO_QUALITY, QualityTier.MAX);
+      }
+      if (AppStore.getNumber(Constants.KEY_CELLULAR_AUDIO_QUALITY, -1) < 0) {
+        const oldPreferLow: number = AppStore.getNumber(Constants.KEY_PREFER_LOW_BITRATE, 0);
+        AppStore.putNumber(Constants.KEY_CELLULAR_AUDIO_QUALITY,
+          oldPreferLow === 1 ? QualityTier.Q64K : QualityTier.Q132K);
+      }
+
       const snapshot: PlaylistSnapshot = AppStore.loadPlaylistFile();
       let autoStartIndex: number = -1;
       let autoStartPos: number = 0;
@@ -245,6 +265,13 @@ export class PlayerController {
       }
 
       BiliService.cleanCache('');
+
+      // 网络稳定切换监听（audio-quality-settings FR-010）：进程生命周期内单例注册，
+      // 网络在 Wi-Fi/流量间稳定切换后按新网络默认档自动换流（失败由 setQualityTier 回滚不打断）
+      NetUtil.watchStableNetworkType((isWifi: boolean): void => {
+        Logger.log('player', 'stable network change', `isWifi=${isWifi ? 1 : 0}`);
+        this.applyDefaultTierForNetwork().catch((): void => {});
+      });
     } catch (e) {
       hilog.warn(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'init failed');
     }
@@ -409,6 +436,14 @@ export class PlayerController {
     throw lastError;
   }
 
+  // 按当前网络类型读默认档（FR-002）：Wi-Fi→KEY_WIFI_AUDIO_QUALITY，否则→KEY_CELLULAR_AUDIO_QUALITY；
+  // 存储值经 fromStored 归一（未初始化 -1 → MAX），供 playIndex 与自动换档复用
+  private async readDefaultTierForNetwork(): Promise<QualityTier> {
+    const isWifi: boolean = await NetUtil.isWifi();
+    const key: string = isWifi ? Constants.KEY_WIFI_AUDIO_QUALITY : Constants.KEY_CELLULAR_AUDIO_QUALITY;
+    return AudioQuality.fromStored(AppStore.getNumber(key, -1));
+  }
+
   async loadPlaylistAndPlay(items: BiliVideo[], startIndex: number): Promise<void> {
     // 追加去重：过滤掉 bvid 已在歌单中的项，避免重复
     const toAdd: BiliVideo[] = [];
@@ -480,6 +515,11 @@ export class PlayerController {
       this.seekByTimerId = -1;
       Logger.log('player', 'seekBy cancel', 'playIndex');
     }
+    // 音质状态复位（audio-quality-settings）：切剧期间面板不残留上一首的音轨与档位
+    this.availableTracks = [];
+    this.currentQualityCode = 0;
+    this.currentTrackSource = '';
+    this.currentCid = 0;
     Logger.log('player', 'playIndex', `index=${index} bvid=${item.bvid} seekMs=${seekMs}`);
     this.pendingSeekMs = seekMs;
     this.currentTime = seekMs;
@@ -512,16 +552,20 @@ export class PlayerController {
           return;
         }
       }
-      const preferLow: boolean = AppStore.getNumber(Constants.KEY_PREFER_LOW_BITRATE, 0) === 1;
-      // 缓存优先（US2）：本地已有完整缓存文件直接秒播（现状本地播放路径保留）
+      // 缓存优先（US2）：本地已有完整缓存文件直接秒播（现状本地播放路径保留）；
+      // 本地文件固定音质，来源标记 local（面板显示「本地缓存」占位，不参与自动换档）
       const localPath: string = BiliService.cachedAudioPath(item.bvid);
       if (localPath !== '') {
+        this.currentTrackSource = 'local';
+        this.availableTracks = [];
+        this.currentQualityCode = 0;
+        this.emitUi();
         this.enrichTrackMeta(item, token);
         item.audioUrl = localPath;
         await this.player.setSource(localPath);
       } else {
         // 流式边下边播（US2）：现取直链（不持久化），缓冲态文案取代整段下载百分比；
-        // 视频信息只拉一次——先回填元数据拿到 cid，再解析直链
+        // 视频信息只拉一次——先回填元数据拿到 cid，再按网络默认档解析音轨（audio-quality-settings FR-002）
         this.statusMsg = '正在缓冲...';
         this.emitUi();
         const video: BiliVideo = await BiliService.fetchVideoInfo(item.bvid);
@@ -529,11 +573,23 @@ export class PlayerController {
           return;
         }
         this.applyTrackMeta(item, video);
-        const urls: string[] = await BiliService.resolveAudioUrlFromCid(item.bvid, video.cid, preferLow);
+        const tier: QualityTier = await this.readDefaultTierForNetwork();
         if (token !== this.loadToken) {
           return;
         }
-        await this.openStreamWithRetry(urls);
+        const result: ResolvedAudio = await BiliService.resolveAudioTrack(item.bvid, video.cid, tier);
+        if (token !== this.loadToken) {
+          return;
+        }
+        this.currentCid = video.cid;
+        this.availableTracks = result.tracks;
+        this.currentQualityCode = result.id;
+        this.currentTrackSource = result.source;
+        this.currentRequestedTier = tier;
+        Logger.log('player', 'playIndex quality',
+          `tier=${Number(tier)} qn=${result.id} source=${result.source} tracks=${result.tracks.length}`);
+        this.emitUi();
+        await this.openStreamWithRetry(result.urls);
       }
       if (token !== this.loadToken) {
         return;
@@ -782,6 +838,141 @@ export class PlayerController {
         Logger.log('player', 'seekBy drop', 'not prepared');
       }
     }, Constants.SEEK_BY_DEBOUNCE_MS);
+  }
+
+  // 手动/自动换档（audio-quality-settings FR-004/FR-010）：换流保进度，复用 loadToken 并发模型
+  // （并发切档以最后触发者为准）；writeBack=true（面板手动）按当前网络写回对应默认档键，
+  // writeBack=false（网络自动换档）不写（目标档本就是新网络默认值）
+  async setQualityTier(tier: QualityTier, writeBack: boolean): Promise<void> {
+    if (this.currentTrackSource !== 'dash' || this.isPreparing || this.currentCid <= 0) {
+      Logger.log('player', 'setQualityTier skip',
+        `source=${this.currentTrackSource} preparing=${this.isPreparing ? 1 : 0} cid=${this.currentCid}`);
+      return;
+    }
+    const item: BiliVideo | undefined = this.currentIndex >= 0 && this.currentIndex < this.playlist.length
+      ? this.playlist[this.currentIndex] : undefined;
+    if (item === undefined) {
+      Logger.log('player', 'setQualityTier skip', 'no current item');
+      return;
+    }
+    const resumePos: number = this.currentTime;
+    const wasPlaying: boolean = this.isPlaying && !this.pausedByUser;
+    const prevQualityCode: number = this.currentQualityCode;
+    const prevStatusMsg: string = this.statusMsg;
+    // 切档前取消挂起的 seekBy 防抖，防止其到期 seek 到已释放的旧实例
+    if (this.seekByTimerId >= 0) {
+      clearTimeout(this.seekByTimerId);
+      this.seekByTimerId = -1;
+      Logger.log('player', 'seekBy cancel', 'setQualityTier');
+    }
+    this.isPreparing = true;
+    this.statusMsg = '正在切换音质…';
+    this.emitUi();
+    this.loadToken++;
+    const token: number = this.loadToken;
+    // prepared/playing 回调经既有 pendingSeekMs/playWhenReady 机制恢复进度与播放态
+    this.pendingSeekMs = resumePos;
+    this.currentTime = resumePos;
+    this.playWhenReady = wasPlaying;
+    Logger.log('player', 'setQualityTier',
+      `bvid=${item.bvid} cid=${this.currentCid} tier=${Number(tier)} resumePos=${resumePos} wasPlaying=${wasPlaying ? 1 : 0}`);
+    // 标记换流是否已进入重建阶段（旧实例已释放后失败须走恢复链）
+    let streamBroken: boolean = false;
+    try {
+      const result: ResolvedAudio = await BiliService.resolveAudioTrack(item.bvid, this.currentCid, tier);
+      if (token !== this.loadToken) {
+        return;
+      }
+      streamBroken = true;
+      await this.openStreamWithRetry(result.urls);
+      if (token !== this.loadToken) {
+        return;
+      }
+      this.currentQualityCode = result.id;
+      this.availableTracks = result.tracks;
+      this.currentTrackSource = result.source;
+      this.currentRequestedTier = tier;
+      if (writeBack) {
+        const isWifi: boolean = await NetUtil.isWifi();
+        const key: string = isWifi ? Constants.KEY_WIFI_AUDIO_QUALITY : Constants.KEY_CELLULAR_AUDIO_QUALITY;
+        AppStore.putNumber(key, tier);
+      }
+      Logger.log('player', 'setQualityTier done',
+        `qn=${result.id} source=${result.source} writeBack=${writeBack ? 1 : 0}`);
+      this.emitUi();
+      // 「已切换」提示延迟落定，避开 prepared/playing 事件对 statusMsg 的覆盖（此后由播放态自然清空）
+      setTimeout((): void => {
+        if (token !== this.loadToken) {
+          return;
+        }
+        this.statusMsg = result.source === 'dash'
+          ? `已切换 ${AudioQuality.trackLabel(result.id)}` : '已切换为默认流';
+        this.emitUi();
+      }, 600);
+    } catch (err) {
+      if (token !== this.loadToken) {
+        return;
+      }
+      const error = err as BusinessError;
+      Logger.log('player', 'setQualityTier failed', error.message);
+      if (!streamBroken) {
+        // 解析阶段失败：原流未动，直接回滚状态继续播放
+        this.isPreparing = false;
+        this.statusMsg = prevStatusMsg;
+        this.emitUi();
+        return;
+      }
+      // 换流阶段失败：原流已被重建释放，best-effort 以原档位重解析恢复（FR-010 失败保持原流不打断）
+      this.statusMsg = '正在恢复播放...';
+      this.emitUi();
+      try {
+        const backTier: QualityTier = AudioQuality.tierOfTrackId(prevQualityCode);
+        const back: ResolvedAudio = await BiliService.resolveAudioTrack(item.bvid, this.currentCid, backTier);
+        if (token !== this.loadToken) {
+          return;
+        }
+        this.pendingSeekMs = resumePos;
+        this.playWhenReady = wasPlaying;
+        await this.openStreamWithRetry(back.urls);
+        if (token !== this.loadToken) {
+          return;
+        }
+        this.currentQualityCode = back.id;
+        this.availableTracks = back.tracks;
+        this.currentTrackSource = back.source;
+        this.currentRequestedTier = backTier;
+        this.statusMsg = back.source === 'dash'
+          ? `音质切换失败，已恢复 ${AudioQuality.trackLabel(back.id)}` : '音质切换失败，已恢复默认流';
+        Logger.log('player', 'quality restore ok', `qn=${back.id}`);
+        this.emitUi();
+      } catch (err2) {
+        if (token !== this.loadToken) {
+          return;
+        }
+        const error2 = err2 as BusinessError;
+        this.isPreparing = false;
+        this.statusMsg = `切换音质失败: ${error2.message}`;
+        Logger.log('player', 'quality restore failed', error2.message);
+        this.emitUi();
+      }
+    }
+  }
+
+  // 网络稳定切换自动换档（FR-010）：仅在线 dash 流且非切剧中触发；
+  // 目标档与最近取流档相同则跳过（避免无谓换流中断），失败由 setQualityTier 回滚保持原流
+  private async applyDefaultTierForNetwork(): Promise<void> {
+    if (this.currentTrackSource !== 'dash' || this.isPreparing || this.currentCid <= 0) {
+      Logger.log('player', 'auto tier switch skip',
+        `source=${this.currentTrackSource} preparing=${this.isPreparing ? 1 : 0}`);
+      return;
+    }
+    const tier: QualityTier = await this.readDefaultTierForNetwork();
+    if (tier === this.currentRequestedTier) {
+      Logger.log('player', 'auto tier switch skip', 'same tier');
+      return;
+    }
+    Logger.log('player', 'auto tier switch', `tier=${Number(tier)}`);
+    await this.setQualityTier(tier, false);
   }
 
   setPlayMode(mode: PlayMode): void {

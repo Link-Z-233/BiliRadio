@@ -26,15 +26,33 @@ export class SleepTimerController {
   private listeners: Array<() => void> = [];
   private lastEmittedSec: number = -1;
 
-  subscribe(fn: () => void): void {
+  // 订阅 UI 刷新（KI-2）：返回退订句柄，调用方须在 aboutToDisappear 中调用，
+  // 避免播放层反复挂载导致监听器累积；owner 为调用方标识，用于生命周期日志追溯。
+  subscribe(fn: () => void, owner: string = ''): () => void {
     if (this.listeners.indexOf(fn) < 0) {
       this.listeners.push(fn);
     }
+    hilog.info(Constants.LOG_DOMAIN, Constants.LOG_TAG,
+      'sleep timer subscribe%{public}s listeners=%{public}d',
+      owner !== '' ? ` owner=${owner}` : '', this.listeners.length);
+    return (): void => {
+      const idx: number = this.listeners.indexOf(fn);
+      if (idx >= 0) {
+        this.listeners.splice(idx, 1);
+      }
+      hilog.info(Constants.LOG_DOMAIN, Constants.LOG_TAG,
+        'sleep timer unsubscribe%{public}s listeners=%{public}d',
+        owner !== '' ? ` owner=${owner}` : '', this.listeners.length);
+    };
   }
 
   private emitUi(): void {
     for (let i = 0; i < this.listeners.length; i++) {
-      this.listeners[i]();
+      try {
+        this.listeners[i]();
+      } catch (e) {
+        hilog.warn(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'sleep timer emitUi listener error');
+      }
     }
   }
 

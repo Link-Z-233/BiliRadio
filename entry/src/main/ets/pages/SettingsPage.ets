@@ -19,6 +19,7 @@ import { LogSheet } from '../component/LogSheet';
 import { UnfavoriteRecord } from '../model/UnfavoriteRecord';
 import { PlayHistoryItem } from '../model/PlayHistoryItem';
 import { BiliVideo } from '../model/BiliVideo';
+import { AudioQuality, QualityTier } from '../model/AudioQuality';
 
 const QR_CANVAS_SIZE: number = 280;
 
@@ -97,8 +98,12 @@ struct SettingsPage {
   // —— 四个新增设置开关状态 ——
   @State interruptResume: boolean = false;
   @State dataSaver: boolean = false;
-  @State preferLowBitrate: boolean = false;
   @State wifiOnlyDownload: boolean = false;
+  // —— 音质（audio-quality-settings）：双网络默认档 + 单 sheet 选择器（编辑目标标记）——
+  @State wifiQuality: QualityTier = QualityTier.MAX;
+  @State cellularQuality: QualityTier = QualityTier.Q132K;
+  @State showQualitySheet: boolean = false;
+  @State qualityEditTarget: string = 'wifi'; // 'wifi' | 'cellular'
   // 外观三态选中态（0=跟随系统 1=浅色 2=深色）：由 Appearance 写入 AppStorage 驱动刷新
   @StorageProp('colorModeSetting') colorModeSetting: number = 0;
 
@@ -134,8 +139,9 @@ struct SettingsPage {
     this.autoPlayOnStart = AppStore.getNumber(Constants.KEY_AUTO_PLAY_ON_START, 0) === 1;
     this.interruptResume = AppStore.getNumber(Constants.KEY_INTERRUPT_RESUME, 0) === 1;
     this.dataSaver = AppStore.getNumber(Constants.KEY_DATA_SAVER, 0) === 1;
-    this.preferLowBitrate = AppStore.getNumber(Constants.KEY_PREFER_LOW_BITRATE, 0) === 1;
     this.wifiOnlyDownload = AppStore.getNumber(Constants.KEY_WIFI_ONLY_DOWNLOAD, 0) === 1;
+    this.wifiQuality = this.readStoredTier(Constants.KEY_WIFI_AUDIO_QUALITY, QualityTier.MAX);
+    this.cellularQuality = this.readStoredTier(Constants.KEY_CELLULAR_AUDIO_QUALITY, QualityTier.Q132K);
     this.unsubscribePlayer = this.controller.subscribe((): void => {
       this.refreshLoginState();
       if (this.showHistory && this.historyVersion !== this.controller.historyVersion) {
@@ -174,6 +180,47 @@ struct SettingsPage {
     } else {
       this.loginName = '未登录';
     }
+  }
+
+  // —— 音质（audio-quality-settings）——
+
+  // 读持久化档位：未初始化（<0，如 init 迁移尚未跑完）显示默认值但不落盘，不干扰迁移哨兵
+  private readStoredTier(key: string, fallback: QualityTier): QualityTier {
+    const stored: number = AppStore.getNumber(key, -1);
+    if (stored < 0) {
+      return fallback;
+    }
+    return AudioQuality.fromStored(stored);
+  }
+
+  // 档位选择器可选项（FR-009）：未登录仅「最高」「64K」，登录后四档全显（已存高档值不改动）
+  private qualityOptions(): QualityTier[] {
+    if (this.isLogged) {
+      return [QualityTier.MAX, QualityTier.Q192K, QualityTier.Q132K, QualityTier.Q64K];
+    }
+    return [QualityTier.MAX, QualityTier.Q64K];
+  }
+
+  // 当前编辑项的已存档位（选择器 ✓ 高亮依据）
+  private currentEditTier(): QualityTier {
+    return this.qualityEditTarget === 'wifi' ? this.wifiQuality : this.cellularQuality;
+  }
+
+  private openQualitySheet(target: string): void {
+    this.qualityEditTarget = target;
+    this.showQualitySheet = true;
+  }
+
+  // 选中档位：putNumber 立即持久化（FR-001），刷新副标题后关闭选择器
+  private applyQualityTier(tier: QualityTier): void {
+    if (this.qualityEditTarget === 'wifi') {
+      this.wifiQuality = tier;
+      AppStore.putNumber(Constants.KEY_WIFI_AUDIO_QUALITY, tier);
+    } else {
+      this.cellularQuality = tier;
+      AppStore.putNumber(Constants.KEY_CELLULAR_AUDIO_QUALITY, tier);
+    }
+    this.showQualitySheet = false;
   }
 
   private openHistory(): void {
@@ -881,6 +928,50 @@ struct SettingsPage {
     LogSheet()
   }
 
+  // 音质档位选择面板（audio-quality-settings）：单 sheet + qualityEditTarget 标记当前编辑项；
+  // 当前档 ✓ 高亮，选中即持久化并关闭；未登录仅渲染「最高」「64K」（FR-009）
+  @Builder
+  qualitySheetPanel() {
+    Column() {
+      Text(this.qualityEditTarget === 'wifi' ? 'Wi-Fi 默认音质' : '蜂窝默认音质')
+        .fontSize(17)
+        .fontWeight(FontWeight.Bold)
+        .fontColor($r('app.color.text_primary'))
+        .width('100%')
+        .padding({ left: 16, right: 16, top: 16, bottom: 8 })
+
+      ForEach(this.qualityOptions(), (tier: QualityTier) => {
+        Row() {
+          Text(AudioQuality.label(tier))
+            .fontSize(15)
+            .fontColor(this.currentEditTier() === tier
+              ? $r('app.color.primary_color') : this.textPrimary())
+            .layoutWeight(1)
+          if (this.currentEditTier() === tier) {
+            Text('✓')
+              .fontSize(15)
+              .fontColor($r('app.color.primary_color'))
+          }
+        }
+        .width('100%')
+        .padding({ left: 16, right: 16, top: 13, bottom: 13 })
+        .onClick(() => {
+          this.applyQualityTier(tier);
+        })
+      }, (tier: QualityTier) => `${tier}`)
+
+      if (!this.isLogged) {
+        Text('未登录时最高 64K，登录后可用更高音质')
+          .fontSize(12)
+          .fontColor($r('app.color.gold_accent'))
+          .width('100%')
+          .padding({ left: 16, right: 16, top: 8, bottom: 16 })
+      }
+    }
+    .width('100%')
+    .backgroundColor($r('app.color.sheet_background'))
+  }
+
 
   build() {
     NavDestination() {
@@ -1196,6 +1287,74 @@ struct SettingsPage {
         .borderRadius(12)
         .margin({ top: 8 })
 
+        Text('音质')
+          .fontSize(15)
+          .fontColor(this.textPrimary())
+          .width('92%')
+          .margin({ top: 14, bottom: 8 })
+
+        Row() {
+          Text('Wi-Fi 默认音质')
+            .fontSize(14)
+            .fontColor(this.textPrimary())
+            .layoutWeight(1)
+          Text(AudioQuality.label(this.wifiQuality))
+            .fontSize(13)
+            .fontColor($r('app.color.primary_color'))
+          Text('›')
+            .fontSize(16)
+            .fontColor(this.textSecondary())
+            .margin({ left: 4 })
+        }
+        .width('92%')
+        .padding(14)
+        .backgroundColor($r('app.color.btn_glass'))
+        .backdropBlur(20)
+        .border({ width: 1, color: $r('app.color.btn_border') })
+        .borderRadius(12)
+        .onClick(() => {
+          this.openQualitySheet('wifi');
+        })
+
+        Row() {
+          Text('蜂窝默认音质')
+            .fontSize(14)
+            .fontColor(this.textPrimary())
+            .layoutWeight(1)
+          Text(AudioQuality.label(this.cellularQuality))
+            .fontSize(13)
+            .fontColor($r('app.color.primary_color'))
+          Text('›')
+            .fontSize(16)
+            .fontColor(this.textSecondary())
+            .margin({ left: 4 })
+        }
+        .width('92%')
+        .padding(14)
+        .backgroundColor($r('app.color.btn_glass'))
+        .backdropBlur(20)
+        .border({ width: 1, color: $r('app.color.btn_border') })
+        .borderRadius(12)
+        .margin({ top: 8 })
+        .onClick(() => {
+          this.openQualitySheet('cellular');
+        })
+        .bindSheet($$this.showQualitySheet, this.qualitySheetPanel(), {
+          height: '40%',
+          dragBar: true,
+          showClose: false,
+          backgroundColor: $r('app.color.sheet_background'),
+          preferType: SheetType.BOTTOM
+        })
+
+        if (!this.isLogged) {
+          Text('未登录时最高 64K，登录后可用更高音质')
+            .fontSize(12)
+            .fontColor($r('app.color.gold_accent'))
+            .width('92%')
+            .margin({ top: 6 })
+        }
+
         Text('省流量设置')
           .fontSize(15)
           .fontColor(this.textPrimary())
@@ -1229,34 +1388,6 @@ struct SettingsPage {
         .backdropBlur(20)
         .border({ width: 1, color: $r('app.color.btn_border') })
         .borderRadius(12)
-
-        Row() {
-          Column() {
-            Text('优先低码率音频流')
-              .fontSize(14)
-              .fontColor(this.textPrimary())
-            Text('在线播放选择较低码率，节省流量')
-              .fontSize(12)
-              .fontColor(this.textSecondary())
-              .margin({ top: 2 })
-          }
-          .alignItems(HorizontalAlign.Start)
-          .layoutWeight(1)
-
-          Toggle({ type: ToggleType.Switch, isOn: this.preferLowBitrate })
-            .selectedColor($r('app.color.primary_color'))
-            .onChange((isOn: boolean) => {
-              this.preferLowBitrate = isOn;
-              AppStore.putNumber(Constants.KEY_PREFER_LOW_BITRATE, isOn ? 1 : 0);
-            })
-        }
-        .width('92%')
-        .padding(14)
-        .backgroundColor($r('app.color.btn_glass'))
-        .backdropBlur(20)
-        .border({ width: 1, color: $r('app.color.btn_border') })
-        .borderRadius(12)
-        .margin({ top: 8 })
 
         Row() {
           Column() {
@@ -1471,6 +1602,10 @@ struct SettingsPage {
       }
     })
     .onBackPressed((): boolean => {
+      if (this.showQualitySheet) {
+        this.showQualitySheet = false;
+        return true;
+      }
       if (this.showLogSheet) {
         this.showLogSheet = false;
         return true;

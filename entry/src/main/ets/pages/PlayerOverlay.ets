@@ -8,6 +8,7 @@ import { Constants } from '../service/Constants';
 import { Appearance } from '../service/Appearance';
 import { SleepTimerController } from '../service/SleepTimerController';
 import { QueueDrawer } from '../component/QueueDrawer';
+import { AudioTrack, AudioQuality } from '../model/AudioQuality';
 
 // 颜色全部使用 base/dark 双份颜色资源：浅色/深色外观下自动匹配（见 resources/base|dark/element/color.json）
 
@@ -67,6 +68,11 @@ export struct PlayerOverlay {
   @State trackView: number = 0;
   @State trackPubdate: number = 0;
   @State trackDesc: string = '';
+  // 音质面板镜像（audio-quality-settings US3）：syncFrom 增量同步 controller 公开音质状态
+  @State showQuality: boolean = false;
+  @State availableTracks: AudioTrack[] = [];
+  @State currentQualityCode: number = 0;
+  @State currentTrackSource: string = '';
   private trackBvid: string = '';
   private wasPlaying: boolean = false;
   // 简介懒加载（T014）：进行中标志防并发；已尝试的 bvid 防重复请求
@@ -130,18 +136,22 @@ export struct PlayerOverlay {
         this.updateGlow();
       }
     }, 'PlayerOverlay');
-    SleepTimerController.getInstance().subscribe((): void => {
+    this.unsubscribeSleepTimer = SleepTimerController.getInstance().subscribe((): void => {
       this.syncSleepTimer();
-    });
+    }, 'PlayerOverlay');
     this.syncSleepTimer();
   }
 
   // 进度广播退订句柄（US2/KI-1）：aboutToDisappear 中调用，避免监听器累积截断广播
   private unsubscribePlayer: () => void = (): void => {};
+  // 睡眠定时退订句柄（KI-2）：同型修复，避免播放层反复挂载导致秒级回调监听器累积
+  private unsubscribeSleepTimer: () => void = (): void => {};
 
   aboutToDisappear(): void {
     this.unsubscribePlayer();
     this.unsubscribePlayer = (): void => {};
+    this.unsubscribeSleepTimer();
+    this.unsubscribeSleepTimer = (): void => {};
   }
 
   private syncSleepTimer(): void {
@@ -242,6 +252,9 @@ export struct PlayerOverlay {
     this.statusMsg = c.statusMsg;
     this.playMode = c.playMode;
     this.playbackRate = c.playbackRate;
+    this.availableTracks = c.availableTracks;
+    this.currentQualityCode = c.currentQualityCode;
+    this.currentTrackSource = c.currentTrackSource;
     this.playlistCount = c.playlist.length;
     if (c.currentIndex >= 0 && c.currentIndex < c.playlist.length) {
       const item: BiliVideo = c.playlist[c.currentIndex];
@@ -530,6 +543,75 @@ export struct PlayerOverlay {
     .transition(TransitionEffect.OPACITY.animation({ duration: 200 }))
     .onClick(() => {
       this.showSleepTimer = false;
+    })
+  }
+
+  // 音质面板（audio-quality-settings FR-005）：dash 源列出实际下发音轨（当前档高亮，点选换档并写回默认）；
+  // local 源显示本地缓存占位、durl/空闲源显示默认占位，均无可选项；
+  // 未登录时高档位由服务端决定是否下发，面板天然只显示实际可用音轨（US4 不额外提示）
+  @Builder
+  qualityPanel() {
+    Column() {
+      Column() {
+        Text('音质选择')
+          .fontSize(16)
+          .fontWeight(FontWeight.Bold)
+          .fontColor($r('app.color.text_primary'))
+          .margin({ bottom: 14 })
+
+        if (this.currentTrackSource === 'dash' && this.availableTracks.length > 0) {
+          Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Center }) {
+            ForEach(this.availableTracks, (track: AudioTrack) => {
+              Button(AudioQuality.trackLabel(track.id))
+                .width('44%')
+                .height(40)
+                .backgroundColor(track.id === this.currentQualityCode ? this.tintBg() : $r('app.color.btn_glass'))
+                .backdropBlur(20)
+                .fontColor(track.id === this.currentQualityCode ? $r('app.color.text_primary') : this.textPrimary())
+                .borderRadius(20)
+                .fontSize(14)
+                .margin(6)
+                .onClick(() => {
+                  this.showQuality = false;
+                  this.controller.setQualityTier(AudioQuality.tierOfTrackId(track.id), true);
+                })
+            }, (track: AudioTrack) => `${track.id}`)
+          }
+          .width('100%')
+        } else if (this.currentTrackSource === 'local') {
+          Text('本地缓存')
+            .fontSize(15)
+            .fontColor($r('app.color.text_primary'))
+            .margin({ bottom: 6 })
+          Text('本地缓存播放不区分音质')
+            .fontSize(13)
+            .fontColor(this.textSecondary())
+            .textAlign(TextAlign.Center)
+            .width('100%')
+        } else {
+          Text('默认')
+            .fontSize(15)
+            .fontColor($r('app.color.text_primary'))
+            .margin({ bottom: 6 })
+          Text('当前内容未提供多音质选择')
+            .fontSize(13)
+            .fontColor(this.textSecondary())
+            .textAlign(TextAlign.Center)
+            .width('100%')
+        }
+      }
+      .width('76%')
+      .padding(20)
+      .borderRadius(16)
+      .backgroundColor($r('app.color.page_background'))
+    }
+    .width('100%')
+    .height('100%')
+    .justifyContent(FlexAlign.Center)
+    .backgroundColor($r('app.color.mask_heavy'))
+    .transition(TransitionEffect.OPACITY.animation({ duration: 200 }))
+    .onClick(() => {
+      this.showQuality = false;
     })
   }
 
@@ -1085,6 +1167,21 @@ export struct PlayerOverlay {
                 this.showMode = true;
               })
 
+              // 音质入口（audio-quality-settings FR-005）：波形图标；dash 多音轨可用时以主题色示意
+              Row() {
+                SymbolGlyph($r('sys.symbol.waveform'))
+                  .fontSize(18)
+                  .fontColor([this.currentTrackSource === 'dash' ? this.accentColor : this.textPrimary()])
+              }
+              .height(36)
+              .padding({ left: 14, right: 14 })
+              .backgroundColor($r('app.color.btn_glass'))
+              .backdropBlur(20)
+              .borderRadius(18)
+              .onClick(() => {
+                this.showQuality = true;
+              })
+
               Row({ space: 4 }) {
                 SymbolGlyph($r('sys.symbol.timer'))
                   .fontSize(16)
@@ -1169,6 +1266,10 @@ export struct PlayerOverlay {
         this.sleepTimerPicker()
       }
 
+      if (this.showQuality) {
+        this.qualityPanel()
+      }
+
       // 播放队列抽屉：渲染在播放层内；显式最高 zIndex（US1）压过倍速/模式/睡眠面板与内容层，
       // 修复 API 24 平板 zIndex 失效导致抽屉被遮挡的问题（全平台行为一致）
       if (this.showQueueSheet) {
@@ -1185,7 +1286,7 @@ export struct PlayerOverlay {
         .onActionEnd((event: GestureEvent) => {
           const atTop: boolean = this.contentScroller.currentOffset().yOffset <= 0;
           const noOverlayOpen: boolean = !this.showQueueSheet && !this.showSpeed && !this.showMode &&
-            !this.showSleepTimer && !this.showSleepTimerPicker && !this.showDetail;
+            !this.showSleepTimer && !this.showSleepTimerPicker && !this.showDetail && !this.showQuality;
           if (noOverlayOpen && atTop && event.offsetY > PLAYER_DISMISS_SWIPE) {
             AppStorage.setOrCreate<boolean>(Constants.AS_SHOW_PLAYER_OVERLAY, false);
           }

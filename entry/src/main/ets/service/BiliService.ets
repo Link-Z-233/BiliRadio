@@ -6,6 +6,7 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { BiliVideo } from '../model/BiliVideo';
 import { FavFolder } from '../model/FavFolder';
 import { Season } from '../model/Season';
+import { AudioTrack, QualityTier, ResolvedAudio } from '../model/AudioQuality';
 import { BiliSession } from './BiliSession';
 import { Constants, sleep } from './Constants';
 import { WbiSigner } from './WbiSigner';
@@ -1556,45 +1557,26 @@ export class BiliService {
     return video;
   }
 
-  static async fetchDashAudioCandidates(bvid: string, cid: number, preferLowBitrate: boolean = false): Promise<string[]> {
-    const resultStr: string = await httpGet(
-      `${BILI_PLAY_URL_API}?bvid=${bvid}&cid=${cid}&qn=16&fnver=0&fnval=16&fourk=0`
-    );
-    const data: Record<string, Object> = parseApiData(resultStr);
-    if (data['dash'] === undefined) {
-      throw new Error('No dash data');
+  // 单条 dash 音轨记录 → AudioTrack（forcedId>0 用于 flac/dolby 节点补档位码，0 取记录自带 id）；
+  // 直链候选 = baseUrl + backupUrl，沿袭既有 mcdn 过滤（非 mcdn 优先，全为 mcdn 时全量兜底）
+  private static pushAudioTrack(tracks: AudioTrack[], rec: Record<string, Object>, forcedId: number): void {
+    let id: number = forcedId;
+    if (id <= 0 && rec['id'] !== undefined && rec['id'] !== null) {
+      id = rec['id'] as number;
     }
-    const dash: Record<string, Object> = data['dash'] as Record<string, Object>;
-    const audioArr: Object[] = dash['audio'] as Object[];
-    if (audioArr.length === 0) {
-      throw new Error('No audio stream found');
-    }
-    let best: Record<string, Object> = audioArr[0] as Record<string, Object>;
-    let bestBandwidth: number = best['bandwidth'] as number;
-    for (let i = 1; i < audioArr.length; i++) {
-      const item: Record<string, Object> = audioArr[i] as Record<string, Object>;
-      const bw: number = item['bandwidth'] as number;
-      if (preferLowBitrate) {
-        if (bw < bestBandwidth) {
-          bestBandwidth = bw;
-          best = item;
-        }
-      } else {
-        if (bw > bestBandwidth) {
-          bestBandwidth = bw;
-          best = item;
-        }
-      }
+    let bandwidth: number = 0;
+    if (rec['bandwidth'] !== undefined && rec['bandwidth'] !== null) {
+      bandwidth = rec['bandwidth'] as number;
     }
     const candidates: string[] = [];
-    if (best['baseUrl'] !== undefined) {
-      const baseUrl: string = best['baseUrl'] as string;
+    if (rec['baseUrl'] !== undefined && rec['baseUrl'] !== null) {
+      const baseUrl: string = rec['baseUrl'] as string;
       if (baseUrl !== '') {
         candidates.push(baseUrl);
       }
     }
-    if (best['backupUrl'] !== undefined) {
-      const backup: Object[] = best['backupUrl'] as Object[];
+    if (rec['backupUrl'] !== undefined && rec['backupUrl'] !== null) {
+      const backup: Object[] = rec['backupUrl'] as Object[];
       for (let i = 0; i < backup.length; i++) {
         const u: string = backup[i] as string;
         if (u !== '' && candidates.indexOf(u) < 0) {
@@ -1602,14 +1584,63 @@ export class BiliService {
         }
       }
     }
-    const stable: string[] = candidates.filter((u: string) => u.indexOf('mcdn') < 0);
-    if (stable.length > 0) {
-      return stable;
-    }
     if (candidates.length === 0) {
-      throw new Error('No audio URL found');
+      return;
     }
-    return candidates;
+    const stable: string[] = candidates.filter((u: string): boolean => u.indexOf('mcdn') < 0);
+    const urls: string[] = stable.length > 0 ? stable : candidates;
+    tracks.push(new AudioTrack(id, bandwidth, urls));
+  }
+
+  // 音轨全量解析（audio-quality-settings）：fnval 由 16 升级为 4048，使响应携带 flac(Hi-Res)/dolby 节点；
+  // 常规 dash.audio[] 全量 + flac.audio 单对象（赋 id=30251）+ dolby.audio 数组（赋 id=30250）合并统一列表，
+  // 按 bandwidth 降序、同 id 保留高带宽（排序后取首个）去重；无 dash 或音轨为空抛错
+  static async fetchDashAudioTracks(bvid: string, cid: number): Promise<AudioTrack[]> {
+    const resultStr: string = await httpGet(
+      `${BILI_PLAY_URL_API}?bvid=${bvid}&cid=${cid}&qn=16&fnver=0&fnval=4048&fourk=0`
+    );
+    const data: Record<string, Object> = parseApiData(resultStr);
+    if (data['dash'] === undefined || data['dash'] === null) {
+      throw new Error('No dash data');
+    }
+    const dash: Record<string, Object> = data['dash'] as Record<string, Object>;
+    const tracks: AudioTrack[] = [];
+    if (dash['audio'] !== undefined && dash['audio'] !== null) {
+      const audioArr: Object[] = dash['audio'] as Object[];
+      for (let i = 0; i < audioArr.length; i++) {
+        BiliService.pushAudioTrack(tracks, audioArr[i] as Record<string, Object>, 0);
+      }
+    }
+    if (dash['flac'] !== undefined && dash['flac'] !== null) {
+      const flac: Record<string, Object> = dash['flac'] as Record<string, Object>;
+      if (flac['audio'] !== undefined && flac['audio'] !== null) {
+        BiliService.pushAudioTrack(tracks, flac['audio'] as Record<string, Object>, 30251);
+      }
+    }
+    if (dash['dolby'] !== undefined && dash['dolby'] !== null) {
+      const dolby: Record<string, Object> = dash['dolby'] as Record<string, Object>;
+      if (dolby['audio'] !== undefined && dolby['audio'] !== null) {
+        const dolbyArr: Object[] = dolby['audio'] as Object[];
+        for (let i = 0; i < dolbyArr.length; i++) {
+          BiliService.pushAudioTrack(tracks, dolbyArr[i] as Record<string, Object>, 30250);
+        }
+      }
+    }
+    if (tracks.length === 0) {
+      throw new Error('No audio stream found');
+    }
+    // bandwidth 降序排序后同 id 去重（保留首个即高带宽）
+    tracks.sort((a: AudioTrack, b: AudioTrack): number => b.bandwidth - a.bandwidth);
+    const deduped: AudioTrack[] = [];
+    const seenIds: Set<number> = new Set<number>();
+    for (let i = 0; i < tracks.length; i++) {
+      if (!seenIds.has(tracks[i].id)) {
+        seenIds.add(tracks[i].id);
+        deduped.push(tracks[i]);
+      }
+    }
+    Logger.log('player', 'fetchDashAudioTracks', `bvid=${bvid} cid=${cid} tracks=${deduped.length}`);
+    return deduped;
   }
 
   static async fetchDurlCandidates(bvid: string, cid: number): Promise<string[]> {
@@ -1647,21 +1678,65 @@ export class BiliService {
     return candidates;
   }
 
-  // 流式直链解析（US2）：取视频 cid 后走 dash 音轨直链（mcdn 过滤），失败降级 durl；
-  // 不做任何下载，直链由播放器带 Referer/UA 请求头边下边播
-  static async resolveAudioUrl(bvid: string, preferLowBitrate: boolean = false): Promise<string[]> {
-    const video: BiliVideo = await BiliService.fetchVideoInfo(bvid);
-    return BiliService.resolveAudioUrlFromCid(bvid, video.cid, preferLowBitrate);
+  // 回落算法（FR-003，纯函数）：MAX→列表首位（bandwidth 降序即最高带宽，含 Hi-Res/杜比升级）；
+  // 期望档 qn 精确存在→取之；否则取不高于期望档的常规档（仅 30216/30232/30280 参与，
+  // Hi-Res/杜比升级只走 MAX 分支）中带宽最高者；无任何 ≤期望 常规档→取列表首位兜底（不能不放）；
+  // 空列表抛错
+  static pickAudioTrack(tracks: AudioTrack[], tier: QualityTier): AudioTrack {
+    if (tracks.length === 0) {
+      throw new Error('No audio track to pick');
+    }
+    if (tier === QualityTier.MAX) {
+      Logger.log('player', 'pickAudioTrack', `tier=MAX qn=${tracks[0].id}`);
+      return tracks[0];
+    }
+    const wantId: number = Number(tier);
+    for (let i = 0; i < tracks.length; i++) {
+      if (tracks[i].id === wantId) {
+        Logger.log('player', 'pickAudioTrack', `tier=${wantId} qn=${tracks[i].id} exact`);
+        return tracks[i];
+      }
+    }
+    for (let i = 0; i < tracks.length; i++) {
+      const tid: number = tracks[i].id;
+      const isStandard: boolean = tid === QualityTier.Q64K || tid === QualityTier.Q132K ||
+        tid === QualityTier.Q192K;
+      if (isStandard && tid <= wantId) {
+        Logger.log('player', 'pickAudioTrack', `tier=${wantId} qn=${tid} fallback`);
+        return tracks[i];
+      }
+    }
+    Logger.log('player', 'pickAudioTrack', `tier=${wantId} qn=${tracks[0].id} top-fallback`);
+    return tracks[0];
   }
 
-  // resolveAudioUrl 的核心：调用方已持有 cid（如 playIndex 元数据刷新已拉过视频信息）时避免重复请求
-  static async resolveAudioUrlFromCid(bvid: string, cid: number, preferLowBitrate: boolean = false): Promise<string[]> {
+  // 档位化取流（audio-quality-settings）：dash 全量解析失败→原参数重试一次→
+  // 仍失败走既有 durl 降级链，包装为 id=0 的兜底轨道（无档位概念）
+  static async resolveAudioTrack(bvid: string, cid: number, tier: QualityTier): Promise<ResolvedAudio> {
+    let tracks: AudioTrack[] = [];
+    let dashResolved: boolean = false;
     try {
-      return await BiliService.fetchDashAudioCandidates(bvid, cid, preferLowBitrate);
+      tracks = await BiliService.fetchDashAudioTracks(bvid, cid);
+      dashResolved = true;
     } catch (e) {
-      hilog.warn(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'dash audio failed, fallback to durl: %{public}s', bvid);
-      return await BiliService.fetchDurlCandidates(bvid, cid);
+      Logger.log('player', 'dash tracks failed, retry once', `bvid=${bvid} cid=${cid}`);
+      try {
+        tracks = await BiliService.fetchDashAudioTracks(bvid, cid);
+        dashResolved = true;
+      } catch (e2) {
+        hilog.warn(Constants.LOG_DOMAIN, Constants.LOG_TAG,
+          'dash audio failed, fallback to durl: %{public}s', bvid);
+      }
     }
+    if (dashResolved) {
+      const track: AudioTrack = BiliService.pickAudioTrack(tracks, tier);
+      Logger.log('player', 'resolveAudioTrack',
+        `bvid=${bvid} cid=${cid} tier=${Number(tier)} qn=${track.id} tracks=${tracks.length} source=dash`);
+      return new ResolvedAudio(track.id, track.urls, tracks, 'dash');
+    }
+    const urls: string[] = await BiliService.fetchDurlCandidates(bvid, cid);
+    Logger.log('player', 'resolveAudioTrack', `bvid=${bvid} cid=${cid} tier=${Number(tier)} source=durl`);
+    return new ResolvedAudio(0, urls, [], 'durl');
   }
 
   // 缓存优先（US2）：本地已有完整可用的缓存文件（dash 下载期的 .m4a / durl 兜底的 .mp4）则返回路径，否则空串

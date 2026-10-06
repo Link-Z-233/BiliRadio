@@ -1,27 +1,9 @@
 # 项目备忘
 
-三章登记：① 已知问题与技术债；② 已移除与禁用功能（含恢复线索）；③ 规划与预告。
+四章登记：① 已知问题与技术债；② 已移除与禁用功能（含恢复线索）；③ 规划与预告；④ API 26 基线化。
 本文件由 `KNOWN_ISSUES.md` 更名而来（git 历史保留），登记范围自 2026-10 实机反馈批次起扩展。
 
 ## 一、已知问题
-
-### KI-1 `PlayerController.subscribe` 无退订，监听会累积
-
-- **位置**：[entry/src/main/ets/service/PlayerController.ets](entry/src/main/ets/service/PlayerController.ets) 的 `subscribe(fn)`。
-- **现象**：`subscribe(fn)` 只把回调 `push` 进 `uiListeners`，没有对应的退订接口；且去重判断 `this.uiListeners.indexOf(fn) < 0` 因每次传入的是**新闭包**（函数引用不同）而永不命中，于是**每次订阅都会新增一个监听**。
-- **影响**：共 4 处订阅——`MiniPlayer`（常驻）、`QueueSheet`、`PlayerOverlay`、`SettingsPage`。后三者都是「打开时挂载、关闭时卸载」的部件，均在 `aboutToAppear` 中订阅、`aboutToDisappear` 中不解除，反复打开会让 `uiListeners` 持续增长；随后每次播放进度/状态更新（`emitUi`）都会回调这些**已失效**的闭包，造成性能浪费，且访问已销毁组件的状态存在异常风险。
-- **建议修复**：
-  1. 给 `PlayerController` 增加 `unsubscribe(fn: () => void)`（或让 `subscribe` 返回订阅令牌），并在各订阅组件的 `aboutToDisappear` 中解除订阅；或
-  2. 让订阅方持有**同一函数引用**（而非每次新建闭包），以便现有 `indexOf` 去重逻辑生效。
-- **状态**：**已修复（2026-10 第 4 轮，US2）**。`subscribe(fn, owner?)` 改为返回退订闭包，`MiniPlayer`/`QueueSheet`/`PlayerOverlay`/`SettingsPage` 四处调用方均持有句柄并在 `aboutToDisappear` 中调用（`PlayerOverlay` 为此新增了原本缺失的 `aboutToDisappear`）；同时 `emitUi` 对每个监听器单独 try/catch（异常 hilog 警告 + Logger 'player' 记录，不中断广播循环），订阅/退订生命周期带调用方标识写入 Logger。配套修复：`playIndex` 进入时重置 `lastEmittedSec` 并取消挂起的 seekBy 防抖、`AudioPlayer` 实例代际号杜绝旧实例残余事件串扰、`PlayerOverlay.syncFrom` 切剧瞬间复位 `isSeeking`。同型的 KI-2（SleepTimerController）见下条，仍待办。
-
-### KI-2 `SleepTimerController.subscribe` 无退订（与 KI-1 同型）
-
-- **位置**：[entry/src/main/ets/service/SleepTimerController.ets](entry/src/main/ets/service/SleepTimerController.ets) 的 `subscribe(fn)`。
-- **现象**：同样是只 `push` 回调、**没有 `unsubscribe`**；去重判断 `this.listeners.indexOf(fn) < 0` 因每次传入**新闭包**（函数引用不同）而永不命中，于是**每次订阅都会新增一个监听**。
-- **影响**：目前**仅** `PlayerOverlay` 的 `aboutToAppear` 订阅它，而播放层是「打开时挂载、关闭时卸载」的 `bindContentCover` 内容，因此**每次打开播放层都会新增一个永不解除的监听**。睡眠定时活动期间 `emitUi` 每秒触发一次，会回调大量**已销毁组件**的 `syncSleepTimer()`，造成无谓开销与内存持续增长（触发频率低于 KI-1，仅在睡眠定时开启时明显）。
-- **建议修复**：比照 KI-1——让 `subscribe` 返回订阅 id 并新增 `unsubscribe(id)`，`PlayerOverlay` 在 `aboutToDisappear` 中退订。
-- **状态**：未修复（仅登记）。
 
 ### KI-3 列表「左滑删除」未实现
 
@@ -57,10 +39,10 @@
   2. `next()` 切到不同 bvid 且 hilog 确认 playing，浮层仍显示旧标题旧进度 → 排除「流停滞」；
   3. 同一 `PlayerController`/`emitUi` 广播下，**MiniPlayer 数据正确新鲜**（新标题已更新）→ 问题隔离为浮层组件特有。
 - **疑点**：同构建在 14:33–14:38 期间浮层更新曾正常工作，后失效，触发条件未定位；bundle 过滤日志未搜到 JS 异常；全量系统日志异常搜索未完成（验证会话被中断）。无证据表明 2026-10 Round 3 改动引入（本轮未动浮层订阅/渲染管线）。
-- **与 KI-1/KI-2 的关系**：KI-1 监听器累积可造成类似表现，但本次为进程内首次打开浮层（无陈旧监听器堆积）且 MiniPlayer 在浮层之前已正常收到广播，不能完全归因 KI-1，故单独登记。
+- **与监听器累积的关系**：监听器累积（已随第 4 轮修复）可造成类似表现，但本次为进程内首次打开浮层（无陈旧监听器堆积）且 MiniPlayer 在浮层之前已正常收到广播，不能归因于监听器问题，故单独登记。
 - **下一步**：真机复验是否复现；若复现，完成全量系统日志异常搜索，排查浮层 backdropBlur/Path 动画重特效下「渲染子树停止重绘 / a11y 值缓存随渲染停滞」的机制。
 - **状态**：未定论（仅登记）。
-- **第 4 轮补充（2026-10，US1/US2 应用层加固）**：虽然根因未定论，本轮已落地多层应用层加固并观察——① 抽屉层级：`PlayerOverlay` 根 Stack 的队列抽屉分支显式 `.zIndex(100)` 压过全部面板与内容层；② 抽屉动画：`QueueDrawer` 进出场由 `TransitionEffect.translate` 改为挂载时 `animateTo` 驱动的显式位移状态（`panelOffsetX` 100%→0%，退出反向后再卸载），遮罩保留 OPACITY 过渡；③ 订阅链路：见 KI-1 的退订 + 异常隔离 + 代际号修复。**观察结论：层级失效仅在 API 24 平板（MatePad Pro 11 模拟器 / HarmonyOS 6.1.1）复现，其余设备未见**；上述修复需全平台表现一致且不回退其他平台，待实机回归验证后如仍复现，继续按原「下一步」排查框架层原因。
+- **第 4 轮补充（2026-10，US1/US2 应用层加固）**：虽然根因未定论，本轮已落地多层应用层加固并观察——① 抽屉层级：`PlayerOverlay` 根 Stack 的队列抽屉分支显式 `.zIndex(100)` 压过全部面板与内容层；② 抽屉动画：`QueueDrawer` 进出场由 `TransitionEffect.translate` 改为挂载时 `animateTo` 驱动的显式位移状态（`panelOffsetX` 100%→0%，退出反向后再卸载），遮罩保留 OPACITY 过渡；③ 订阅链路：PlayerController 订阅退订 + 异常隔离 + 代际号修复（第 4 轮 US2 落地）。**观察结论：层级失效仅在 API 24 平板（MatePad Pro 11 模拟器 / HarmonyOS 6.1.1）复现，其余设备未见**；上述修复需全平台表现一致且不回退其他平台，待实机回归验证后如仍复现，继续按原「下一步」排查框架层原因。
 
 ## 二、已移除与禁用功能
 
@@ -98,9 +80,13 @@
 
 - **列表添加逻辑重构预告（US6 后续）**：源详情页「点单集」已改为仅该集入队播放；队列输入框「添加并播放」（`addByBv`）的入队行为后续还会改——计划从「加载并立即播放」调整为「追加进队列不打断当前播放」，落地后与「点单集」路径统一收敛。
 - **403 首次添加根因修复（延后）**：首次添加订阅偶发 403/风控拦截，本轮仅做了日志观察（`BiliService` 全链路钩子 + 设置页日志面板，见 US9），待实机日志积累、锁定风控触发模式后针对性修复（候选方向：WBI 签名覆盖面 / buvid 预热策略）。
-- **音质选择 / 默认音质**：`playurl` 取流当前为固定规格；规划设置项「音质」（数据节省模式下优先低码率已具备开关位）。
 - **点赞 / 投币 / 收藏**：依赖登录态与 csrf，交互形态待定，两轮内未排期。
 - **播放历史云端同步**：现为纯本地存储；规划登录态下的云端多设备同步（需服务端冲突策略）。
-- **播控中心 API<26 限制**：`AVSession.setMediaCenterControlType` 为 API 26 新增接口，API<26 设备上媒体控制中心可能不显示快进/快退按钮（静默降级，不影响播放/暂停/上一首/下一首）；代码中对应调用以独立 try/catch 包裹并带 `[API24-COMPAT]` 标记。
 - **audio 三元组优先级限制**：播控中心/后台卡片展示元数据依赖 audio 三元组等系统侧信息优先级策略，B 站侧字段缺失时标题/作者/封面可能展示不全，属系统与上游数据限制，暂不做适配。
-- **API 26 基线化**：工程基线 SDK 升到 API 26 后，移除全部 `[API24-COMPAT]` 守卫（全局检索该标记按本清单统一处理），并复核播控中心按钮在低版本设备上的兼容策略。
+
+## 四、API 26 基线化
+
+- **目标**：工程兼容基线 SDK 升到 API 26 后，移除全部 `[API24-COMPAT]` 守卫（全局检索该标记，按本章统一处理），并复核播控中心按钮在低版本设备上的兼容策略。
+- **现状**：`build-profile.json5` 的 `targetSdkVersion` 已为 `26.0.0`，`compatibleSdkVersion` 仍为 `6.1.1(24)`——基线尚未升级，守卫继续保留。
+- **守卫清单**（基线化时逐处移除，新增守卫须同步登记到此）：
+  1. [MediaSession.ets](entry/src/main/ets/service/MediaSession.ets) L42：`setMediaCenterControlType`（API 26 新增接口，API<26 设备运行时抛 TypeError）——try/catch 静默降级，低版本播控中心不显示快进/快退按钮，不影响播放/暂停/上一首/下一首。

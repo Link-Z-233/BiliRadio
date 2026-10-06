@@ -31,8 +31,12 @@ export class Constants {
   static readonly KEY_COLOR_MODE: string = 'colorMode';
   static readonly KEY_INTERRUPT_RESUME: string = 'interruptResume';
   static readonly KEY_DATA_SAVER: string = 'dataSaver';
+  // 仅供存量迁移读取，链路已退役（audio-quality-settings）
   static readonly KEY_PREFER_LOW_BITRATE: string = 'preferLowBitrate';
   static readonly KEY_WIFI_ONLY_DOWNLOAD: string = 'wifiOnlyDownload';
+  // 音质档位键（audio-quality-settings）：存 QualityTier 值；-1 = 未初始化（迁移哨兵）
+  static readonly KEY_WIFI_AUDIO_QUALITY: string = 'wifiAudioQuality';
+  static readonly KEY_CELLULAR_AUDIO_QUALITY: string = 'cellularAudioQuality';
   static readonly PLAY_HISTORY_FILE: string = 'play_history.json';
 
   // —— AppStorage 键 ——
