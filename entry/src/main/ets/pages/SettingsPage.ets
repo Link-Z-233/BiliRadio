@@ -56,6 +56,18 @@ class HistoryDataSource implements IDataSource {
       this.listeners[i].onDataReloaded();
     }
   }
+
+  // 单条删除通知（US3 FR-009）：LazyForEach 增量删除指定下标；
+  // 按 DataChangeListener 契约，先从自身数据删除对应下标再通知监听者
+  notifyDataDelete(index: number): void {
+    if (index < 0 || index >= this.items.length) {
+      return;
+    }
+    this.items.splice(index, 1);
+    for (let i = 0; i < this.listeners.length; i++) {
+      this.listeners[i].onDataDelete(index);
+    }
+  }
 }
 
 @Builder
@@ -118,6 +130,11 @@ struct SettingsPage {
 
   private textSecondary(): Resource {
     return $r('app.color.text_secondary');
+  }
+
+  // 强调色淡底（T016，对齐原 material_tint_primary 的 0x59≈0.349 alpha）：随主题色运行时衍生
+  private tintBg(): string {
+    return Appearance.hexWithAlpha(this.accentColor, 0.349);
   }
 
 
@@ -242,8 +259,10 @@ struct SettingsPage {
     this.showLogSheet = true;
   }
 
-  private formatPlayedAt(playedAt: number): string {
-    const diff: number = Date.now() - playedAt;
+  // viewAt 为秒级时间戳（play-history-progress 迁移后统一单位），内部转毫秒做相对时间计算
+  private formatPlayedAt(viewAt: number): string {
+    const playedAtMs: number = viewAt * 1000;
+    const diff: number = Date.now() - playedAtMs;
     if (diff < 60000) {
       return '刚刚';
     }
@@ -256,7 +275,7 @@ struct SettingsPage {
     if (diff < 7 * 86400000) {
       return `${Math.floor(diff / 86400000)} 天前`;
     }
-    const d: Date = new Date(playedAt);
+    const d: Date = new Date(playedAtMs);
     const month: number = d.getMonth() + 1;
     const day: number = d.getDate();
     const monthStr: string = month < 10 ? `0${month}` : `${month}`;
@@ -264,11 +283,72 @@ struct SettingsPage {
     return `${monthStr}-${dayStr}`;
   }
 
+  // 剩余时长格式化（plan R10）：mm:ss，分钟数不封顶，与 QueueSheet.formatTime 风格一致
+  private formatRemainingSec(remainingSec: number): string {
+    const minutes: number = Math.floor(remainingSec / 60);
+    const seconds: number = remainingSec % 60;
+    const minStr: string = minutes < 10 ? `0${minutes}` : `${minutes}`;
+    const secStr: string = seconds < 10 ? `0${seconds}` : `${seconds}`;
+    return `${minStr}:${secStr}`;
+  }
+
+  // 历史条目第二行文案（FR-008/FR-010）：已听完 → 「日期 · 已听完」；
+  // 有进度且时长已知 → 「日期 · 剩 mm:ss」；其余（未记录进度/时长未知）降级为仅日期
+  private historyMetaText(item: PlayHistoryItem): string {
+    const timeText: string = this.formatPlayedAt(item.viewAt);
+    if (item.progress === -1) {
+      return `${timeText} · 已听完`;
+    }
+    if (item.progress > 0 && item.duration > 0 && item.duration > item.progress) {
+      return `${timeText} · 剩 ${this.formatRemainingSec(item.duration - item.progress)}`;
+    }
+    return timeText;
+  }
+
   private async replayHistory(item: PlayHistoryItem): Promise<void> {
     const v: BiliVideo = BiliVideo.create(item.bvid, 0, 0, item.title, item.cover, 0);
     v.ownerName = item.ownerName;
     await this.controller.playFromLibraryResult(v);
     this.controller.goToPlayerTab?.();
+  }
+
+  // 左滑单条删除（US3 FR-009）：点击时按 bvid 从当前 @State 数组实时解析下标，
+  // 避免 LazyForEach 键复用导致的陈旧索引；@State splice 与 DataSource.notifyDataDelete 双侧同步，
+  // 控制器侧异步写盘（removePlayHistoryItem 不 emitUi，面板自行刷新）
+  private removeHistoryItem(item: PlayHistoryItem): void {
+    const bvid: string = item.bvid;
+    if (bvid === '') {
+      return;
+    }
+    let idx: number = -1;
+    for (let i = 0; i < this.playHistoryItems.length; i++) {
+      if (this.playHistoryItems[i].bvid === bvid) {
+        idx = i;
+        break;
+      }
+    }
+    if (idx < 0) {
+      return;
+    }
+    this.controller.removePlayHistoryItem(bvid);
+    this.playHistoryVersion = this.controller.playHistoryVersion;
+    this.playHistoryItems.splice(idx, 1);
+    this.playHistorySource.notifyDataDelete(idx);
+  }
+
+  // 左滑露出的红色「删除」按钮（KI-3 交互约定：露出按钮、点击确认删除，不做滑过阈值直删）
+  @Builder
+  historyDeleteAction(item: PlayHistoryItem) {
+    Button('删除')
+      .height('100%')
+      .padding({ left: 18, right: 18 })
+      .backgroundColor($r('app.color.danger_red'))
+      .fontColor(Color.White)
+      .fontSize(13)
+      .borderRadius(0)
+      .onClick(() => {
+        this.removeHistoryItem(item);
+      })
   }
 
   private confirmClearPlayHistory(): void {
@@ -572,7 +652,7 @@ struct SettingsPage {
       .height(34)
       .borderRadius(17)
       .backgroundColor(this.colorModeSetting === mode ?
-        $r('app.color.material_tint_primary') : $r('app.color.btn_glass'))
+        this.tintBg() : $r('app.color.btn_glass'))
       .onClick(() => {
         this.selectAppearance(mode);
       })
@@ -615,7 +695,7 @@ struct SettingsPage {
     Row({ space: 8 }) {
       Text('·')
         .fontSize(14)
-        .fontColor($r('app.color.primary_color'))
+        .fontColor(this.accentColor)
       Text(text)
         .fontSize(13)
         .fontColor(this.textSecondary())
@@ -762,7 +842,7 @@ struct SettingsPage {
       if (!BiliSession.getInstance().isLogged() && this.historyItems.length > 0) {
         Text('当前未登录，恢复收藏需要先登录')
           .fontSize(12)
-          .fontColor($r('app.color.gold_accent'))
+          .fontColor(this.accentColor)
           .width('100%')
           .padding({ left: 16, bottom: 4 })
       }
@@ -802,7 +882,7 @@ struct SettingsPage {
                   .backgroundColor($r('app.color.btn_glass'))
                   .backdropBlur(20)
                   .border({ width: 1, color: $r('app.color.btn_border') })
-                  .fontColor($r('app.color.primary_color'))
+                  .fontColor(this.accentColor)
                   .borderRadius(16)
                   .fontSize(12)
                   .margin({ left: 8 })
@@ -887,7 +967,7 @@ struct SettingsPage {
                     .fontColor($r('app.color.text_primary'))
                     .maxLines(1)
                     .textOverflow({ overflow: TextOverflow.Ellipsis })
-                  Text(this.formatPlayedAt(item.playedAt))
+                  Text(this.historyMetaText(item))
                     .fontSize(11)
                     .fontColor($r('app.color.text_secondary'))
                     .margin({ top: 3 })
@@ -902,7 +982,11 @@ struct SettingsPage {
                 this.replayHistory(item);
               })
             }
-          }, (item: PlayHistoryItem) => `${item.bvid}_${item.playedAt}`)
+            // 左滑露出删除按钮（US3 FR-009）：CustomBuilder 的 void 分支接受 @Builder 调用表达式
+            .swipeAction({
+              end: this.historyDeleteAction(item)
+            })
+          }, (item: PlayHistoryItem) => `${item.bvid}_${item.viewAt}_${item.progress}`)
         }
         .width('100%')
         .layoutWeight(1)
@@ -945,12 +1029,12 @@ struct SettingsPage {
           Text(AudioQuality.label(tier))
             .fontSize(15)
             .fontColor(this.currentEditTier() === tier
-              ? $r('app.color.primary_color') : this.textPrimary())
+              ? this.accentColor : this.textPrimary())
             .layoutWeight(1)
           if (this.currentEditTier() === tier) {
             Text('✓')
               .fontSize(15)
-              .fontColor($r('app.color.primary_color'))
+              .fontColor(this.accentColor)
           }
         }
         .width('100%')
@@ -963,7 +1047,7 @@ struct SettingsPage {
       if (!this.isLogged) {
         Text('未登录时最高 64K，登录后可用更高音质')
           .fontSize(12)
-          .fontColor($r('app.color.gold_accent'))
+          .fontColor(this.accentColor)
           .width('100%')
           .padding({ left: 16, right: 16, top: 8, bottom: 16 })
       }
@@ -999,7 +1083,7 @@ struct SettingsPage {
             Button('正在等待B站确认…（点击取消）')
               .width('92%')
               .height(42)
-              .backgroundColor($r('app.color.material_tint_primary'))
+              .backgroundColor(this.tintBg())
               .backdropBlur(20)
               .fontColor($r('app.color.text_primary'))
               .borderRadius(21)
@@ -1019,7 +1103,7 @@ struct SettingsPage {
               Button('B站一键登录')
                 .layoutWeight(1)
                 .height(42)
-                .backgroundColor($r('app.color.material_tint_primary'))
+                .backgroundColor(this.tintBg())
                 .backdropBlur(20)
                 .fontColor($r('app.color.text_primary'))
                 .borderRadius(21)
@@ -1155,7 +1239,7 @@ struct SettingsPage {
               .backgroundColor($r('app.color.btn_glass'))
               .backdropBlur(20)
               .border({ width: 1, color: $r('app.color.btn_border') })
-              .fontColor($r('app.color.primary_color'))
+              .fontColor(this.accentColor)
               .borderRadius(8)
                 .fontSize(13)
                 .onClick(() => {
@@ -1245,7 +1329,7 @@ struct SettingsPage {
           .layoutWeight(1)
 
           Toggle({ type: ToggleType.Switch, isOn: this.autoPlayOnStart })
-            .selectedColor($r('app.color.primary_color'))
+            .selectedColor(this.accentColor)
 
             .onChange((isOn: boolean) => {
               this.autoPlayOnStart = isOn;
@@ -1273,7 +1357,7 @@ struct SettingsPage {
           .layoutWeight(1)
 
           Toggle({ type: ToggleType.Switch, isOn: this.interruptResume })
-            .selectedColor($r('app.color.primary_color'))
+            .selectedColor(this.accentColor)
             .onChange((isOn: boolean) => {
               this.interruptResume = isOn;
               AppStore.putNumber(Constants.KEY_INTERRUPT_RESUME, isOn ? 1 : 0);
@@ -1300,7 +1384,7 @@ struct SettingsPage {
             .layoutWeight(1)
           Text(AudioQuality.label(this.wifiQuality))
             .fontSize(13)
-            .fontColor($r('app.color.primary_color'))
+            .fontColor(this.accentColor)
           Text('›')
             .fontSize(16)
             .fontColor(this.textSecondary())
@@ -1323,7 +1407,7 @@ struct SettingsPage {
             .layoutWeight(1)
           Text(AudioQuality.label(this.cellularQuality))
             .fontSize(13)
-            .fontColor($r('app.color.primary_color'))
+            .fontColor(this.accentColor)
           Text('›')
             .fontSize(16)
             .fontColor(this.textSecondary())
@@ -1350,7 +1434,7 @@ struct SettingsPage {
         if (!this.isLogged) {
           Text('未登录时最高 64K，登录后可用更高音质')
             .fontSize(12)
-            .fontColor($r('app.color.gold_accent'))
+            .fontColor(this.accentColor)
             .width('92%')
             .margin({ top: 6 })
         }
@@ -1375,7 +1459,7 @@ struct SettingsPage {
           .layoutWeight(1)
 
           Toggle({ type: ToggleType.Switch, isOn: this.dataSaver })
-            .selectedColor($r('app.color.primary_color'))
+            .selectedColor(this.accentColor)
             .onChange((isOn: boolean) => {
               this.dataSaver = isOn;
               AppStore.putNumber(Constants.KEY_DATA_SAVER, isOn ? 1 : 0);
@@ -1403,7 +1487,7 @@ struct SettingsPage {
           .layoutWeight(1)
 
           Toggle({ type: ToggleType.Switch, isOn: this.wifiOnlyDownload })
-            .selectedColor($r('app.color.primary_color'))
+            .selectedColor(this.accentColor)
             .onChange((isOn: boolean) => {
               this.wifiOnlyDownload = isOn;
               AppStore.putNumber(Constants.KEY_WIFI_ONLY_DOWNLOAD, isOn ? 1 : 0);

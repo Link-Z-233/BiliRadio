@@ -440,111 +440,142 @@ export class BiliService {
     return WbiSigner.getMixinKey(imgUrl, subUrl);
   }
 
+  // T019：合集列表翻页抓取——page_num 自 1 递增，本页返回条数 < page_size 即终止（短页终止），
+  // 安全上限 10 页防异常数据死循环；页间 sleep 参照 fetchSeasonVideos 的 1500ms
   static async fetchSeasonsList(mid: number): Promise<Season[]> {
-    const mixinKey: string = await BiliService.fetchMixinKey();
-    const params: Record<string, string> = {
-      'mid': mid.toString(),
-      'page_num': '1',
-      'page_size': '20',
-    };
-    const signedQuery: string = await WbiSigner.signParams(params, mixinKey);
-    const resultStr: string = await httpGet(`${BILI_SEASONS_SERIES_LIST_URL}?${signedQuery}`);
-    const data: Record<string, Object> = parseApiData(resultStr);
     const seasons: Season[] = [];
-    const itemsListsRaw: Object = data['items_lists'];
-    if (itemsListsRaw !== undefined && itemsListsRaw !== null) {
-      const itemsLists: Record<string, Object> = itemsListsRaw as Record<string, Object>;
-      const seasonsRaw: Object = itemsLists['seasons_list'];
-      if (seasonsRaw !== undefined && seasonsRaw !== null) {
-        const arr: Object[] = seasonsRaw as Object[];
-        for (let i = 0; i < arr.length; i++) {
-          const rec: Record<string, Object> = arr[i] as Record<string, Object>;
-          let seasonId: number = 0;
-          const topSeasonIdRaw: Object = rec['season_id'];
-          if (topSeasonIdRaw !== undefined && topSeasonIdRaw !== null) {
-            seasonId = topSeasonIdRaw as number;
+    const ps: number = 20;
+    let pageNum: number = 1;
+    const maxPages: number = 10;
+    while (pageNum <= maxPages) {
+      const mixinKey: string = await BiliService.fetchMixinKey();
+      const params: Record<string, string> = {
+        'mid': mid.toString(),
+        'page_num': pageNum.toString(),
+        'page_size': ps.toString(),
+      };
+      const signedQuery: string = await WbiSigner.signParams(params, mixinKey);
+      const resultStr: string = await httpGet(`${BILI_SEASONS_SERIES_LIST_URL}?${signedQuery}`);
+      const data: Record<string, Object> = parseApiData(resultStr);
+      let rawCount: number = 0;
+      const itemsListsRaw: Object = data['items_lists'];
+      if (itemsListsRaw !== undefined && itemsListsRaw !== null) {
+        const itemsLists: Record<string, Object> = itemsListsRaw as Record<string, Object>;
+        const seasonsRaw: Object = itemsLists['seasons_list'];
+        if (seasonsRaw !== undefined && seasonsRaw !== null) {
+          const arr: Object[] = seasonsRaw as Object[];
+          rawCount = arr.length;
+          for (let i = 0; i < arr.length; i++) {
+            const rec: Record<string, Object> = arr[i] as Record<string, Object>;
+            let seasonId: number = 0;
+            const topSeasonIdRaw: Object = rec['season_id'];
+            if (topSeasonIdRaw !== undefined && topSeasonIdRaw !== null) {
+              seasonId = topSeasonIdRaw as number;
+            }
+            let title: string = '';
+            let count: number = 0;
+            let cover: string = '';
+            const metaRaw: Object = rec['meta'];
+            if (metaRaw !== undefined && metaRaw !== null) {
+              const meta: Record<string, Object> = metaRaw as Record<string, Object>;
+              if (seasonId === 0 && meta['season_id'] !== undefined && meta['season_id'] !== null) {
+                seasonId = meta['season_id'] as number;
+              }
+              const nameRaw: Object = meta['name'];
+              if (nameRaw !== undefined && nameRaw !== null) {
+                title = cleanTitle(nameRaw as string);
+              }
+              const totalRaw: Object = meta['total'];
+              if (totalRaw !== undefined && totalRaw !== null) {
+                count = totalRaw as number;
+              }
+              const coverRaw: Object = meta['cover'];
+              if (coverRaw !== undefined && coverRaw !== null) {
+                cover = coverRaw as string;
+              }
+            }
+            if (seasonId === 0) {
+              continue;
+            }
+            seasons.push(new Season(seasonId, title, count, cover));
           }
-          let title: string = '';
-          let count: number = 0;
-          let cover: string = '';
-          const metaRaw: Object = rec['meta'];
-          if (metaRaw !== undefined && metaRaw !== null) {
-            const meta: Record<string, Object> = metaRaw as Record<string, Object>;
-            if (seasonId === 0 && meta['season_id'] !== undefined && meta['season_id'] !== null) {
-              seasonId = meta['season_id'] as number;
-            }
-            const nameRaw: Object = meta['name'];
-            if (nameRaw !== undefined && nameRaw !== null) {
-              title = cleanTitle(nameRaw as string);
-            }
-            const totalRaw: Object = meta['total'];
-            if (totalRaw !== undefined && totalRaw !== null) {
-              count = totalRaw as number;
-            }
-            const coverRaw: Object = meta['cover'];
-            if (coverRaw !== undefined && coverRaw !== null) {
-              cover = coverRaw as string;
-            }
-          }
-          if (seasonId === 0) {
-            continue;
-          }
-          seasons.push(new Season(seasonId, title, count, cover));
         }
+      }
+      if (rawCount < ps) {
+        break;
+      }
+      pageNum++;
+      if (pageNum <= maxPages) {
+        await sleep(1500);
       }
     }
     return seasons;
   }
 
   // UP 主的「系列」列表；ponytail: 复用 Season 类，seasonId 字段承载 series_id
+  // T019：与 fetchSeasonsList 同构的翻页抓取（短页终止 + 10 页上限 + 页间 1500ms）
   static async fetchSeriesList(mid: number): Promise<Season[]> {
-    const mixinKey: string = await BiliService.fetchMixinKey();
-    const params: Record<string, string> = {
-      'mid': mid.toString(),
-      'page_num': '1',
-      'page_size': '20',
-    };
-    const signedQuery: string = await WbiSigner.signParams(params, mixinKey);
-    const resultStr: string = await httpGet(`${BILI_SEASONS_SERIES_LIST_URL}?${signedQuery}`);
-    const data: Record<string, Object> = parseApiData(resultStr);
     const series: Season[] = [];
-    const itemsListsRaw: Object = data['items_lists'];
-    if (itemsListsRaw !== undefined && itemsListsRaw !== null) {
-      const itemsLists: Record<string, Object> = itemsListsRaw as Record<string, Object>;
-      const seriesRaw: Object = itemsLists['series_list'];
-      if (seriesRaw !== undefined && seriesRaw !== null) {
-        const arr: Object[] = seriesRaw as Object[];
-        for (let i = 0; i < arr.length; i++) {
-          const rec: Record<string, Object> = arr[i] as Record<string, Object>;
-          let seriesId: number = 0;
-          const seriesIdRaw: Object = rec['series_id'];
-          if (seriesIdRaw !== undefined && seriesIdRaw !== null) {
-            seriesId = seriesIdRaw as number;
-          }
-          let title: string = '';
-          let count: number = 0;
-          let cover: string = '';
-          const metaRaw: Object = rec['meta'];
-          if (metaRaw !== undefined && metaRaw !== null) {
-            const meta: Record<string, Object> = metaRaw as Record<string, Object>;
-            const nameRaw: Object = meta['name'];
-            if (nameRaw !== undefined && nameRaw !== null) {
-              title = cleanTitle(nameRaw as string);
+    const ps: number = 20;
+    let pageNum: number = 1;
+    const maxPages: number = 10;
+    while (pageNum <= maxPages) {
+      const mixinKey: string = await BiliService.fetchMixinKey();
+      const params: Record<string, string> = {
+        'mid': mid.toString(),
+        'page_num': pageNum.toString(),
+        'page_size': ps.toString(),
+      };
+      const signedQuery: string = await WbiSigner.signParams(params, mixinKey);
+      const resultStr: string = await httpGet(`${BILI_SEASONS_SERIES_LIST_URL}?${signedQuery}`);
+      const data: Record<string, Object> = parseApiData(resultStr);
+      let rawCount: number = 0;
+      const itemsListsRaw: Object = data['items_lists'];
+      if (itemsListsRaw !== undefined && itemsListsRaw !== null) {
+        const itemsLists: Record<string, Object> = itemsListsRaw as Record<string, Object>;
+        const seriesRaw: Object = itemsLists['series_list'];
+        if (seriesRaw !== undefined && seriesRaw !== null) {
+          const arr: Object[] = seriesRaw as Object[];
+          rawCount = arr.length;
+          for (let i = 0; i < arr.length; i++) {
+            const rec: Record<string, Object> = arr[i] as Record<string, Object>;
+            let seriesId: number = 0;
+            const seriesIdRaw: Object = rec['series_id'];
+            if (seriesIdRaw !== undefined && seriesIdRaw !== null) {
+              seriesId = seriesIdRaw as number;
             }
-            const totalRaw: Object = meta['total'];
-            if (totalRaw !== undefined && totalRaw !== null) {
-              count = totalRaw as number;
+            let title: string = '';
+            let count: number = 0;
+            let cover: string = '';
+            const metaRaw: Object = rec['meta'];
+            if (metaRaw !== undefined && metaRaw !== null) {
+              const meta: Record<string, Object> = metaRaw as Record<string, Object>;
+              const nameRaw: Object = meta['name'];
+              if (nameRaw !== undefined && nameRaw !== null) {
+                title = cleanTitle(nameRaw as string);
+              }
+              const totalRaw: Object = meta['total'];
+              if (totalRaw !== undefined && totalRaw !== null) {
+                count = totalRaw as number;
+              }
+              const coverRaw: Object = meta['cover'];
+              if (coverRaw !== undefined && coverRaw !== null) {
+                cover = coverRaw as string;
+              }
             }
-            const coverRaw: Object = meta['cover'];
-            if (coverRaw !== undefined && coverRaw !== null) {
-              cover = coverRaw as string;
+            if (seriesId === 0) {
+              continue;
             }
+            series.push(new Season(seriesId, title, count, cover));
           }
-          if (seriesId === 0) {
-            continue;
-          }
-          series.push(new Season(seriesId, title, count, cover));
         }
+      }
+      if (rawCount < ps) {
+        break;
+      }
+      pageNum++;
+      if (pageNum <= maxPages) {
+        await sleep(1500);
       }
     }
     return series;
@@ -692,14 +723,23 @@ export class BiliService {
 
   // US3：APP 端点投稿查询（app.bilibili.com BiliDroid 渠道）——无 cookie/WBI 依赖，
   // 未登录亦可靠查询；仅携带 BiliDroid UA
+  // T018：参数对齐 PiliPlus spaceArchive 的 BiliDroid 调用形态（version/c_locale/channel/
+  // s_locale/qn/statistics）；statistics 为 JSON 串，由 fetchUpVideosOnce 统一 encodeURIComponent
+  // 后拼入 query（花括号/引号不会破坏 URL）
   private static async fetchUpVideosViaApp(mid: number): Promise<BiliVideo[]> {
     const params: Record<string, string> = {
       'vmid': mid.toString(),
       'ps': '30',
       'pn': '1',
       'build': '8430300',
+      'version': '8.43.0',
+      'c_locale': 'zh_CN',
+      'channel': 'master',
       'mobi_app': 'android',
       'platform': 'android',
+      's_locale': 'zh_CN',
+      'qn': '80',
+      'statistics': '{"appId":1,"platform":3,"version":"8.43.0","abtest":""}',
     };
     const headers: Record<string, string> = {
       'User-Agent': Constants.BILI_APP_USER_AGENT,
@@ -811,21 +851,20 @@ export class BiliService {
   // ponytail: 只取第一页——播客「近期节目」语义；升级路径：SourcePage 滚动到底按需追加页
   // 风控降级链（US3）：APP 端点优先（BiliDroid 渠道，无 cookie/WBI），失败降级 Web 链——
   // 最多 3 轮，每轮「无签名 arc/search → WBI 签名」两步；
-  // -352/-412/风控页/网络错误等可重试错误重置 buvid 指数退避后进下一轮，
+  // APP 端点任何失败（含 -400/-404/-101）都只记日志后降级 Web 链（T018：-400 曾被误判为
+  // 业务致命直抛，导致 Web 降级链完全没机会执行）；
+  // Web 链内 -352/-412/风控页/网络错误等可重试错误重置 buvid 指数退避后进下一轮，
   // -404/-400/-101 等业务错误立即失败；全败时抛出最后一轮真实错误（含错误码）
   static async fetchUpVideos(mid: number): Promise<BiliVideo[]> {
     // US3：APP 端点优先——BiliDroid 渠道不依赖 cookie/WBI，未登录查询首选；
-    // 业务性失败（-404/-400/-101）直接透出，风控/网络错误降级 Web 链
+    // T018：APP 端点失败不再区分错误码（-400/-404/-101 也一样），一律记日志后落入 Web 降级链
     try {
       const appItems: BiliVideo[] = await BiliService.fetchUpVideosViaApp(mid);
       Logger.log('net', 'UP投稿列表', `APP端点成功 mid=${mid} count=${appItems.length}`);
       return appItems;
     } catch (appErr) {
       const appError: Error = appErr instanceof Error ? appErr : new Error(String(appErr));
-      Logger.log('error', 'UP投稿列表', `APP端点失败 mid=${mid}: ${appError.message}`);
-      if (isUpQueryFatal(appError)) {
-        throw appError;
-      }
+      Logger.log('error', 'UP投稿列表', `APP端点失败 mid=${mid}: ${appError.message}，降级Web链`);
     }
 
     const spaceHeaders: Record<string, string> = buildSpaceHeaders(mid);

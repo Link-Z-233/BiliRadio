@@ -11,8 +11,8 @@
 - **待实现清单**：
   1. **首页订阅列表** [HomePage.ets](entry/src/main/ets/pages/HomePage.ets)：`ListItem` 位于 `LazyForEach`（L365-367）；删除复用既有 `removeSub(row)`（含清剧集缓存、持久化、刷新列表）。
   2. **播放队列** [QueueSheet.ets](entry/src/main/ets/component/QueueSheet.ets)：`LazyForEach` + `ListItem`；删除可复用 `PlayerController.removeSelectedFromPlaylist([bvid])`（[PlayerController.ets](entry/src/main/ets/service/PlayerController.ets) L1028）；需处理与多选（长按 + 竖向滑动选择）手势的共存。
-  3. **播放历史** [SettingsPage.ets](entry/src/main/ets/pages/SettingsPage.ets) 的 `playHistoryPanel`：`LazyForEach` + `ListItem`（L835-863）；`PlayerController` 目前只有 `clearPlayHistory()`（L918），**缺单条删除 API**，需新增（如按 index）并写回 `AppStore.savePlayHistoryFile`。
-- **状态**：未实现（仅登记）。
+  3. ~~**播放历史** [SettingsPage.ets](entry/src/main/ets/pages/SettingsPage.ets) 的 `playHistoryPanel`~~ **已完成（play-history-progress 轮，2026-10-06）**：`playHistoryPanel` 已挂 `ListItem.swipeAction({ end: 删除按钮 builder })`，`HistoryDataSource.notifyDataDelete` 增量同步 LazyForEach；单条删除 API 为 `PlayerController.removePlayHistoryItem(bvid)`（splice + `playHistoryVersion++` + 异步写盘），`clearPlayHistory` 行为不变。
+- **状态**：部分实现——播放历史项已完成（见上），首页订阅列表/播放队列两项仍待实现（仅登记）。
 
 ### KI-4 短链识别与解析待优化
 
@@ -48,6 +48,13 @@
 - **验证（2026-10-06 真机）**：播放/暂停图标互换、进度条走动、开关浮层全部恢复正常；hilog 订阅退订完全对称（开→subscribe listeners=1，关→unsubscribe listeners=0），伪 `aboutToDisappear` 消失，无监听器累积。
 - **遗留观察**：封面光晕呼吸效果（`updateGlow`，3200ms 往复）用户自最初构建从未观察到，可能亮色模式下不显眼或存在独立问题，登记后续单独检查。
 - **状态**：已修复（方案 B 全平台生效，无需按设备分支）。
+
+### KI-6 定时播放 / 睡眠定时「未经验证」
+
+- **范围**：睡眠定时功能（倒计时归零暂停播放 + 提醒回调）实现完成，但**未经实机验证**。
+- **位置**：入口为播放层 timer 按钮（`PlayerOverlay`）；控制器为 [SleepTimerController.ets](entry/src/main/ets/service/SleepTimerController.ets)（单例、墙钟零漂移倒计时、内存态不持久化）。
+- **待验证点**：倒计时显示与归零暂停、后台/锁屏节流后切回校准、入口按钮状态联动。
+- **状态**：实现完成、待实机验证；验证通过后移除本条目及 `SleepTimerController.ets` 文件头的 `[UNVERIFIED 2026-10]` 标注。
 
 ## 二、已移除与禁用功能
 
@@ -86,7 +93,7 @@
 - **列表添加逻辑重构预告（US6 后续）**：源详情页「点单集」已改为仅该集入队播放；队列输入框「添加并播放」（`addByBv`）的入队行为后续还会改——计划从「加载并立即播放」调整为「追加进队列不打断当前播放」，落地后与「点单集」路径统一收敛。
 - **403 首次添加根因修复（延后）**：首次添加订阅偶发 403/风控拦截，本轮仅做了日志观察（`BiliService` 全链路钩子 + 设置页日志面板，见 US9），待实机日志积累、锁定风控触发模式后针对性修复（候选方向：WBI 签名覆盖面 / buvid 预热策略）。
 - **点赞 / 投币 / 收藏**：依赖登录态与 csrf，交互形态待定，两轮内未排期。
-- **播放历史云端同步**：现为纯本地存储；规划登录态下的云端多设备同步（需服务端冲突策略）。
+- **播放历史云端同步**：本地字段/单位对齐已完成（play-history-progress 轮：`PlayHistoryItem` 补齐 viewAt/progress/duration/cid，秒级单位对齐 B 站 `view_at`/`progress` 语义，-1=看完；`HistoryMapper` 预留 `toBiliHistory`/`fromBiliHistory` 映射边界，本轮零网络请求），云端同步（登录态下心跳上报/历史拉取合并）待后续。
 - **audio 三元组优先级限制**：播控中心/后台卡片展示元数据依赖 audio 三元组等系统侧信息优先级策略，B 站侧字段缺失时标题/作者/封面可能展示不全，属系统与上游数据限制，暂不做适配。
 
 ## 四、API 26 基线化

@@ -6,6 +6,8 @@ import { PlayerController } from './PlayerController';
 // 睡眠定时单例：持有倒计时状态、驱动秒级刷新，计时归零时暂停播放并触发提醒回调。
 // 倒计时以 Date.now() 墙钟为唯一基准（记录目标时间戳 + 周期刷新），后台/锁屏被节流时切回即可校准，零漂移。
 // 状态全部内存态、不持久化，进程重启自然回到默认不开启。
+// [UNVERIFIED 2026-10] 本功能实现完成但未经实机验证（入口：播放层 timer 按钮）；
+// 实机验证通过后移除本标注与 PROJECT_NOTES.md KI-6 条目。
 export class SleepTimerController {
   private static instance: SleepTimerController | undefined = undefined;
 

@@ -396,6 +396,18 @@ export struct PlayerOverlay {
     return $r('sys.symbol.order_play');
   }
 
+  // 音质入口按钮短名（T017，替代波形图标）：本地缓存来源 →「本地」；dash 流式 → 当前音轨码精确档名
+  // （trackLabel 可显示 Hi-Res/杜比，比按档位归并的 label 更精确）；其余（未起播/未知）→「默认」
+  private qualityEntryLabel(): string {
+    if (this.currentTrackSource === 'local') {
+      return '本地';
+    }
+    if (this.currentTrackSource === 'dash') {
+      return AudioQuality.trackLabel(this.currentQualityCode);
+    }
+    return '默认';
+  }
+
   @Builder
   speedPanel() {
     Column() {
@@ -1188,11 +1200,13 @@ export struct PlayerOverlay {
                 this.showMode = true;
               })
 
-              // 音质入口（audio-quality-settings FR-005）：波形图标；dash 多音轨可用时以主题色示意
+              // 音质入口（audio-quality-settings FR-005 + T017）：直接显示当前音质档位短名
+              // （本地缓存显「本地」）；dash 多音轨可用时以主题色高亮示意
               Row() {
-                SymbolGlyph($r('sys.symbol.waveform'))
-                  .fontSize(18)
-                  .fontColor([this.currentTrackSource === 'dash' ? this.accentColor : this.textPrimary()])
+                Text(this.qualityEntryLabel())
+                  .fontSize(13)
+                  .fontWeight(FontWeight.Medium)
+                  .fontColor(this.currentTrackSource === 'dash' ? this.accentColor : this.textPrimary())
               }
               .height(36)
               .padding({ left: 14, right: 14 })

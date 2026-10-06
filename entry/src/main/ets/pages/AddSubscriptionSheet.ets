@@ -94,6 +94,11 @@ export struct AddSubscriptionSheet {
   @State folders: FavFolder[] = [];
   @State foldersBusy: boolean = false;
   @State folderView: boolean = false;
+  // UP 合集/系列二级视图（对齐 folderView 模式；builder 方法名为 upDetailListView，避免与同名状态冲突）
+  @State upDetailView: boolean = false;
+  // seasons/series 两个请求是否已 settle（then/catch 均置 true），用于二级视图区分加载态与空态
+  @State seasonsLoaded: boolean = false;
+  @State seriesLoaded: boolean = false;
   onSubscribed: (sub: Subscription) => void = (sub: Subscription) => {
   };
   onDismiss: () => void = () => {
@@ -192,7 +197,7 @@ export struct AddSubscriptionSheet {
     }
     const parsed: RecognizeResult = recognizeInput(this.mainInput);
     if (parsed.type === '') {
-      promptAction.showToast({ message: '未识别到有效链接或ID' });
+      promptAction.showToast({ message: '未识别到有效链接或 UP 主 UID' });
       return;
     }
     if (this.mainBusy) {
@@ -238,7 +243,7 @@ export struct AddSubscriptionSheet {
   private lookupUid(uidStr: string): void {
     const uid: number = parseInt(uidStr, 10);
     if (isNaN(uid) || uid <= 0) {
-      promptAction.showToast({ message: '请输入有效UID' });
+      promptAction.showToast({ message: '请输入有效的 UP 主 UID' });
       return;
     }
     if (this.uidBusy) {
@@ -250,6 +255,9 @@ export struct AddSubscriptionSheet {
     this.upFace = '';
     this.seasons = [];
     this.series = [];
+    this.seasonsLoaded = false;
+    this.seriesLoaded = false;
+    this.upDetailView = false;
     BiliService.fetchUpInfo(uid).then((info: UpInfo): void => {
       this.upInfo = info;
       this.upName = info.name;
@@ -258,11 +266,15 @@ export struct AddSubscriptionSheet {
       this.mainBusy = false;
       BiliService.fetchSeasonsList(uid).then((seasons: Season[]): void => {
         this.seasons = seasons;
+        this.seasonsLoaded = true;
       }).catch((): void => {
+        this.seasonsLoaded = true;
       });
       BiliService.fetchSeriesList(uid).then((series: Season[]): void => {
         this.series = series;
+        this.seriesLoaded = true;
       }).catch((): void => {
+        this.seriesLoaded = true;
       });
     }).catch((err: BusinessError): void => {
       this.uidBusy = false;
@@ -428,68 +440,6 @@ export struct AddSubscriptionSheet {
       }
       .width('100%')
       .margin({ top: 12 })
-
-      ForEach(this.seasons, (s: Season) => {
-        Row() {
-          Column() {
-            Text(s.title)
-              .fontSize(14)
-              .fontColor($r('app.color.text_primary'))
-              .maxLines(1)
-              .textOverflow({ overflow: TextOverflow.Ellipsis })
-            Text(`合集 · ${s.count}集`)
-              .fontSize(12)
-              .fontColor($r('app.color.text_disabled'))
-              .margin({ top: 2 })
-          }
-          .alignItems(HorizontalAlign.Start)
-          .layoutWeight(1)
-          .margin({ right: 8 })
-          Text('订阅')
-            .fontSize(13)
-            .fontWeight(FontWeight.Medium)
-            .fontColor(this.accentColor)
-            .padding({ left: 12, right: 12, top: 6, bottom: 6 })
-            .borderRadius(14)
-            .backgroundColor($r('app.color.card_background'))
-            .onClick(() => {
-              this.subscribeSeason(s);
-            })
-        }
-        .width('100%')
-        .padding({ top: 8, bottom: 8 })
-      }, (s: Season) => `season_${s.seasonId}`)
-
-      ForEach(this.series, (s: Season) => {
-        Row() {
-          Column() {
-            Text(s.title)
-              .fontSize(14)
-              .fontColor($r('app.color.text_primary'))
-              .maxLines(1)
-              .textOverflow({ overflow: TextOverflow.Ellipsis })
-            Text(`系列 · ${s.count}集`)
-              .fontSize(12)
-              .fontColor($r('app.color.text_disabled'))
-              .margin({ top: 2 })
-          }
-          .alignItems(HorizontalAlign.Start)
-          .layoutWeight(1)
-          .margin({ right: 8 })
-          Text('订阅')
-            .fontSize(13)
-            .fontWeight(FontWeight.Medium)
-            .fontColor(this.accentColor)
-            .padding({ left: 12, right: 12, top: 6, bottom: 6 })
-            .borderRadius(14)
-            .backgroundColor($r('app.color.card_background'))
-            .onClick(() => {
-              this.subscribeSeries(s);
-            })
-        }
-        .width('100%')
-        .padding({ top: 8, bottom: 8 })
-      }, (s: Season) => `series_${s.seasonId}`)
     }
   }
 
@@ -497,7 +447,7 @@ export struct AddSubscriptionSheet {
   private mainView() {
     this.sectionTitle('添加订阅')
     Row() {
-      TextInput({ placeholder: '视频/UP主/收藏夹/合集/系列 链接或ID', text: this.mainInput })
+      TextInput({ placeholder: '视频/UP主/收藏夹/合集/系列 链接，或 UP 主 UID', text: this.mainInput })
         .fontSize(14)
         .fontColor($r('app.color.text_primary'))
         .placeholderColor($r('app.color.placeholder_color'))
@@ -534,6 +484,22 @@ export struct AddSubscriptionSheet {
     if (this.upInfo !== null) {
       this.sectionTitle(`${this.upName} 的合集与系列`)
       this.upResultsView()
+      // 入口行：样式对齐「我的收藏夹」入口行，点击进入 UP 合集/系列二级视图（与 folderView 互斥）
+      Row() {
+        Text(`合集与系列 (${this.seasons.length + this.series.length})`)
+          .fontSize(14)
+          .fontColor($r('app.color.text_primary'))
+          .layoutWeight(1)
+        SymbolGlyph($r('sys.symbol.chevron_right'))
+          .fontSize(14)
+          .fontColor([$r('app.color.text_secondary')])
+      }
+      .width('100%')
+      .padding({ top: 10, bottom: 10 })
+      .onClick(() => {
+        this.folderView = false;
+        this.upDetailView = true;
+      })
     }
 
     this.sectionTitle('我的收藏夹')
@@ -554,6 +520,7 @@ export struct AddSubscriptionSheet {
       .width('100%')
       .padding({ top: 10, bottom: 10 })
       .onClick(() => {
+        this.upDetailView = false;
         this.folderView = true;
       })
     }
@@ -617,10 +584,115 @@ export struct AddSubscriptionSheet {
     }
   }
 
+  // UP 合集/系列二级视图：返回行对齐 folderListView，条目行样式沿用原 upResultsView
+  @Builder
+  private upDetailListView() {
+    Row() {
+      SymbolGlyph($r('sys.symbol.chevron_left'))
+        .fontSize(16)
+        .fontColor([$r('app.color.text_primary')])
+        .onClick(() => {
+          this.upDetailView = false;
+        })
+      Text(`${this.upName} 的合集与系列`)
+        .fontSize(16)
+        .fontWeight(FontWeight.Medium)
+        .fontColor($r('app.color.text_primary'))
+        .margin({ left: 8 })
+    }
+    .width('100%')
+    .padding({ top: 8, bottom: 12 })
+
+    if (this.seasons.length + this.series.length === 0) {
+      if (this.seasonsLoaded && this.seriesLoaded) {
+        Text('该 UP 主暂无合集与系列')
+          .fontSize(13)
+          .fontColor($r('app.color.text_secondary'))
+          .margin({ top: 8 })
+      } else {
+        LoadingProgress()
+          .width(22)
+          .height(22)
+          .color(this.accentColor)
+          .margin({ top: 8 })
+      }
+    } else {
+      if (this.seasons.length > 0) {
+        this.sectionTitle('合集')
+      }
+      ForEach(this.seasons, (s: Season) => {
+        Row() {
+          Column() {
+            Text(s.title)
+              .fontSize(14)
+              .fontColor($r('app.color.text_primary'))
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+            Text(`合集 · ${s.count}集`)
+              .fontSize(12)
+              .fontColor($r('app.color.text_disabled'))
+              .margin({ top: 2 })
+          }
+          .alignItems(HorizontalAlign.Start)
+          .layoutWeight(1)
+          .margin({ right: 8 })
+          Text('订阅')
+            .fontSize(13)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(this.accentColor)
+            .padding({ left: 12, right: 12, top: 6, bottom: 6 })
+            .borderRadius(14)
+            .backgroundColor($r('app.color.card_background'))
+            .onClick(() => {
+              this.subscribeSeason(s);
+            })
+        }
+        .width('100%')
+        .padding({ top: 8, bottom: 8 })
+      }, (s: Season) => `season_${s.seasonId}`)
+
+      if (this.series.length > 0) {
+        this.sectionTitle('系列')
+      }
+      ForEach(this.series, (s: Season) => {
+        Row() {
+          Column() {
+            Text(s.title)
+              .fontSize(14)
+              .fontColor($r('app.color.text_primary'))
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+            Text(`系列 · ${s.count}集`)
+              .fontSize(12)
+              .fontColor($r('app.color.text_disabled'))
+              .margin({ top: 2 })
+          }
+          .alignItems(HorizontalAlign.Start)
+          .layoutWeight(1)
+          .margin({ right: 8 })
+          Text('订阅')
+            .fontSize(13)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(this.accentColor)
+            .padding({ left: 12, right: 12, top: 6, bottom: 6 })
+            .borderRadius(14)
+            .backgroundColor($r('app.color.card_background'))
+            .onClick(() => {
+              this.subscribeSeries(s);
+            })
+        }
+        .width('100%')
+        .padding({ top: 8, bottom: 8 })
+      }, (s: Season) => `series_${s.seasonId}`)
+    }
+  }
+
   build() {
     Scroll() {
       Column() {
-        if (this.folderView) {
+        if (this.upDetailView) {
+          this.upDetailListView()
+        } else if (this.folderView) {
           this.folderListView()
         } else {
           this.mainView()

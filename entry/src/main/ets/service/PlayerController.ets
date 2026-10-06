@@ -337,6 +337,8 @@ export class PlayerController {
     } else if (state === 'completed') {
       this.isPlaying = false;
       this.mediaSession.updateState(false, this.currentTime);
+      // 完播标记（plan R5①）：自然播完 → 当前条目 progress=-1 即时写盘
+      this.markCurrentHistoryCompleted();
       this.handleCompleted();
     } else if (state === 'idle' || state === 'stopped') {
       this.isPrepared = false;
@@ -382,6 +384,11 @@ export class PlayerController {
       this.persistProgress();
       this.mediaSession.updateState(this.isPlaying, time);
     }
+    // 完播阈值判定（plan R5②）：duration 已知且进度 ≥ duration×95% → 同样标记已听完
+    // （覆盖「拖到结尾附近停住/切走」场景）；duration 未知（=0）保守不判定
+    if (this.isPlaying && this.duration > 0 && time >= this.duration * Constants.PLAY_COMPLETE_RATIO) {
+      this.markCurrentHistoryCompleted();
+    }
     // 进度 UI（时间文本/进度条）只需秒级刷新：仅秒变化时广播，
     // 避免 100ms 级播放 tick 每次全量通知 4 个订阅页面
     const sec: number = Math.floor(time / 1000);
@@ -393,8 +400,12 @@ export class PlayerController {
 
   private persistProgress(): void {
     if (this.currentIndex >= 0 && this.currentIndex < this.playlist.length) {
+      // 全局断点（KEY_LAST_INDEX/KEY_LAST_POS_MS）写入路径零改动（不变式④，与每集进度互不干扰）
       AppStore.putNumber(Constants.KEY_LAST_INDEX, this.currentIndex);
       AppStore.putNumber(Constants.KEY_LAST_POS_MS, this.currentTime);
+      // 每集进度（plan R6）：当前条目 progress=floor(currentTime/1000)（恒 ≥0，-1 仅由完播判定写入），
+      // 随本 5s 节拍/暂停/切歌即时点异步写历史文件，异常退出进度回退 ≤ 一个节拍
+      this.updateHistoryProgressForCurrent(Math.floor(this.currentTime / 1000));
     }
   }
 
@@ -509,10 +520,31 @@ export class PlayerController {
     this.emitUi();
   }
 
+  // 续播起点查询（plan R4 契约）：条目存在且 progress>0 且 ≠-1 且（duration>0 时
+  // progress < duration×PLAY_COMPLETE_RATIO）→ progress×1000；否则 0。纯查询，无副作用
+  getResumeMsForBvid(bvid: string): number {
+    for (let i = 0; i < this.playHistory.length; i++) {
+      if (this.playHistory[i].bvid === bvid) {
+        const entry: PlayHistoryItem = this.playHistory[i];
+        if (entry.progress > 0 && entry.progress !== -1 &&
+          (entry.duration <= 0 || entry.progress < entry.duration * Constants.PLAY_COMPLETE_RATIO)) {
+          return entry.progress * 1000;
+        }
+        return 0;
+      }
+    }
+    return 0;
+  }
+
   async playIndex(index: number, seekMs: number, fromNav: boolean = false): Promise<void> {
     this.resumeAfterInterrupt = false;
     if (index < 0 || index >= this.playlist.length) {
       return;
+    }
+    // 每集进度（plan R4）：旧曲目仍在真实出声时先即时 flush 其进度（切歌写盘点）——
+    // 此刻 currentIndex/currentTime/duration/currentCid 均属旧曲目，先落史再切换
+    if (this.isPlaying && !this.isPreparing) {
+      this.updateHistoryProgressForCurrent(Math.floor(this.currentTime / 1000));
     }
     if (!fromNav) {
       const currentBvid: string = this.currentIndex >= 0 && this.currentIndex < this.playlist.length
@@ -536,9 +568,18 @@ export class PlayerController {
     this.currentQualityCode = 0;
     this.currentTrackSource = '';
     this.currentCid = 0;
-    Logger.log('player', 'playIndex', `index=${index} bvid=${item.bvid} seekMs=${seekMs}`);
-    this.pendingSeekMs = seekMs;
-    this.currentTime = seekMs;
+    // 续播决策（plan R4）：仅新起播（seekMs<=0，如点历史条目/点单集入队/切歌）时以历史进度决定起点；
+    // seekMs>0 的换音质保进度（setQualityTier resumePos）与全局断点恢复路径零变化
+    let effectiveSeekMs: number = seekMs;
+    if (seekMs <= 0) {
+      effectiveSeekMs = this.getResumeMsForBvid(item.bvid);
+      if (effectiveSeekMs > 0) {
+        Logger.log('player', 'resume from history', `bvid=${item.bvid} ms=${effectiveSeekMs}`);
+      }
+    }
+    Logger.log('player', 'playIndex', `index=${index} bvid=${item.bvid} seekMs=${seekMs} effective=${effectiveSeekMs}`);
+    this.pendingSeekMs = effectiveSeekMs;
+    this.currentTime = effectiveSeekMs;
     this.duration = item.duration > 0 ? item.duration * 1000 : 0;
     this.isPreparing = true;
     this.isPrepared = false;
@@ -1191,14 +1232,127 @@ export class PlayerController {
     return PlayHistoryItem.SOURCE_LOCAL;
   }
 
+  // 按历史条目主键检索（bvid 全局至多一条，upsert 保证）
+  private indexOfPlayHistory(bvid: string): number {
+    for (let i = 0; i < this.playHistory.length; i++) {
+      if (this.playHistory[i].bvid === bvid) {
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  // 历史文件异步写盘：沿用既有 setTimeout(0) 模式，进度节拍/切歌/完播/删除共用，不阻塞调用线程
+  private savePlayHistoryFileAsync(): void {
+    setTimeout((): void => {
+      try {
+        AppStore.savePlayHistoryFile(this.playHistory);
+      } catch (e) {
+        hilog.warn(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'savePlayHistoryFile failed');
+      }
+    }, 0);
+  }
+
+  // 条目元数据回填（plan R7）：duration 取播放器真实时长（this.duration 毫秒→秒，含 BiliVideo.duration
+  // 冷启动兜底已先经 upsert 写入）；cid 取 currentCid（流式路径）或队列条目 cid（本地缓存经 enrich 回填）中非零者。
+  // 调用时机（this.currentIndex/currentCid/duration 与目标条目一致）保证回填不串曲目
+  private backfillHistoryMeta(entry: PlayHistoryItem): void {
+    if (this.duration > 0) {
+      const durationSec: number = Math.floor(this.duration / 1000);
+      if (durationSec > 0) {
+        entry.duration = durationSec;
+      }
+    }
+    let cid: number = this.currentCid;
+    if (cid <= 0 && this.currentIndex >= 0 && this.currentIndex < this.playlist.length) {
+      cid = this.playlist[this.currentIndex].cid;
+    }
+    if (cid > 0) {
+      entry.cid = cid;
+    }
+  }
+
+  // 更新当前条目进度（plan R6，persistProgress/切歌 flush 共用）：
+  // 仅命中已有条目才更新（未记录过的条目等 playing 状态 upsert 创建）；
+  // progress===-1（已完播）不回写正数进度，保住完播标记（不变式①）
+  private updateHistoryProgressForCurrent(progressSec: number): void {
+    if (this.currentIndex < 0 || this.currentIndex >= this.playlist.length) {
+      return;
+    }
+    const bvid: string = this.playlist[this.currentIndex].bvid;
+    if (bvid === '') {
+      return;
+    }
+    const idx: number = this.indexOfPlayHistory(bvid);
+    if (idx < 0) {
+      return;
+    }
+    const entry: PlayHistoryItem = this.playHistory[idx];
+    this.backfillHistoryMeta(entry);
+    if (entry.progress !== -1 && entry.progress !== progressSec) {
+      entry.progress = progressSec;
+      this.playHistoryVersion++;
+    }
+    this.savePlayHistoryFileAsync();
+  }
+
+  // 完播标记（plan R5）：当前条目 progress=-1 即时写盘（对齐 B 站「-1=看完」语义）；
+  // 已是 -1 则幂等跳过（含跳过写盘），避免播放 tick 高频重复落盘
+  private markCurrentHistoryCompleted(): void {
+    if (this.currentIndex < 0 || this.currentIndex >= this.playlist.length) {
+      return;
+    }
+    const bvid: string = this.playlist[this.currentIndex].bvid;
+    const idx: number = this.indexOfPlayHistory(bvid);
+    if (idx < 0) {
+      return;
+    }
+    const entry: PlayHistoryItem = this.playHistory[idx];
+    if (entry.progress === -1) {
+      return;
+    }
+    this.backfillHistoryMeta(entry);
+    entry.progress = -1;
+    this.playHistoryVersion++;
+    Logger.log('player', 'history complete', `bvid=${bvid}`);
+    this.savePlayHistoryFileAsync();
+  }
+
+  // 播放历史 upsert（plan R3，play-history-progress 最关键修正）：
+  // 命中同 bvid 旧条目时**保留** progress/duration/cid（续播进度不被清零），仅刷新
+  // viewAt(秒)/title/cover/ownerName/sourceType 后置顶；未命中才新建（progress=0）。
+  // 重播已听完条目时 -1 → 0（不变式①：-1 仅由完播写入，重播 upsert 重置）。
+  // 仍仅在 playing 状态（AVPlayer 真实出声）触发
   private recordOnPlaying(video: BiliVideo): void {
     try {
-      const item: PlayHistoryItem = PlayHistoryItem.fromVideo(
-        video, this.resolveSourceType(video), Date.now());
+      let existing: PlayHistoryItem | undefined = undefined;
       for (let i = this.playHistory.length - 1; i >= 0; i--) {
-        if (this.playHistory[i].bvid === item.bvid) {
+        if (this.playHistory[i].bvid === video.bvid) {
+          if (existing === undefined) {
+            existing = this.playHistory[i];
+          }
           this.playHistory.splice(i, 1);
         }
+      }
+      let item: PlayHistoryItem;
+      if (existing !== undefined) {
+        existing.title = video.title;
+        existing.ownerName = video.ownerName;
+        existing.cover = video.cover;
+        existing.sourceType = this.resolveSourceType(video);
+        existing.viewAt = Math.floor(Date.now() / 1000);
+        if (video.cid > 0) {
+          existing.cid = video.cid;
+        }
+        if (video.duration > 0) {
+          existing.duration = video.duration;
+        }
+        if (existing.progress === -1) {
+          existing.progress = 0;
+        }
+        item = existing;
+      } else {
+        item = PlayHistoryItem.fromVideo(video, this.resolveSourceType(video), Date.now());
       }
       this.playHistory.unshift(item);
       if (this.playHistory.length > Constants.HISTORY_MAX) {
@@ -1206,15 +1360,9 @@ export class PlayerController {
       }
       this.playHistoryVersion++;
       hilog.info(Constants.LOG_DOMAIN, Constants.LOG_TAG,
-        'recordOnPlaying bvid=%{public}s source=%{public}d total=%{public}d',
-        item.bvid, item.sourceType, this.playHistory.length);
-      setTimeout((): void => {
-        try {
-          AppStore.savePlayHistoryFile(this.playHistory);
-        } catch (e) {
-          hilog.warn(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'savePlayHistoryFile failed');
-        }
-      }, 0);
+        'recordOnPlaying upsert bvid=%{public}s source=%{public}d progress=%{public}d total=%{public}d',
+        item.bvid, item.sourceType, item.progress, this.playHistory.length);
+      this.savePlayHistoryFileAsync();
     } catch (e) {
       hilog.warn(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'recordOnPlaying failed');
     }
@@ -1229,6 +1377,19 @@ export class PlayerController {
       hilog.warn(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'clearPlayHistory save failed');
     }
     this.emitUi();
+  }
+
+  // 单条删除（US3 FR-009）：按 bvid 移除一条历史，异步写盘；未命中静默。
+  // 面板条目自带左滑刷新，不在此处 emitUi（FR-014：clearPlayHistory 行为保持不变）
+  removePlayHistoryItem(bvid: string): void {
+    const idx: number = this.indexOfPlayHistory(bvid);
+    if (idx < 0) {
+      return;
+    }
+    this.playHistory.splice(idx, 1);
+    this.playHistoryVersion++;
+    Logger.log('player', 'history remove', `bvid=${bvid} left=${this.playHistory.length}`);
+    this.savePlayHistoryFileAsync();
   }
 
   searchLibrary(keyword: string): BiliVideo[] {

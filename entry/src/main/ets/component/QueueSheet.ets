@@ -3,6 +3,7 @@ import { BiliVideo } from '../model/BiliVideo';
 
 
 import { Constants } from '../service/Constants';
+import { Appearance } from '../service/Appearance';
 import { CoverThumb } from './CoverThumb';
 
 // 颜色全部使用 base/dark 双份颜色资源：浅色/深色外观下自动匹配（见 resources/base|dark/element/color.json）
@@ -78,6 +79,8 @@ export struct QueueSheet {
 
   @StorageLink('showQueueSheet') showQueueSheet: boolean = false;
   @StorageProp('isWideScreen') isWideScreen: boolean = false;
+  // 主题色（T016）：强调色运行时跟随外观设置（Appearance 写入 AppStorage），衍生色一律经 hexWithAlpha
+  @StorageProp('accentColor') accentColor: string = Constants.ACCENT_DEFAULT;
   private controller: PlayerController = PlayerController.getInstance();
 
   private textPrimary(): Resource {
@@ -90,6 +93,11 @@ export struct QueueSheet {
 
   private textDisabled(): Resource {
     return $r('app.color.text_disabled');
+  }
+
+  // 强调色淡底（对齐原 material_tint_primary 的 0x59≈0.349 alpha）：随主题色运行时衍生
+  private tintBg(): string {
+    return Appearance.hexWithAlpha(this.accentColor, 0.349);
   }
 
   // 播放列表检索：纯内存遍历，不发起任何网络请求
@@ -421,7 +429,7 @@ export struct QueueSheet {
             Button('添加并播放')
               .height(40)
               .margin({ left: 8 })
-              .backgroundColor($r('app.color.material_tint_primary'))
+              .backgroundColor(this.tintBg())
               .backdropBlur(20)
               .fontColor($r('app.color.text_primary'))
               .borderRadius(8)
@@ -463,7 +471,7 @@ export struct QueueSheet {
             Button(`移除所选(${this.selectedBvids.length})`)
               .height(36)
               .padding({ left: 14, right: 14 })
-              .backgroundColor(this.selectedBvids.length > 0 ? $r('app.color.material_tint_primary') : $r('app.color.btn_glass'))
+              .backgroundColor(this.selectedBvids.length > 0 ? this.tintBg() : $r('app.color.btn_glass'))
               .backdropBlur(20)
               .border({ width: 1, color: $r('app.color.btn_border') })
               .fontColor($r('app.color.text_primary'))
@@ -524,7 +532,7 @@ export struct QueueSheet {
                   if (this.selectMode) {
                     Checkbox()
                       .select(this.selectedBvids.indexOf(item.bvid) >= 0)
-                      .selectedColor($r('app.color.primary_color'))
+                      .selectedColor(this.accentColor)
                       .width(20)
                       .height(20)
                       .margin({ right: 8 })
@@ -542,7 +550,7 @@ export struct QueueSheet {
                     Row() {
                       Text(item.title)
                         .fontSize(14)
-                        .fontColor(index === this.currentIndex ? $r('app.color.primary_color') : this.textPrimary())
+                        .fontColor(index === this.currentIndex ? this.accentColor : this.textPrimary())
                         .maxLines(1)
                         .textOverflow({ overflow: TextOverflow.Ellipsis })
                         .layoutWeight(1)
@@ -680,7 +688,7 @@ export struct QueueSheet {
           .backgroundColor($r('app.color.btn_glass'))
           .backdropBlur(20)
           .border({ width: 1, color: $r('app.color.btn_border') })
-          .fontColor($r('app.color.primary_color'))
+          .fontColor(this.accentColor)
           .borderRadius(8)
           .fontSize(13)
           .onClick(() => {
