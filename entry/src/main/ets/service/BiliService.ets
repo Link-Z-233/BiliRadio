@@ -1,6 +1,4 @@
 import { http } from '@kit.NetworkKit';
-import { fileIo as fs } from '@kit.CoreFileKit';
-import { common } from '@kit.AbilityKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { BiliVideo } from '../model/BiliVideo';
@@ -81,13 +79,6 @@ export class SeasonMeta {
   cover: string = '';
   seasonId: number = 0;
 }
-
-class CacheEntry {
-  name: string = '';
-  mtimeMs: number = 0;
-  size: number = 0;
-}
-
 
 function buildHeaders(): Record<string, string> {
   const headers: Record<string, string> = {
@@ -334,31 +325,6 @@ function cleanTitle(title: string): string {
   t = t.split('<em class="keyword">').join('');
   t = t.split('</em>').join('');
   return t;
-}
-
-function isValidMediaFile(localPath: string): boolean {
-  try {
-    const stat: fs.Stat = fs.statSync(localPath);
-    if (stat.size < 1024) {
-      return false;
-    }
-    const file: fs.File = fs.openSync(localPath, fs.OpenMode.READ_ONLY);
-    try {
-      const buf: ArrayBuffer = new ArrayBuffer(12);
-      fs.readSync(file.fd, buf);
-      const bytes: Uint8Array = new Uint8Array(buf);
-      const tag: string = String.fromCharCode(bytes[4], bytes[5], bytes[6], bytes[7]);
-      return tag === 'ftyp';
-    } finally {
-      fs.closeSync(file);
-    }
-  } catch (e) {
-    return false;
-  }
-}
-
-function isMediaCacheName(name: string): boolean {
-  return name.endsWith('.m4a') || name.endsWith('.mp4');
 }
 
 export class BiliService {
@@ -1776,95 +1742,5 @@ export class BiliService {
     const urls: string[] = await BiliService.fetchDurlCandidates(bvid, cid);
     Logger.log('player', 'resolveAudioTrack', `bvid=${bvid} cid=${cid} tier=${Number(tier)} source=durl`);
     return new ResolvedAudio(0, urls, [], 'durl');
-  }
-
-  // 缓存优先（US2）：本地已有完整可用的缓存文件（dash 下载期的 .m4a / durl 兜底的 .mp4）则返回路径，否则空串
-  static cachedAudioPath(bvid: string): string {
-    try {
-      const context = getContext() as common.UIAbilityContext;
-      const names: string[] = [`${bvid}.m4a`, `${bvid}.mp4`];
-      for (let i = 0; i < names.length; i++) {
-        const path: string = `${context.cacheDir}/${names[i]}`;
-        if (fs.accessSync(path) && isValidMediaFile(path)) {
-          hilog.info(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'stream: reuse cached file: %{public}s', path);
-          return path;
-        }
-      }
-    } catch (e) {}
-    return '';
-  }
-
-  static cacheSizeMB(): number {
-    try {
-      const context = getContext() as common.UIAbilityContext;
-      const names: string[] = fs.listFileSync(context.cacheDir);
-      let total: number = 0;
-      for (let i = 0; i < names.length; i++) {
-        if (!isMediaCacheName(names[i])) {
-          continue;
-        }
-        try {
-          const stat: fs.Stat = fs.statSync(`${context.cacheDir}/${names[i]}`);
-          total += stat.size;
-        } catch (e) {}
-      }
-      return total / Constants.BYTES_PER_MB;
-    } catch (e) {
-      return 0;
-    }
-  }
-
-  static clearAllCache(): void {
-    try {
-      const context = getContext() as common.UIAbilityContext;
-      const names: string[] = fs.listFileSync(context.cacheDir);
-      for (let i = 0; i < names.length; i++) {
-        if (!isMediaCacheName(names[i])) {
-          continue;
-        }
-        try { fs.unlinkSync(`${context.cacheDir}/${names[i]}`); } catch (e) {}
-      }
-    } catch (e) {}
-  }
-
-  static cleanCache(keepPath: string): void {
-    try {
-      const context = getContext() as common.UIAbilityContext;
-      const names: string[] = fs.listFileSync(context.cacheDir);
-      const entries: CacheEntry[] = [];
-      let totalSize: number = 0;
-      for (let i = 0; i < names.length; i++) {
-        if (!isMediaCacheName(names[i])) {
-          continue;
-        }
-        try {
-          const path: string = `${context.cacheDir}/${names[i]}`;
-          const stat: fs.Stat = fs.statSync(path);
-          const entry: CacheEntry = new CacheEntry();
-          entry.name = names[i];
-          entry.mtimeMs = stat.mtime;
-          entry.size = stat.size;
-          entries.push(entry);
-          totalSize += stat.size;
-        } catch (e) {}
-      }
-      if (totalSize < Constants.MAX_CACHE_BYTES) {
-        return;
-      }
-      entries.sort((a: CacheEntry, b: CacheEntry): number => a.mtimeMs - b.mtimeMs);
-      for (let i = 0; i < entries.length; i++) {
-        if (totalSize < Constants.TARGET_CACHE_BYTES) {
-          break;
-        }
-        const path: string = `${context.cacheDir}/${entries[i].name}`;
-        if (path === keepPath) {
-          continue;
-        }
-        try {
-          fs.unlinkSync(path);
-          totalSize -= entries[i].size;
-        } catch (e) {}
-      }
-    } catch (e) {}
   }
 }

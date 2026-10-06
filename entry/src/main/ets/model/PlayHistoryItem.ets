@@ -20,7 +20,7 @@ export class PlayHistoryItem {
   progress: number = 0;
   // 总时长（秒）：0 = 未知（prepared 后由播放器真实时长回填）
   duration: number = 0;
-  // 分P标识：0 = 未知（流式路径取 currentCid、本地缓存路径取视频信息回填）
+  // 分P标识：0 = 未知（流式路径取 currentCid 回填）
   cid: number = 0;
 
   // playedAtMs 为毫秒时间戳（调用方传 Date.now()），内部转秒存入 viewAt

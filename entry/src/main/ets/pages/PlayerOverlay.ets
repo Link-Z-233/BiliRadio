@@ -396,12 +396,9 @@ export struct PlayerOverlay {
     return $r('sys.symbol.order_play');
   }
 
-  // 音质入口按钮短名（T017，替代波形图标）：本地缓存来源 →「本地」；dash 流式 → 当前音轨码精确档名
+  // 音质入口按钮短名（T017，替代波形图标）：dash 流式 → 当前音轨码精确档名
   // （trackLabel 可显示 Hi-Res/杜比，比按档位归并的 label 更精确）；其余（未起播/未知）→「默认」
   private qualityEntryLabel(): string {
-    if (this.currentTrackSource === 'local') {
-      return '本地';
-    }
     if (this.currentTrackSource === 'dash') {
       return AudioQuality.trackLabel(this.currentQualityCode);
     }
@@ -580,7 +577,7 @@ export struct PlayerOverlay {
   }
 
   // 音质面板（audio-quality-settings FR-005）：dash 源列出实际下发音轨（当前档高亮，点选换档并写回默认）；
-  // local 源显示本地缓存占位、durl/空闲源显示默认占位，均无可选项；
+  // durl/空闲源显示默认占位，无可选项；
   // 未登录时高档位由服务端决定是否下发，面板天然只显示实际可用音轨（US4 不额外提示）
   @Builder
   qualityPanel() {
@@ -611,16 +608,6 @@ export struct PlayerOverlay {
             }, (track: AudioTrack) => `${track.id}`)
           }
           .width('100%')
-        } else if (this.currentTrackSource === 'local') {
-          Text('本地缓存')
-            .fontSize(15)
-            .fontColor($r('app.color.text_primary'))
-            .margin({ bottom: 6 })
-          Text('本地缓存播放不区分音质')
-            .fontSize(13)
-            .fontColor(this.textSecondary())
-            .textAlign(TextAlign.Center)
-            .width('100%')
         } else {
           Text('默认')
             .fontSize(15)
@@ -1200,8 +1187,8 @@ export struct PlayerOverlay {
                 this.showMode = true;
               })
 
-              // 音质入口（audio-quality-settings FR-005 + T017）：直接显示当前音质档位短名
-              // （本地缓存显「本地」）；dash 多音轨可用时以主题色高亮示意
+              // 音质入口（audio-quality-settings FR-005 + T017）：直接显示当前音质档位短名；
+              // dash 多音轨可用时以主题色高亮示意
               Row() {
                 Text(this.qualityEntryLabel())
                   .fontSize(13)

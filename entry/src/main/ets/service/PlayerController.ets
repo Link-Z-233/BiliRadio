@@ -80,7 +80,7 @@ export class PlayerController {
   // —— 音质状态（audio-quality-settings，随 emitUi 广播供页面 syncFrom 读取）——
   availableTracks: AudioTrack[] = [];      // 当前曲目 dash 可用音轨（durl/local 为空数组）
   currentQualityCode: number = 0;          // 实际生效 qn 码（30250/30251/30280/30232/30216；durl/local=0）
-  currentTrackSource: string = '';         // 'dash' | 'durl' | 'local'；未播放为 ''
+  currentTrackSource: string = '';         // 'dash' | 'durl'；未播放为 ''
   private currentCid: number = 0;          // 当前曲目 cid（切档零额外视频信息请求）
   // 最近一次取流请求档位：网络稳定切换目标档与之相同则跳过（避免无谓换流中断）
   private currentRequestedTier: QualityTier = QualityTier.MAX;
@@ -280,8 +280,6 @@ export class PlayerController {
         this.playIndex(autoStartIndex, autoStartPos).catch((): void => {});
       }
 
-      BiliService.cleanCache('');
-
       // 网络稳定切换监听（audio-quality-settings FR-010）：进程生命周期内单例注册，
       // 网络在 Wi-Fi/流量间稳定切换后按新网络默认档自动换流（失败由 setQualityTier 回滚不打断）
       NetUtil.watchStableNetworkType((isWifi: boolean): void => {
@@ -429,16 +427,6 @@ export class PlayerController {
       item.desc = video.desc;
     }
     this.emitUi();
-  }
-
-  // 缓存秒播路径的后台元数据刷新：不阻塞本地文件开播
-  private enrichTrackMeta(item: BiliVideo, token: number): void {
-    BiliService.fetchVideoInfo(item.bvid).then((video: BiliVideo): void => {
-      if (token !== this.loadToken) {
-        return;
-      }
-      this.applyTrackMeta(item, video);
-    }).catch((): void => {});
   }
 
   // 流式开播带重试（US2）：同一 URL 重试一次仍失败则轮换下一备选直链；全部失败抛最后错误，
@@ -609,52 +597,38 @@ export class PlayerController {
           return;
         }
       }
-      // 缓存优先（US2）：本地已有完整缓存文件直接秒播（现状本地播放路径保留）；
-      // 本地文件固定音质，来源标记 local（面板显示「本地缓存」占位，不参与自动换档）
-      const localPath: string = BiliService.cachedAudioPath(item.bvid);
-      if (localPath !== '') {
-        this.currentTrackSource = 'local';
-        this.availableTracks = [];
-        this.currentQualityCode = 0;
-        this.emitUi();
-        this.enrichTrackMeta(item, token);
-        item.audioUrl = localPath;
-        await this.player.setSource(localPath);
-      } else {
-        // 流式边下边播（US2）：现取直链（不持久化），缓冲态文案取代整段下载百分比；
-        // 视频信息只拉一次——先回填元数据拿到 cid，再按网络默认档解析音轨（audio-quality-settings FR-002）
-        this.statusMsg = '正在缓冲...';
-        this.emitUi();
-        const video: BiliVideo = await BiliService.fetchVideoInfo(item.bvid);
-        if (token !== this.loadToken) {
-          return;
-        }
-        this.applyTrackMeta(item, video);
-        const tier: QualityTier = await this.readDefaultTierForNetwork();
-        if (token !== this.loadToken) {
-          return;
-        }
-        const result: ResolvedAudio = await BiliService.resolveAudioTrack(item.bvid, video.cid, tier);
-        if (token !== this.loadToken) {
-          return;
-        }
-        this.currentCid = video.cid;
-        this.availableTracks = result.tracks;
-        this.currentQualityCode = result.id;
-        this.currentTrackSource = result.source;
-        this.currentRequestedTier = tier;
-        Logger.log('player', 'playIndex quality',
-          `tier=${Number(tier)} qn=${result.id} source=${result.source} tracks=${result.tracks.length}`);
-        this.emitUi();
-        await this.openStreamWithRetry(result.urls);
+      // 流式边下边播（US2）：现取直链（不持久化），缓冲态文案取代整段下载百分比；
+      // 视频信息只拉一次——先回填元数据拿到 cid，再按网络默认档解析音轨（audio-quality-settings FR-002）
+      this.statusMsg = '正在缓冲...';
+      this.emitUi();
+      const video: BiliVideo = await BiliService.fetchVideoInfo(item.bvid);
+      if (token !== this.loadToken) {
+        return;
       }
+      this.applyTrackMeta(item, video);
+      const tier: QualityTier = await this.readDefaultTierForNetwork();
+      if (token !== this.loadToken) {
+        return;
+      }
+      const result: ResolvedAudio = await BiliService.resolveAudioTrack(item.bvid, video.cid, tier);
+      if (token !== this.loadToken) {
+        return;
+      }
+      this.currentCid = video.cid;
+      this.availableTracks = result.tracks;
+      this.currentQualityCode = result.id;
+      this.currentTrackSource = result.source;
+      this.currentRequestedTier = tier;
+      Logger.log('player', 'playIndex quality',
+        `tier=${Number(tier)} qn=${result.id} source=${result.source} tracks=${result.tracks.length}`);
+      this.emitUi();
+      await this.openStreamWithRetry(result.urls);
       if (token !== this.loadToken) {
         return;
       }
       this.mediaSession.updateTrack(item.bvid, item.title,
         item.duration > 0 ? item.duration * 1000 : 0, item.cover, item.ownerName);
       AppStore.savePlaylistFile(this.playlist, this.currentIndex, 0);
-      BiliService.cleanCache(localPath);
     } catch (err) {
       if (token !== this.loadToken) {
         return;
@@ -1254,7 +1228,7 @@ export class PlayerController {
   }
 
   // 条目元数据回填（plan R7）：duration 取播放器真实时长（this.duration 毫秒→秒，含 BiliVideo.duration
-  // 冷启动兜底已先经 upsert 写入）；cid 取 currentCid（流式路径）或队列条目 cid（本地缓存经 enrich 回填）中非零者。
+  // 冷启动兜底已先经 upsert 写入）；cid 取 currentCid（流式路径）或队列条目 cid 中非零者。
   // 调用时机（this.currentIndex/currentCid/duration 与目标条目一致）保证回填不串曲目
   private backfillHistoryMeta(entry: PlayHistoryItem): void {
     if (this.duration > 0) {

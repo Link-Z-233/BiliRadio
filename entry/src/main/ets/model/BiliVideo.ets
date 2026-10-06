@@ -5,7 +5,6 @@ export class BiliVideo {
   title: string = '';
   cover: string = '';
   duration: number = 0;
-  audioUrl: string = '';
   folderIds: number[] = [];
   seasonKeys: string[] = [];
   ownerMid: number = 0;

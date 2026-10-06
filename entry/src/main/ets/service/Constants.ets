@@ -85,9 +85,6 @@ export class Constants {
   // 完播阈值（play-history-progress FR-003/FR-004）：进度 ≥ 时长×该比例视为已听完（progress=-1），不暴露为设置
   static readonly PLAY_COMPLETE_RATIO: number = 0.95;
   static readonly PREV_SEEK_THRESHOLD_MS: number = 3000;
-  static readonly BYTES_PER_MB: number = 1048576;
-  static readonly MAX_CACHE_BYTES: number = 600 * 1024 * 1024;
-  static readonly TARGET_CACHE_BYTES: number = 400 * 1024 * 1024;
   static readonly CONNECT_TIMEOUT_MS: number = 15000;
   static readonly READ_TIMEOUT_MS: number = 30000;
   static readonly STREAM_TIMEOUT_MS: number = 120000;

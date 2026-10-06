@@ -1,6 +1,5 @@
 import { media } from '@kit.MediaKit';
 import { audio } from '@kit.AudioKit';
-import { fileIo as fs } from '@kit.CoreFileKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { Constants, sleep } from './Constants';
@@ -16,7 +15,6 @@ export class AudioPlayer {
   private _currentTime: number = 0;
   private _duration: number = 0;
   private _isPrepared: boolean = false;
-  private currentFd: number = -1;
   private desiredRate: number = 1.0;
   // 实例代际号（US2）：每次重建/销毁递增；setupCallbacks 捕获当代代际，
   // 回调先比对代际再更新共享状态，杜绝旧实例残余事件（timeUpdate/stateChange 等）串扰新剧集
@@ -30,13 +28,6 @@ export class AudioPlayer {
   get currentTime(): number { return this._currentTime; }
   get duration(): number { return this._duration; }
   get isPrepared(): boolean { return this._isPrepared; }
-
-  private closeFd(): void {
-    if (this.currentFd >= 0) {
-      try { fs.closeSync(this.currentFd); } catch (e) {}
-      this.currentFd = -1;
-    }
-  }
 
   private setupCallbacks(): void {
     if (this.avPlayer === undefined) return;
@@ -68,7 +59,6 @@ export class AudioPlayer {
         this._isPlaying = false;
         this._isPrepared = false;
         this.avPlayer = undefined;
-        this.closeFd();
       }
       if (this.onStateChange !== undefined) {
         this.onStateChange(state);
@@ -114,8 +104,7 @@ export class AudioPlayer {
     }
   }
 
-  // 换源前公共重建：释放旧实例与 fd、复位状态标志，新建 AVPlayer 并挂回调
-  // （本地 fdSrc 与远程流式两条数据源路径共用）
+  // 换源前公共重建：释放旧实例、复位状态标志，新建 AVPlayer 并挂回调
   private async recreatePlayer(): Promise<media.AVPlayer> {
     // 重建即换代际：旧实例（含尚未完成异步 release 的残余回调）立即失效
     this.generation++;
@@ -128,7 +117,6 @@ export class AudioPlayer {
       } catch (e) {}
       try { await this.avPlayer.release(); } catch (e) {}
       this.avPlayer = undefined;
-      this.closeFd();
     }
 
     this._isPrepared = false;
@@ -151,20 +139,6 @@ export class AudioPlayer {
     }
     this.setupCallbacks();
     return player;
-  }
-
-  // 本地缓存文件数据源（fdSrc 路径，签名与行为不变）
-  async setSource(filePath: string): Promise<void> {
-    const player: media.AVPlayer = await this.recreatePlayer();
-
-    const stat = fs.statSync(filePath);
-    const file = fs.openSync(filePath, fs.OpenMode.READ_ONLY);
-    this.currentFd = file.fd;
-    player.fdSrc = { fd: file.fd, offset: 0, length: stat.size } as media.AVFileDescriptor;
-
-    await this.waitForState('initialized', 8000);
-
-    await player.prepare();
   }
 
   // 远程流式数据源（US2）：CDN 直链 + Referer/UA 请求头，播放器内核边下边播、按需分段拉取（seek 由内核处理）；
@@ -222,7 +196,6 @@ export class AudioPlayer {
       try { await this.avPlayer.release(); } catch (e) {}
       this.avPlayer = undefined;
     }
-    this.closeFd();
     this._isPlaying = false;
     this._isPrepared = false;
     this._currentTime = 0;
@@ -257,6 +230,5 @@ export class AudioPlayer {
       try { await this.avPlayer.release(); } catch (e) {}
       this.avPlayer = undefined;
     }
-    this.closeFd();
   }
 }

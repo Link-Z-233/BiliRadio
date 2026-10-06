@@ -6,7 +6,6 @@ import { QrCode, QrEcc } from '../service/QrCode';
 import { AppStore } from '../service/AppStore';
 import { Appearance } from '../service/Appearance';
 import { BusinessError } from '@kit.BasicServicesKit';
-import { hilog } from '@kit.PerformanceAnalysisKit';
 import { common, OpenLinkOptions } from '@kit.AbilityKit';
 import { componentSnapshot } from '@kit.ArkUI';
 import { image } from '@kit.ImageKit';
@@ -75,7 +74,7 @@ export function SettingsPageBuilder() {
   SettingsPage()
 }
 
-// 设置页（NavDestination）：登录 / 本地缓存 / 播放设置 / 外观（含主题色板）/ 历史记录 / 关于
+// 设置页（NavDestination）：登录 / 播放设置 / 外观（含主题色板）/ 历史记录 / 关于
 // pushPathByName('settingsPage', param) 可带 'playHistory' / 'about' 直开对应面板
 @Component
 struct SettingsPage {
@@ -84,8 +83,6 @@ struct SettingsPage {
   @State loginName: string = '未登录';
   @State cookieInput: string = '';
   @State statusMsg: string = '';
-  @State cacheText: string = '';
-  @State cacheSubText: string = '';
   @State qrStatus: string = '';
   @State qrExpired: boolean = false;
   @State qrUrl: string = '';
@@ -171,7 +168,6 @@ struct SettingsPage {
         this.playHistorySource.setItems(this.playHistoryItems);
       }
     }, 'SettingsPage');
-    this.refreshCacheText();
     this.logCount = Logger.count();
   }
 
@@ -181,12 +177,6 @@ struct SettingsPage {
     this.unsubscribePlayer();
     this.unsubscribePlayer = (): void => {};
     this.stopPoll();
-  }
-
-  private refreshCacheText(): void {
-    const cacheMB: number = BiliService.cacheSizeMB();
-    this.cacheText = cacheMB > 0.5 ? `播放缓存 ${cacheMB.toFixed(1)} MB` : '暂无播放缓存';
-    this.cacheSubText = '播过的歌临时存放，可清理';
   }
 
   private refreshLoginState(): void {
@@ -1256,58 +1246,6 @@ struct SettingsPage {
           .borderRadius(12)
           .margin({ top: 12 })
         }
-
-        Text('本地与缓存')
-          .fontSize(15)
-          .fontColor(this.textPrimary())
-          .width('92%')
-          .margin({ top: 14, bottom: 8 })
-
-        Row() {
-          Column() {
-            Text(this.cacheText)
-              .fontSize(14)
-              .fontColor(this.textPrimary())
-            if (this.cacheSubText !== '') {
-              Text(this.cacheSubText)
-                .fontSize(12)
-                .fontColor(this.textSecondary())
-                .margin({ top: 3 })
-            }
-          }
-          .alignItems(HorizontalAlign.Start)
-          .layoutWeight(1)
-
-          if (this.cacheSubText !== '') {
-            Button('清播放缓存')
-              .height(34)
-              .padding({ left: 14, right: 14 })
-              .backgroundColor($r('app.color.btn_glass'))
-              .backdropBlur(20)
-              .border({ width: 1, color: $r('app.color.btn_border') })
-              .fontColor(this.textPrimary())
-              .borderRadius(17)
-              .fontSize(13)
-              .margin({ left: 8 })
-              .onClick(() => {
-                const clearedMB: number = BiliService.cacheSizeMB();
-                BiliService.clearAllCache();
-                this.refreshCacheText();
-                hilog.info(Constants.LOG_DOMAIN, Constants.LOG_TAG,
-                  'clearPlayCache clearedMB=%{public}s', clearedMB.toFixed(1));
-                this.getUIContext().getPromptAction().showToast({
-                  message: `已清除 ${clearedMB.toFixed(1)} MB`,
-                  duration: 2000
-                });
-              })
-          }
-        }
-        .width('92%')
-        .padding(14)
-        .backgroundColor($r('app.color.btn_glass'))
-        .backdropBlur(20)
-        .border({ width: 1, color: $r('app.color.btn_border') })
-        .borderRadius(12)
 
         Text('播放设置')
           .fontSize(15)
