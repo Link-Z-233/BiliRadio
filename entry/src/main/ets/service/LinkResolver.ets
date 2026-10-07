@@ -2,13 +2,15 @@
 // 职责：
 //   ① 分享文案前置抽取（extractBiliUrl）：从混排文本中抽出第一个 B 站域名 http(s) 链接并清除尾随标点；
 //   ② 短链判定与裸域名归一化（isBiliShortLink / normalizeShortLinkUrl）；
-//   ③ 短链解析（resolveShortLink）：maxRedirects:0 禁跟随重定向 + 直读 3xx Location（大小写不敏感、
-//      相对地址补全），迭代跟进 ≤3 跳，最终目标须为 bilibili.com 域名；会话级 LRU 缓存仅存成功结果；
-//      短链路径含视频号时零网络短路；正文兜底只提取 bilibili.com 完整 URL（禁止裸扫孤立 BV 号，防误播）；
+//   ③ 短链解析（resolveShortLink）：rcp 自动跟随重定向（autoRedirect:true，上限 5 跳）后取 effectiveUrl
+//      作为落地目标；目标须为 bilibili.com 域名且可被识别器分类；会话级 LRU 缓存仅存成功结果；短链路径含
+//      视频号时零网络短路；不用 @ohos.net.http：其 maxRedirects:0 在真机为「零配额」语义，首个 30x 即抛 2300047。
+//      引用：Bili23-Downloader（https://github.com/Scighosts/Bili23-Downloader）src/util/parse/parser/b23.py
+//      的 B23Parser——跟随重定向后取最终 URL（httpx follow_redirects=True + response.url），本文件方案与其对齐；
 //   ④ 目标识别（recognizeInput）：BV / av / 收藏夹 / 合集 / 系列 / UP 空间（含移动端形态），先命中先返回。
 // 纯函数 + 模块级缓存，无 UI 依赖；页面（AddSubscriptionSheet）仅做编排与分发。
 
-import { http } from '@kit.NetworkKit';
+import { rcp } from '@kit.RemoteCommunicationKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { Logger } from './Logger';
 import { Constants } from './Constants';
@@ -23,11 +25,10 @@ export class RecognizeResult {
   ownerMid: string = '';
 }
 
-// 短链解析结局：成功 | 网络失败 | 超出跳数 | 无有效目标 | 目标无法识别
+// 短链解析结局：成功 | 网络失败 | 无有效目标 | 目标无法识别
 export enum ShortLinkOutcome {
   OK = 'ok',
   NETWORK = 'network',
-  HOPS = 'hops',
   NO_TARGET = 'no-target',
   UNRECOGNIZED = 'unrecognized',
 }
@@ -186,7 +187,7 @@ export function normalizeShortLinkUrl(url: string): string {
 
 // —— 短链解析（FR-003 ~ FR-007 / plan.md D1/D3/D4/D6/D7/D8） ——
 
-const MAX_REDIRECT_HOPS: number = 3;
+const SHORT_LINK_MAX_REDIRECTS: number = 5;
 const SHORT_LINK_CACHE_MAX: number = 50;
 // 会话级缓存：键为 host 小写化的规范化短链；Map 与顺序数组同步维护插入序，命中先删后插实现 LRU；
 // 不持久化、不设 TTL，仅缓存 outcome='ok' 的结果
@@ -273,75 +274,32 @@ function cachePut(key: string, result: ShortLinkResult): void {
   }
 }
 
-// response.header 为 Object 且键大小写不定：收窄为 Record 后按候选大小写查找 location
-function readLocationHeader(header: Object): string {
-  const headers: Record<string, Object> = header as Record<string, Object>;
-  const candidates: string[] = ['location', 'Location', 'LOCATION'];
-  for (let i: number = 0; i < candidates.length; i++) {
-    const value: Object = headers[candidates[i]];
-    if (typeof value === 'string' && value !== '') {
-      return value;
+// 单次请求：走 rcp 自动跟随重定向（上限 SHORT_LINK_MAX_REDIRECTS 跳），从响应 effectiveUrl 取落地地址
+// ——引自 Bili23-Downloader src/util/parse/parser/b23.py 的 B23Parser：跟随重定向后取最终 URL
+//    （其 src/util/network/request.py 中 ResponseType.REDIRECT_URL → str(response.url)）。
+// 不用 @ohos.net.http：其响应不暴露最终 URL，而 maxRedirects:0 在真机上是「零配额」语义，首个 30x 即抛
+// 2300047「重定向次数达到上限」（2026-10-07 实机实测），Location 直读方案在该栈不可行；专用超时；主站同款 UA/Referer
+async function fetchShortLinkTarget(session: rcp.Session, url: string): Promise<rcp.Response> {
+  const headers: rcp.RequestHeaders = {
+    'user-agent': USER_AGENT,
+    'referer': REFERER
+  };
+  const configuration: rcp.Configuration = {
+    transfer: {
+      autoRedirect: true,
+      maxAutoRedirects: SHORT_LINK_MAX_REDIRECTS,
+      timeout: {
+        connectMs: Constants.SHORT_LINK_CONNECT_MS,
+        transferMs: Constants.SHORT_LINK_READ_MS
+      }
     }
-  }
-  return '';
+  };
+  const request: rcp.Request =
+    new rcp.Request(url, 'GET', headers, undefined, undefined, undefined, configuration);
+  return await session.fetch(request);
 }
 
-// 相对 Location 补全（D1）：按当前请求的协议+域名转为绝对地址
-function resolveLocationTarget(location: string, currentUrl: string): string {
-  const loc: string = location.trim();
-  if (new RegExp('^https?:\\/\\/', 'i').test(loc)) {
-    return loc;
-  }
-  const originMatch: RegExpExecArray | null = new RegExp('^(https?:\\/\\/[^\\/?#]+)', 'i').exec(currentUrl);
-  const origin: string = originMatch !== null ? originMatch[1] : 'https://b23.tv';
-  if (loc.startsWith('//')) {
-    // 协议相对地址 //host/path
-    const scheme: string = origin.substring(0, origin.indexOf('://'));
-    return `${scheme}:${loc}`;
-  }
-  if (loc.startsWith('/')) {
-    return `${origin}${loc}`;
-  }
-  return `${origin}/${loc}`;
-}
-
-// 正文兜底（D6 / FR-009）：仅当响应非 3xx（无 Location 可读）时启用；
-// 只提取正文中带 bilibili.com 域名（任意子域）的完整 URL 且须能被识别器分类，禁止裸扫孤立 BV 号
-function extractBiliSiteUrlFromBody(body: string): string {
-  const pattern: RegExp = new RegExp('https?:\\/\\/(?:[0-9A-Za-z-]+\\.)*bilibili\\.com\\/[^\\s"\'<>]+', 'gi');
-  let m: RegExpExecArray | null = pattern.exec(body);
-  while (m !== null) {
-    if (recognizeInput(m[0]).type !== '') {
-      return m[0];
-    }
-    m = pattern.exec(body);
-  }
-  return '';
-}
-
-// 单跳请求：maxRedirects:0 禁跟随重定向 + 直读 Location；专用超时；与主站一致的 UA/Referer 头
-async function requestShortLink(url: string): Promise<http.HttpResponse> {
-  const httpRequest: http.HttpRequest = http.createHttp();
-  try {
-    const response: http.HttpResponse = await httpRequest.request(url, {
-      method: http.RequestMethod.GET,
-      header: {
-        'User-Agent': USER_AGENT,
-        'Referer': REFERER,
-      },
-      usingCache: false,
-      expectDataType: http.HttpDataType.STRING,
-      connectTimeout: Constants.SHORT_LINK_CONNECT_MS,
-      readTimeout: Constants.SHORT_LINK_READ_MS,
-      maxRedirects: 0,
-    });
-    return response;
-  } finally {
-    httpRequest.destroy();
-  }
-}
-
-// 短链解析主链路：短路 → 缓存 → 迭代 302（≤3 跳）→ 正文兜底；失败按四类分型返回，不抛异常
+// 短链解析主链路：短路 → 缓存 → rcp 跟随重定向取 effectiveUrl → 识别；失败按分型返回，不抛异常
 export async function resolveShortLink(shortUrl: string): Promise<ShortLinkResult> {
   const normalized: string = normalizeShortLinkUrl(shortUrl);
   if (!isBiliShortLink(normalized)) {
@@ -360,48 +318,31 @@ export async function resolveShortLink(shortUrl: string): Promise<ShortLinkResul
     Logger.log('net', logSummary(normalized), '短链缓存命中');
     return cached;
   }
-  let current: string = normalized;
+  const session: rcp.Session = rcp.createSession();
   try {
-    for (let hop: number = 0; hop <= MAX_REDIRECT_HOPS; hop++) {
-      const response: http.HttpResponse = await requestShortLink(current);
-      Logger.log('net', logSummary(current), `HTTP ${response.responseCode}`);
-      const code: number = response.responseCode;
-      const location: string = readLocationHeader(response.header);
-      if (code >= 300 && code < 400 && location !== '') {
-        const target: string = resolveLocationTarget(location, current);
-        if (isBiliShortLink(target)) {
-          // Location 仍为短链域名：迭代跟进（上限 3 跳）
-          if (hop === MAX_REDIRECT_HOPS) {
-            return makeError(ShortLinkOutcome.HOPS, '短链跳转次数超出限制');
-          }
-          current = target;
-          continue;
-        }
-        if (isBiliSiteUrl(target)) {
-          const recognized: RecognizeResult = recognizeInput(target);
-          if (recognized.type === '') {
-            return makeError(ShortLinkOutcome.UNRECOGNIZED, '短链目标无法识别，暂不支持该类型页面');
-          }
-          const okResult: ShortLinkResult = makeOk(target);
-          cachePut(key, okResult);
-          return okResult;
-        }
-        return makeError(ShortLinkOutcome.NO_TARGET, '短链未指向有效的 B 站页面');
-      }
-      // 非 3xx 或无 Location：正文兜底（只提取可识别的 bilibili.com URL）
-      const body: string = response.result as string;
-      const extracted: string = extractBiliSiteUrlFromBody(body);
-      if (extracted === '') {
-        return makeError(ShortLinkOutcome.NO_TARGET, '短链未指向有效的 B 站页面');
-      }
-      const okResult: ShortLinkResult = makeOk(extracted);
-      cachePut(key, okResult);
-      return okResult;
+    const response: rcp.Response = await fetchShortLinkTarget(session, normalized);
+    const effective: string = response.effectiveUrl !== undefined ? response.effectiveUrl.toString() : '';
+    const targetSummary: string = effective !== '' ? ` → ${logSummary(effective)}` : '';
+    Logger.log('net', logSummary(normalized), `HTTP ${response.statusCode}${targetSummary}`);
+    // 未发生重定向或仍落在短链域名：短链无效或已过期（对齐 B23Parser 的 response==url 判定）
+    if (effective === '' || isBiliShortLink(effective)) {
+      return makeError(ShortLinkOutcome.NO_TARGET, '短链无效或已过期');
     }
-    return makeError(ShortLinkOutcome.HOPS, '短链跳转次数超出限制');
+    if (!isBiliSiteUrl(effective)) {
+      return makeError(ShortLinkOutcome.NO_TARGET, '短链未指向有效的 B 站页面');
+    }
+    const recognized: RecognizeResult = recognizeInput(effective);
+    if (recognized.type === '') {
+      return makeError(ShortLinkOutcome.UNRECOGNIZED, '短链目标无法识别，暂不支持该类型页面');
+    }
+    const okResult: ShortLinkResult = makeOk(effective);
+    cachePut(key, okResult);
+    return okResult;
   } catch (error) {
     const err = error as BusinessError;
     Logger.log('error', logSummary(normalized), `短链解析网络失败: ${err.message}`);
     return makeError(ShortLinkOutcome.NETWORK, '短链解析网络失败，请检查网络后重试');
+  } finally {
+    session.close();
   }
 }

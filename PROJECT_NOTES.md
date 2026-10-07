@@ -21,7 +21,7 @@
 - **修复说明**（对应原六条缺陷）：
   1. **前置抽取**（原 #2）：`extractBiliUrl` 在任何识别判断前，从分享文案抽取第一个 B 站域名（b23.tv / bili2233.cn / bilibili.com 及任意子域，忽略大小写，须带 http(s) 前缀）链接并清除尾随中英文标点；未抽到回退 trim 原文，短链与非短链分支统一使用清洗结果。
   2. **判定修正**（原 #1）：`isBiliShortLink` 按 host 精确判定（忽略大小写），补齐 bili2233.cn；无协议前缀的裸短链（如 `b23.tv/xxx`）自动补 `https://` 后处理。
-  3. **Location 解析**（原 #3）：`resolveShortLink` 请求设 `maxRedirects: 0` 禁跟随重定向，直读 3xx 响应头 `location`（键大小写不敏感、相对地址按当前短链协议+域名补全）；Location 仍为短链域名则迭代跟进（上限 3 跳）；最终目标须为 bilibili.com 域名；正文兜底仅在无 Location 时启用，且只提取可被识别器分类的 bilibili.com 完整 URL（禁止裸扫孤立 BV 号，防误播）。
+  3. **重定向解析**（原 #3，2026-10-07 实机返修）：初版 `maxRedirects: 0` 直读 Location 方案在真机不可行——`@ohos.net.http` 的 `maxRedirects: 0` 实为「零配额」语义，首个 30x 即抛 2300047「重定向次数达到上限」，30x 响应拿不到（文档写「禁用重定向」但行为如此，实机实测）。改用 rcp（`@kit.RemoteCommunicationKit`）自动跟随重定向（`autoRedirect: true` + `maxAutoRedirects: 5`）后读 `Response.effectiveUrl` 作为落地目标——**引用 Bili23-Downloader**（https://github.com/Scighosts/Bili23-Downloader，src/util/parse/parser/b23.py 的 B23Parser + src/util/network/request.py 的 `ResponseType.REDIRECT_URL` → `str(response.url)`），与本仓解析链路同源；未重定向或仍落短链域名判「短链无效或已过期」（对应 B23Parser 的 `response==url` 判定）；目标须为 bilibili.com 域名且可被识别器分类；原 Location 逐跳迭代 / 相对地址补全 / 正文兜底逻辑随之退役。
   4. **错误分型**（原 #4）：`ShortLinkResult` 结果模型区分网络失败 / 超出跳数 / 无有效目标 / 目标无法识别四类结局，各自携带互不重复的中文提示，不再静默降级 `return shortUrl`。
   5. **目标覆盖**（原 #5）：`recognizeInput` 迁入 LinkResolver 并扩展 av 号 URL 形态（`bilibili.com/video/av{数字}`）、`m.bilibili.com/space/{uid}` 移动端空间、lists/seriesdetail/collectiondetail host 放宽为 bilibili.com 任意子域；短链 path 含视频号（如 `b23.tv/BV…`）时零网络短路直达视频。
   6. **缓存与专用超时**（原 #6）：会话级 LRU 缓存（模块级 Map + 插入序数组，容量 50，仅缓存成功结果，命中先删后插、零网络请求，不持久化）；专用超时 `Constants.SHORT_LINK_CONNECT_MS / SHORT_LINK_READ_MS = 8000ms`（通用 15s/30s 保留不动）。
