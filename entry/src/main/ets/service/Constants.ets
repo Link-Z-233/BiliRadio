@@ -48,7 +48,6 @@ export class Constants {
   static readonly AS_IS_WIDE_SCREEN: string = 'isWideScreen';
 
   // —— AppStorage 瞬态 UI 键（弹层/多选等运行时状态，不持久化） ——
-  static readonly AS_SHOW_HISTORY: string = 'showHistory';
   static readonly AS_SHOW_SPEED: string = 'showSpeed';
   static readonly AS_SHOW_MODE: string = 'showMode';
   static readonly AS_PLAYLIST_SELECT_MODE: string = 'playlistSelectMode';

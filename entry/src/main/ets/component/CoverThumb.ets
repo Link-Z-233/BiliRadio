@@ -1,16 +1,18 @@
-// 封面缩略图：播放列表与播放历史共用的封面渲染（有封面显示图片，无封面显示 ♪ 占位）。
+// 封面缩略图：播放列表与播放历史共用的封面渲染（有封面显示图片，无封面显示 ♪ 占位——全类型唯一无图形态）。
 @Component
 export struct CoverThumb {
   @Prop cover: string = '';
   thumbSize: number = 44;
   radius: number = 8;
   highlight: boolean = false;
+  // raw=true 直接加载原始 URL、不拼缩略后缀（UP 头像/合集封面等 URL 拼后缀会 404 的场景）；默认 false 行为不变
+  raw: boolean = false;
 
   // 缩略图只有 44vp，却直接解码 B 站原图（常见 1920×1080）会让位图内存相差 30 倍以上。
   // 这里给 CDN 图片拼接尺寸后缀，让服务端下发小图：@宽w_高h_1c(居中裁切).webp
   private thumbUrl(): string {
     const url: string = this.cover;
-    if (url === '' || url.indexOf('hdslb.com') < 0 || url.indexOf('@') >= 0) {
+    if (this.raw || url === '' || url.indexOf('hdslb.com') < 0 || url.indexOf('@') >= 0) {
       return url;
     }
     const q: number = url.indexOf('?');

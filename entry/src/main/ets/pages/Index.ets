@@ -14,11 +14,15 @@ import { Constants } from '../service/Constants';
 struct Index {
   @StorageProp('statusBarHeight') statusBarHeight: number = 38;
   @StorageProp('navBarHeight') navBarHeight: number = 0;
-  @StorageLink('showPlayerOverlay') showPlayerOverlay: boolean = false; // key 与 Constants.AS_SHOW_PLAYER_OVERLAY 对应
+  @StorageLink('showPlayerOverlay') @Watch('onMiniVisibilityChanged') showPlayerOverlay: boolean = false; // key 与 Constants.AS_SHOW_PLAYER_OVERLAY 对应
   @StorageLink('showQueueSheet') showQueueSheet: boolean = false; // key 与 Constants.AS_SHOW_QUEUE_SHEET 对应
-  @StorageLink('onSettingsPage') onSettingsPage: boolean = false; // key 与 Constants.AS_ON_SETTINGS_PAGE 对应
+  @StorageLink('onSettingsPage') @Watch('onMiniVisibilityChanged') onSettingsPage: boolean = false; // key 与 Constants.AS_ON_SETTINGS_PAGE 对应
+  // US6/T022：胶囊显隐动画态——由显隐条件翻转驱动，animateTo 属性动画（Visibility 不参与 transition 机制故弃用）
+  @State miniHidden: boolean = false;
   private navPathStack: NavPathStack = new NavPathStack();
   private pageWidth: number = 0;
+  // US7/T024：QueueDrawer 注册的关闭句柄（先播滑出动画再卸载）；空句柄回退直接卸载
+  private queueClose: (() => void) | undefined = undefined;
   private wideListener: mediaquery.MediaQueryListener | undefined = undefined;
 
   aboutToAppear(): void {
@@ -98,10 +102,25 @@ struct Index {
     GripDetector.stop();
   }
 
+  // US6/T022：胶囊显隐条件（浮层展开或设置页在台）翻转时，以属性动画过渡 opacity/translateY；
+  // T021 已把 onSettingsPage 置位提前到导航转场开始，胶囊随之即时平滑出现/隐藏
+  private onMiniVisibilityChanged(): void {
+    const hidden: boolean = this.showPlayerOverlay || this.onSettingsPage;
+    this.getUIContext().animateTo({ duration: 250, curve: Curve.EaseOut }, (): void => {
+      this.miniHidden = hidden;
+    });
+  }
+
   // 拦截系统返回键：各浮层打开时先逐层关闭，而不是直接退出应用
   onBackPress(): boolean {
     if (AppStorage.get<boolean>(Constants.AS_SHOW_QUEUE_SHEET) === true) {
-      AppStorage.setOrCreate<boolean>(Constants.AS_SHOW_QUEUE_SHEET, false);
+      // US7/T024：返回键退出播放队列也走滑出动画（与遮罩点击一致）；句柄为空（如极端时序下
+      // 抽屉刚被卸载未及注册）回退直接置 false 卸载
+      if (this.queueClose !== undefined) {
+        this.queueClose();
+      } else {
+        AppStorage.setOrCreate<boolean>(Constants.AS_SHOW_QUEUE_SHEET, false);
+      }
       return true;
     }
     if (AppStorage.get<boolean>(Constants.AS_SHOW_PLAYER_OVERLAY) === true) {
@@ -157,18 +176,25 @@ struct Index {
       .padding({ top: this.statusBarHeight, bottom: this.navBarHeight })
 
       // 悬浮播放胶囊：底部对齐覆盖在内容之上，内容可从其后方滚过；
-      // 用 Visibility 而非卸载，避免 MiniPlayer 反复 mount 造成 PlayerController 订阅累积；
-      // 播放浮层展开或设置页在台时隐藏（US7）
+      // 恒挂载不卸载（避免 MiniPlayer 反复 mount 造成 PlayerController 订阅累积），
+      // 播放浮层展开或设置页在台时以 opacity/translateY 属性动画淡出（US6/T022），
+      // 透明时不响应点击；AS_MINI_PLAYER_VISIBLE 上报与 MINI_PLAYER_CLEARANCE 避让不变
       Column() {
         MiniPlayer()
       }
       .width('100%')
       .padding({ left: 16, right: 16 })
-      .visibility(this.showPlayerOverlay || this.onSettingsPage ? Visibility.None : Visibility.Visible)
+      .opacity(this.miniHidden ? 0 : 1)
+      .translate({ y: this.miniHidden ? 24 : 0 })
+      .hitTestBehavior(this.miniHidden ? HitTestMode.None : HitTestMode.Default)
 
       // 队列抽屉：仅内容层渲染；播放页展开时改由 PlayerOverlay 层渲染，避免被封面图层遮挡
       if (this.showQueueSheet && !this.showPlayerOverlay) {
-        QueueDrawer()
+        QueueDrawer({
+          onRegisterClose: (close: (() => void) | undefined): void => {
+            this.queueClose = close;
+          }
+        })
       }
 
       // 全屏播放层（KI-5 方案B）：API 24 上 bindContentCover(ModalPage) 挂载后渲染管线即断开

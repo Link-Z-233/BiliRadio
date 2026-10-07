@@ -14,16 +14,25 @@ export struct QueueDrawer {
   @StorageProp('statusBarHeight') statusBarHeight: number = 38; // key 与 Constants.AS_STATUS_BAR_HEIGHT 对应
   // 面板水平位移：进场 '100%'（屏幕右侧外）动画至 '0%'，退出反向；translate 百分比相对面板自身宽度
   @State panelOffsetX: string = '100%';
+  // US7/T023：关闭句柄注册回调——aboutToAppear 时向宿主上报 closeWithSlide（返回键路径复用滑出动画），
+  // aboutToDisappear 时上报 undefined 注销；未注册的宿主（PlayerOverlay 内实例）保持既有行为
+  onRegisterClose: (close: (() => void) | undefined) => void = (close: (() => void) | undefined): void => {
+  };
   private closing: boolean = false;
   private closeTimer: number = -1;
 
   aboutToAppear(): void {
+    this.onRegisterClose((): void => {
+      this.closeWithSlide();
+    });
     this.getUIContext().animateTo({ duration: DRAWER_SLIDE_MS, curve: Curve.EaseOut }, (): void => {
       this.panelOffsetX = '0%';
     });
   }
 
   aboutToDisappear(): void {
+    // 注销关闭句柄：宿主不再持有已卸载实例的引用
+    this.onRegisterClose(undefined);
     if (this.closeTimer >= 0) {
       clearTimeout(this.closeTimer);
       this.closeTimer = -1;

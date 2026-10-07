@@ -3,7 +3,6 @@ import { fileIo as fs } from '@kit.CoreFileKit';
 import { common } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { BiliVideo } from '../model/BiliVideo';
-import { UnfavoriteRecord } from '../model/UnfavoriteRecord';
 import { PlayHistoryItem } from '../model/PlayHistoryItem';
 import { Constants } from './Constants';
 import { FileUtil } from './FileUtil';
@@ -109,49 +108,6 @@ export class AppStore {
       hilog.warn(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'loadPlaylistFile failed');
     }
     return snapshot;
-  }
-
-  static loadUnfavoriteHistory(): UnfavoriteRecord[] {
-    const records: UnfavoriteRecord[] = [];
-    try {
-      const context = getContext() as common.UIAbilityContext;
-      const path: string = `${context.filesDir}/unfavorite_history.json`;
-      if (!fs.accessSync(path)) {
-        return records;
-      }
-      const content: string = FileUtil.readTextFile(path);
-      if (content === '') {
-        return records;
-      }
-      const root: Record<string, Object> = JSON.parse(content) as Record<string, Object>;
-      if (root['items'] !== undefined) {
-        const itemRecords: Object[] = root['items'] as Object[];
-        for (let i = 0; i < itemRecords.length; i++) {
-          const rec: Record<string, Object> = itemRecords[i] as Record<string, Object>;
-          records.push(UnfavoriteRecord.fromRecord(rec));
-        }
-      }
-    } catch (e) {
-      hilog.warn(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'loadUnfavoriteHistory failed');
-    }
-    return records;
-  }
-
-  static saveUnfavoriteHistory(items: UnfavoriteRecord[]): void {
-    try {
-      const context = getContext() as common.UIAbilityContext;
-      const path: string = `${context.filesDir}/unfavorite_history.json`;
-      const itemRecords: Array<Record<string, Object>> = [];
-      for (let i = 0; i < items.length; i++) {
-        itemRecords.push(items[i].toRecord());
-      }
-      const rec: Record<string, Object> = {
-        'items': itemRecords,
-      };
-      FileUtil.writeTextFile(path, JSON.stringify(rec));
-    } catch (e) {
-      hilog.warn(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'saveUnfavoriteHistory failed');
-    }
   }
 
   static loadPlayHistoryFile(): PlayHistoryItem[] {

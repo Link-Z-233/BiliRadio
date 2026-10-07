@@ -4,6 +4,7 @@ import { inputMethod } from '@kit.IMEKit';
 import { BiliService, UpInfo, SeasonMeta } from '../service/BiliService';
 import { BiliSession } from '../service/BiliSession';
 import { Subscription } from '../model/Subscription';
+import { BiliVideo } from '../model/BiliVideo';
 import { SubscriptionStore } from '../service/SubscriptionStore';
 import { Season } from '../model/Season';
 import { FavFolder } from '../model/FavFolder';
@@ -27,6 +28,13 @@ function recognizeInput(input: string): RecognizeResult {
   if (m !== null) {
     r.type = 'bv';
     r.id = m[0];
+    return r;
+  }
+  // av 号（忽略大小写，如 av170001 / AV170001），置于 BV 分支之后
+  m = new RegExp('^av(\\d+)$', 'i').exec(trimmed);
+  if (m !== null) {
+    r.type = 'av';
+    r.id = m[1];
     return r;
   }
   m = new RegExp('space\\.bilibili\\.com/(\\d+)/lists/(\\d+)').exec(trimmed);
@@ -68,7 +76,7 @@ function recognizeInput(input: string): RecognizeResult {
     r.id = m[1];
     return r;
   }
-  m = new RegExp('^(\\d{5,})$').exec(trimmed);
+  m = new RegExp('^(\\d+)$').exec(trimmed);
   if (m !== null) {
     r.type = 'up';
     r.id = m[1];
@@ -173,6 +181,9 @@ export struct AddSubscriptionSheet {
           case 'bv':
             this.playBv(parsed.id);
             break;
+          case 'av':
+            this.playAv(parsed.id);
+            break;
           case 'up':
             this.lookupUid(parsed.id);
             break;
@@ -207,6 +218,9 @@ export struct AddSubscriptionSheet {
       case 'bv':
         this.playBv(parsed.id);
         break;
+      case 'av':
+        this.playAv(parsed.id);
+        break;
       case 'up':
         this.lookupUid(parsed.id);
         break;
@@ -240,6 +254,30 @@ export struct AddSubscriptionSheet {
     });
   }
 
+  // av 号查询：经 view 接口 aid 参数归一化出 bvid 后，复用既有 playBv 播放链路
+  private playAv(avStr: string): void {
+    const aid: number = parseInt(avStr, 10);
+    if (isNaN(aid) || aid <= 0) {
+      promptAction.showToast({ message: 'av 号无效' });
+      return;
+    }
+    if (this.mainBusy) {
+      return;
+    }
+    this.mainBusy = true;
+    BiliService.fetchVideoInfoByAid(aid).then((video: BiliVideo): void => {
+      this.mainBusy = false;
+      if (video.bvid === '') {
+        promptAction.showToast({ message: '未查询到该 av 号对应的视频' });
+        return;
+      }
+      this.playBv(video.bvid);
+    }).catch((): void => {
+      this.mainBusy = false;
+      promptAction.showToast({ message: 'av 号查询失败' });
+    });
+  }
+
   private lookupUid(uidStr: string): void {
     const uid: number = parseInt(uidStr, 10);
     if (isNaN(uid) || uid <= 0) {
@@ -259,11 +297,14 @@ export struct AddSubscriptionSheet {
     this.seriesLoaded = false;
     this.upDetailView = false;
     BiliService.fetchUpInfo(uid).then((info: UpInfo): void => {
-      this.upInfo = info;
-      this.upName = info.name;
-      this.upFace = info.face;
       this.uidBusy = false;
       this.mainBusy = false;
+      // 查询结果出现包在 animateTo 中，配合结果区域 TransitionEffect 消除瞬间弹出
+      this.getUIContext().animateTo({ duration: 300, curve: Curve.EaseOut }, (): void => {
+        this.upInfo = info;
+        this.upName = info.name;
+        this.upFace = info.face;
+      });
       BiliService.fetchSeasonsList(uid).then((seasons: Season[]): void => {
         this.seasons = seasons;
         this.seasonsLoaded = true;
@@ -405,6 +446,29 @@ export struct AddSubscriptionSheet {
     this.emitSub(sub);
   }
 
+  // 一级↔二级视图切换统一走 animateTo，配合 build() 内各分支 TransitionEffect 实现层级转场
+  // （二级视图右侧滑入，一级视图左滑淡出，返回反向）
+  private enterFolderView(): void {
+    this.getUIContext().animateTo({ duration: 300, curve: Curve.Friction }, (): void => {
+      this.upDetailView = false;
+      this.folderView = true;
+    });
+  }
+
+  private enterUpDetailView(): void {
+    this.getUIContext().animateTo({ duration: 300, curve: Curve.Friction }, (): void => {
+      this.folderView = false;
+      this.upDetailView = true;
+    });
+  }
+
+  private backToMainView(): void {
+    this.getUIContext().animateTo({ duration: 300, curve: Curve.Friction }, (): void => {
+      this.folderView = false;
+      this.upDetailView = false;
+    });
+  }
+
   @Builder
   private sectionTitle(text: string) {
     Text(text)
@@ -418,7 +482,8 @@ export struct AddSubscriptionSheet {
   private upResultsView() {
     if (this.upInfo !== null) {
       Row() {
-        CoverThumb({ cover: this.upFace, thumbSize: 40, radius: 20 })
+        // UP 头像 URL 拼缩略后缀会 404，raw=true 直接加载原图
+        CoverThumb({ cover: this.upFace, thumbSize: 40, radius: 20, raw: true })
         Text(this.upName)
           .fontSize(15)
           .fontWeight(FontWeight.Medium)
@@ -447,7 +512,7 @@ export struct AddSubscriptionSheet {
   private mainView() {
     this.sectionTitle('添加订阅')
     Row() {
-      TextInput({ placeholder: '视频/UP主/收藏夹/合集/系列 链接，或 UP 主 UID', text: this.mainInput })
+      TextInput({ placeholder: '粘贴链接 / UP 主 UID / av 号', text: this.mainInput })
         .fontSize(14)
         .fontColor($r('app.color.text_primary'))
         .placeholderColor($r('app.color.placeholder_color'))
@@ -468,7 +533,7 @@ export struct AddSubscriptionSheet {
           .color(this.accentColor)
           .margin({ left: 10 })
       } else {
-        Text('载入')
+        Text('查询')
           .fontSize(14)
           .fontWeight(FontWeight.Medium)
           .fontColor(this.accentColor)
@@ -482,24 +547,30 @@ export struct AddSubscriptionSheet {
     .width('100%')
 
     if (this.upInfo !== null) {
-      this.sectionTitle(`${this.upName} 的合集与系列`)
-      this.upResultsView()
-      // 入口行：样式对齐「我的收藏夹」入口行，点击进入 UP 合集/系列二级视图（与 folderView 互斥）
-      Row() {
-        Text(`合集与系列 (${this.seasons.length + this.series.length})`)
-          .fontSize(14)
-          .fontColor($r('app.color.text_primary'))
-          .layoutWeight(1)
-        SymbolGlyph($r('sys.symbol.chevron_right'))
-          .fontSize(14)
-          .fontColor([$r('app.color.text_secondary')])
+      // 查询结果区域整体挂出现/消失过渡（透明度+位移入位），配合 lookupUid 内 animateTo
+      Column() {
+        this.sectionTitle(`${this.upName} 的合集与系列`)
+        this.upResultsView()
+        // 入口行：样式对齐「我的收藏夹」入口行，点击进入 UP 合集/系列二级视图（与 folderView 互斥）
+        Row() {
+          Text(`合集与系列 (${this.seasons.length + this.series.length})`)
+            .fontSize(14)
+            .fontColor($r('app.color.text_primary'))
+            .layoutWeight(1)
+          SymbolGlyph($r('sys.symbol.chevron_right'))
+            .fontSize(14)
+            .fontColor([$r('app.color.text_secondary')])
+        }
+        .width('100%')
+        .padding({ top: 10, bottom: 10 })
+        .onClick(() => {
+          this.enterUpDetailView();
+        })
       }
       .width('100%')
-      .padding({ top: 10, bottom: 10 })
-      .onClick(() => {
-        this.folderView = false;
-        this.upDetailView = true;
-      })
+      .alignItems(HorizontalAlign.Start)
+      .transition(TransitionEffect.OPACITY.combine(TransitionEffect.translate({ y: 12 }))
+        .animation({ duration: 300, curve: Curve.EaseOut }))
     }
 
     this.sectionTitle('我的收藏夹')
@@ -520,8 +591,7 @@ export struct AddSubscriptionSheet {
       .width('100%')
       .padding({ top: 10, bottom: 10 })
       .onClick(() => {
-        this.upDetailView = false;
-        this.folderView = true;
+        this.enterFolderView();
       })
     }
   }
@@ -533,7 +603,7 @@ export struct AddSubscriptionSheet {
         .fontSize(16)
         .fontColor([$r('app.color.text_primary')])
         .onClick(() => {
-          this.folderView = false;
+          this.backToMainView();
         })
       Text('我的收藏夹')
         .fontSize(16)
@@ -553,6 +623,8 @@ export struct AddSubscriptionSheet {
     } else {
       ForEach(this.folders, (f: FavFolder) => {
         Row() {
+          // 收藏夹无封面字段：统一走 CoverThumb ♪ 占位，与其余类型无封面形态一致
+          CoverThumb({ thumbSize: 40, radius: 8 })
           Column() {
             Text(f.title)
               .fontSize(14)
@@ -566,7 +638,7 @@ export struct AddSubscriptionSheet {
           }
           .alignItems(HorizontalAlign.Start)
           .layoutWeight(1)
-          .margin({ right: 8 })
+          .margin({ left: 10, right: 8 })
           Text('订阅')
             .fontSize(13)
             .fontWeight(FontWeight.Medium)
@@ -592,7 +664,7 @@ export struct AddSubscriptionSheet {
         .fontSize(16)
         .fontColor([$r('app.color.text_primary')])
         .onClick(() => {
-          this.upDetailView = false;
+          this.backToMainView();
         })
       Text(`${this.upName} 的合集与系列`)
         .fontSize(16)
@@ -622,6 +694,8 @@ export struct AddSubscriptionSheet {
       }
       ForEach(this.seasons, (s: Season) => {
         Row() {
+          // 合集封面 URL 拼缩略后缀会 404，raw=true 直接加载原图
+          CoverThumb({ cover: s.cover, thumbSize: 40, radius: 8, raw: true })
           Column() {
             Text(s.title)
               .fontSize(14)
@@ -635,7 +709,7 @@ export struct AddSubscriptionSheet {
           }
           .alignItems(HorizontalAlign.Start)
           .layoutWeight(1)
-          .margin({ right: 8 })
+          .margin({ left: 10, right: 8 })
           Text('订阅')
             .fontSize(13)
             .fontWeight(FontWeight.Medium)
@@ -656,6 +730,8 @@ export struct AddSubscriptionSheet {
       }
       ForEach(this.series, (s: Season) => {
         Row() {
+          // 系列封面 URL 拼缩略后缀会 404，raw=true 直接加载原图
+          CoverThumb({ cover: s.cover, thumbSize: 40, radius: 8, raw: true })
           Column() {
             Text(s.title)
               .fontSize(14)
@@ -669,7 +745,7 @@ export struct AddSubscriptionSheet {
           }
           .alignItems(HorizontalAlign.Start)
           .layoutWeight(1)
-          .margin({ right: 8 })
+          .margin({ left: 10, right: 8 })
           Text('订阅')
             .fontSize(13)
             .fontWeight(FontWeight.Medium)
@@ -691,11 +767,29 @@ export struct AddSubscriptionSheet {
     Scroll() {
       Column() {
         if (this.upDetailView) {
-          this.upDetailListView()
+          // 二级视图：右侧滑入，返回时右侧滑出（进出场同向）
+          Column() {
+            this.upDetailListView()
+          }
+          .width('100%')
+          .transition(TransitionEffect.translate({ x: '100%' })
+            .animation({ duration: 300, curve: Curve.Friction }))
         } else if (this.folderView) {
-          this.folderListView()
+          // 二级视图：右侧滑入，返回时右侧滑出（进出场同向）
+          Column() {
+            this.folderListView()
+          }
+          .width('100%')
+          .transition(TransitionEffect.translate({ x: '100%' })
+            .animation({ duration: 300, curve: Curve.Friction }))
         } else {
-          this.mainView()
+          // 一级视图：被二级覆盖时左滑淡出，返回时反向滑回
+          Column() {
+            this.mainView()
+          }
+          .width('100%')
+          .transition(TransitionEffect.translate({ x: '-25%' }).combine(TransitionEffect.OPACITY)
+            .animation({ duration: 300, curve: Curve.Friction }))
         }
       }
       .alignItems(HorizontalAlign.Start)

@@ -5,7 +5,6 @@ import { SecureStore } from './SecureStore';
 import { AppStore, PlaylistSnapshot } from './AppStore';
 import { MediaSession } from './MediaSession';
 import { BiliVideo } from '../model/BiliVideo';
-import { UnfavoriteRecord } from '../model/UnfavoriteRecord';
 import { PlayHistoryItem } from '../model/PlayHistoryItem';
 import { AudioTrack, AudioQuality, QualityTier, ResolvedAudio } from '../model/AudioQuality';
 
@@ -69,8 +68,6 @@ export class PlayerController {
   private uiListeners: Array<() => void> = [];
   // 与 uiListeners 按下标对应的 owner 标识（KI-5）：支撑同 owner 单槽覆盖
   private uiListenerOwners: Array<string> = [];
-  unfavoriteHistory: UnfavoriteRecord[] = [];
-  historyVersion: number = 0;
   playHistory: PlayHistoryItem[] = [];
   playHistoryVersion: number = 0;
   goToPlayerTab: (() => void) | undefined = undefined;
@@ -157,6 +154,17 @@ export class PlayerController {
     this.emitUi();
   }
 
+  // US5：无图模式开关切换后对当前曲目重发系统播控元数据（force 绕过同曲目去重守卫），使封面显示即时更新
+  refreshMediaSessionMetadata(): void {
+    if (this.currentIndex < 0 || this.currentIndex >= this.playlist.length) {
+      return;
+    }
+    const item: BiliVideo = this.playlist[this.currentIndex];
+    const dataSaver: boolean = AppStore.getNumber(Constants.KEY_DATA_SAVER, 0) === 1;
+    this.mediaSession.updateTrack(item.bvid, item.title,
+      item.duration > 0 ? item.duration * 1000 : 0, dataSaver ? '' : item.cover, item.ownerName, true);
+  }
+
   async init(): Promise<void> {
     if (this.inited) {
       return;
@@ -164,9 +172,6 @@ export class PlayerController {
     this.inited = true;
     try {
       await AppStore.init();
-
-      this.unfavoriteHistory = AppStore.loadUnfavoriteHistory();
-      this.historyVersion++;
 
       this.playHistory = AppStore.loadPlayHistoryFile();
       this.playHistoryVersion++;
@@ -626,8 +631,10 @@ export class PlayerController {
       if (token !== this.loadToken) {
         return;
       }
+      // US5：无图模式下系统播控不携带封面（空封面由 MediaSession 略过 mediaImage 字段，不传旧值）
+      const dataSaver: boolean = AppStore.getNumber(Constants.KEY_DATA_SAVER, 0) === 1;
       this.mediaSession.updateTrack(item.bvid, item.title,
-        item.duration > 0 ? item.duration * 1000 : 0, item.cover, item.ownerName);
+        item.duration > 0 ? item.duration * 1000 : 0, dataSaver ? '' : item.cover, item.ownerName);
       AppStore.savePlaylistFile(this.playlist, this.currentIndex, 0);
     } catch (err) {
       if (token !== this.loadToken) {
@@ -1108,7 +1115,6 @@ export class PlayerController {
     try {
       await BiliService.unfavorite(item.aid, item.folderIds);
       const folderCount: number = item.folderIds.length;
-      this.pushHistory(UnfavoriteRecord.fromVideo(item, Date.now()));
       this.playlist.splice(this.currentIndex, 1);
       this.playlistVersion++;
       if (this.playlist.length === 0) {
@@ -1146,54 +1152,6 @@ export class PlayerController {
       this.statusMsg = `取消收藏失败: ${error.message}`;
       this.emitUi();
     }
-  }
-
-  private pushHistory(record: UnfavoriteRecord): void {
-    for (let i = this.unfavoriteHistory.length - 1; i >= 0; i--) {
-      if (this.unfavoriteHistory[i].bvid === record.bvid) {
-        this.unfavoriteHistory.splice(i, 1);
-      }
-    }
-    this.unfavoriteHistory.unshift(record);
-    if (this.unfavoriteHistory.length > Constants.HISTORY_MAX) {
-      this.unfavoriteHistory = this.unfavoriteHistory.slice(0, Constants.HISTORY_MAX);
-    }
-    this.historyVersion++;
-    AppStore.saveUnfavoriteHistory(this.unfavoriteHistory);
-  }
-
-  async refavoriteFromHistory(index: number): Promise<void> {
-    if (index < 0 || index >= this.unfavoriteHistory.length) {
-      return;
-    }
-    if (!BiliSession.getInstance().isLogged()) {
-      this.statusMsg = '恢复收藏需要先登录';
-      this.emitUi();
-      return;
-    }
-    const record: UnfavoriteRecord = this.unfavoriteHistory[index];
-    this.statusMsg = '正在恢复收藏...';
-    this.emitUi();
-    try {
-      await BiliService.favorite(record.aid, record.folderIds);
-      this.unfavoriteHistory.splice(index, 1);
-      this.historyVersion++;
-      AppStore.saveUnfavoriteHistory(this.unfavoriteHistory);
-      this.statusMsg = `已恢复收藏「${record.title}」`;
-      this.emitUi();
-    } catch (err) {
-      const error = err as BusinessError;
-      this.statusMsg = `恢复收藏失败: ${error.message}`;
-      this.emitUi();
-    }
-  }
-
-  clearUnfavoriteHistory(): void {
-    this.unfavoriteHistory = [];
-    this.historyVersion++;
-    AppStore.saveUnfavoriteHistory(this.unfavoriteHistory);
-    this.statusMsg = '已清空取消收藏历史';
-    this.emitUi();
   }
 
   private resolveSourceType(video: BiliVideo): number {

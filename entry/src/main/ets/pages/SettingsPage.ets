@@ -15,7 +15,6 @@ import { CoverThumb } from '../component/CoverThumb';
 import { Constants } from '../service/Constants';
 import { Logger } from '../service/Logger';
 import { LogSheet } from '../component/LogSheet';
-import { UnfavoriteRecord } from '../model/UnfavoriteRecord';
 import { PlayHistoryItem } from '../model/PlayHistoryItem';
 import { BiliVideo } from '../model/BiliVideo';
 import { AudioQuality, QualityTier } from '../model/AudioQuality';
@@ -89,11 +88,6 @@ struct SettingsPage {
   @State oneKeyLogging: boolean = false;
   @State showAbout: boolean = false;
 
-  // —— 取消收藏历史 ——
-  @StorageLink('showHistory') showHistory: boolean = false; // key 与 Constants.AS_SHOW_HISTORY 对应
-  @State historyItems: UnfavoriteRecord[] = [];
-  @State historyVersion: number = -1;
-
   // —— 播放历史 ——
   @StorageLink('showPlayHistory') showPlayHistory: boolean = false; // key 与 Constants.AS_SHOW_PLAY_HISTORY 对应
   @State playHistoryItems: PlayHistoryItem[] = [];
@@ -147,8 +141,6 @@ struct SettingsPage {
   private unsubscribePlayer: () => void = (): void => {};
 
   aboutToAppear(): void {
-    // US7：设置页在台标志——驱动首页播放胶囊在本页隐藏
-    AppStorage.setOrCreate<boolean>(Constants.AS_ON_SETTINGS_PAGE, true);
     this.refreshLoginState();
     this.autoPlayOnStart = AppStore.getNumber(Constants.KEY_AUTO_PLAY_ON_START, 0) === 1;
     this.interruptResume = AppStore.getNumber(Constants.KEY_INTERRUPT_RESUME, 0) === 1;
@@ -158,10 +150,6 @@ struct SettingsPage {
     this.cellularQuality = this.readStoredTier(Constants.KEY_CELLULAR_AUDIO_QUALITY, QualityTier.Q132K);
     this.unsubscribePlayer = this.controller.subscribe((): void => {
       this.refreshLoginState();
-      if (this.showHistory && this.historyVersion !== this.controller.historyVersion) {
-        this.historyVersion = this.controller.historyVersion;
-        this.historyItems = this.controller.unfavoriteHistory.slice(0);
-      }
       if (this.showPlayHistory && this.playHistoryVersion !== this.controller.playHistoryVersion) {
         this.playHistoryVersion = this.controller.playHistoryVersion;
         this.playHistoryItems = this.controller.playHistory.slice(0);
@@ -172,8 +160,6 @@ struct SettingsPage {
   }
 
   aboutToDisappear(): void {
-    // US7：离开设置页恢复胶囊展示
-    AppStorage.setOrCreate<boolean>(Constants.AS_ON_SETTINGS_PAGE, false);
     this.unsubscribePlayer();
     this.unsubscribePlayer = (): void => {};
     this.stopPoll();
@@ -228,12 +214,6 @@ struct SettingsPage {
       AppStore.putNumber(Constants.KEY_CELLULAR_AUDIO_QUALITY, tier);
     }
     this.showQualitySheet = false;
-  }
-
-  private openHistory(): void {
-    this.historyVersion = this.controller.historyVersion;
-    this.historyItems = this.controller.unfavoriteHistory.slice(0);
-    this.showHistory = true;
   }
 
   private openPlayHistory(): void {
@@ -362,17 +342,6 @@ struct SettingsPage {
         }
       }
     });
-  }
-
-  private formatRemovedAt(removedAt: number): string {
-    const d: Date = new Date(removedAt);
-    const month: number = d.getMonth() + 1;
-    const day: number = d.getDate();
-    const hour: number = d.getHours();
-    const minute: number = d.getMinutes();
-    const hh: string = hour < 10 ? `0${hour}` : `${hour}`;
-    const mi: string = minute < 10 ? `0${minute}` : `${minute}`;
-    return `${month}-${day} ${hh}:${mi}`;
   }
 
   private async saveCookie(raw: string): Promise<void> {
@@ -782,127 +751,6 @@ struct SettingsPage {
     .height('100%')
     .backgroundColor($r('app.color.sheet_background'))
     .backdropBlur(20)
-  }
-
-  // 取消收藏历史浮层：半透明毛玻璃，覆盖在设置页之上
-  @Builder
-  historyPanel() {
-    Column() {
-      Row() {
-        Text(`取消收藏历史 (${this.historyItems.length})`)
-          .fontSize(17)
-          .fontWeight(FontWeight.Bold)
-          .fontColor($r('app.color.text_primary'))
-          .layoutWeight(1)
-
-        if (this.historyItems.length > 0) {
-          Button('清空')
-            .height(32)
-            .padding({ left: 12, right: 12 })
-            .backgroundColor($r('app.color.btn_glass'))
-            .backdropBlur(20)
-            .border({ width: 1, color: $r('app.color.btn_border') })
-            .fontColor($r('app.color.danger_red'))
-            .borderRadius(16)
-            .fontSize(12)
-            .margin({ right: 8 })
-            .onClick(() => {
-              this.controller.clearUnfavoriteHistory();
-              this.historyVersion = this.controller.historyVersion;
-              this.historyItems = [];
-            })
-        }
-
-        Button('关闭')
-          .height(32)
-          .padding({ left: 12, right: 12 })
-          .backgroundColor($r('app.color.btn_glass'))
-          .backdropBlur(20)
-          .border({ width: 1, color: $r('app.color.btn_border') })
-          .fontColor(this.textPrimary())
-          .borderRadius(16)
-          .fontSize(12)
-          .onClick(() => {
-            this.showHistory = false;
-          })
-      }
-      .width('100%')
-      .padding({ left: 16, right: 16, top: 16, bottom: 8 })
-
-      if (!BiliSession.getInstance().isLogged() && this.historyItems.length > 0) {
-        Text('当前未登录，恢复收藏需要先登录')
-          .fontSize(12)
-          .fontColor(this.accentColor)
-          .width('100%')
-          .padding({ left: 16, bottom: 4 })
-      }
-
-      if (this.historyItems.length === 0) {
-        Column() {
-          Text('暂无取消收藏记录')
-            .fontSize(14)
-            .fontColor($r('app.color.text_secondary'))
-            .margin({ top: 80 })
-        }
-        .width('100%')
-        .alignItems(HorizontalAlign.Center)
-        .layoutWeight(1)
-      } else {
-        List({ space: 0 }) {
-          ForEach(this.historyItems, (record: UnfavoriteRecord, index: number) => {
-            ListItem() {
-              Row() {
-                Column() {
-                  Text(record.title)
-                    .fontSize(14)
-                    .fontColor($r('app.color.text_primary'))
-                    .maxLines(1)
-                    .textOverflow({ overflow: TextOverflow.Ellipsis })
-                  Text(`取消于 ${this.formatRemovedAt(record.removedAt)} · ${record.bvid}`)
-                    .fontSize(11)
-                    .fontColor($r('app.color.text_secondary'))
-                    .margin({ top: 3 })
-                }
-                .alignItems(HorizontalAlign.Start)
-                .layoutWeight(1)
-
-                Button('恢复收藏')
-                  .height(32)
-                  .padding({ left: 12, right: 12 })
-                  .backgroundColor($r('app.color.btn_glass'))
-                  .backdropBlur(20)
-                  .border({ width: 1, color: $r('app.color.btn_border') })
-                  .fontColor(this.accentColor)
-                  .borderRadius(16)
-                  .fontSize(12)
-                  .margin({ left: 8 })
-                  .onClick(() => {
-                    this.controller.refavoriteFromHistory(index);
-                  })
-              }
-              .width('100%')
-              .padding({ left: 16, right: 16, top: 12, bottom: 12 })
-            }
-          }, (record: UnfavoriteRecord) => `${record.bvid}_${record.removedAt}`)
-        }
-        .width('100%')
-        .layoutWeight(1)
-      }
-
-      Text(this.controller.statusMsg)
-        .fontSize(12)
-        .fontColor($r('app.color.text_secondary'))
-        .width('100%')
-        .padding({ left: 16, right: 16, top: 6, bottom: 12 })
-        .maxLines(1)
-        .textOverflow({ overflow: TextOverflow.Ellipsis })
-    }
-    .width('100%')
-    .height('100%')
-    .backgroundColor($r('app.color.sheet_background'))
-    .backdropBlur(20)
-    .padding({ bottom: this.miniPlayerVisible ? Constants.MINI_PLAYER_CLEARANCE : 16 })
-    .zIndex(3)
   }
 
   // 播放历史面板（bindSheet 呈现，与播放页详情 Sheet 同构）：最近播放倒序，点击回放，清空需二次确认
@@ -1377,7 +1225,7 @@ struct SettingsPage {
             .margin({ top: 6 })
         }
 
-        Text('省流量设置')
+        Text('无图与网络设置')
           .fontSize(15)
           .fontColor(this.textPrimary())
           .width('92%')
@@ -1385,10 +1233,10 @@ struct SettingsPage {
 
         Row() {
           Column() {
-            Text('省流量模式')
+            Text('无图模式')
               .fontSize(14)
               .fontColor(this.textPrimary())
-            Text('不加载歌曲封面与UP主头像')
+            Text('播放页、播放列表与系统播控均不显示封面与头像')
               .fontSize(12)
               .fontColor(this.textSecondary())
               .margin({ top: 2 })
@@ -1402,6 +1250,8 @@ struct SettingsPage {
               this.dataSaver = isOn;
               AppStore.putNumber(Constants.KEY_DATA_SAVER, isOn ? 1 : 0);
               this.controller.refreshUi();
+              // US5：开关切换即时刷新——对当前播放曲目重发一次系统播控元数据
+              this.controller.refreshMediaSessionMetadata();
             })
         }
         .width('92%')
@@ -1520,31 +1370,6 @@ struct SettingsPage {
         })
 
         Row() {
-          Text('取消收藏历史')
-            .fontSize(15)
-            .fontColor(this.textPrimary())
-          Blank()
-          Text(this.controller.unfavoriteHistory.length > 0
-            ? `${this.controller.unfavoriteHistory.length} 条` : '')
-            .fontSize(13)
-            .fontColor(this.textSecondary())
-          Text('›')
-            .fontSize(16)
-            .fontColor(this.textSecondary())
-            .margin({ left: 4 })
-        }
-        .width('92%')
-        .padding(14)
-        .backgroundColor($r('app.color.btn_glass'))
-        .backdropBlur(20)
-        .border({ width: 1, color: $r('app.color.btn_border') })
-        .borderRadius(12)
-        .margin({ top: 12 })
-        .onClick(() => {
-          this.openHistory();
-        })
-
-        Row() {
           Text('关于')
             .fontSize(15)
             .fontColor(this.textPrimary())
@@ -1596,9 +1421,6 @@ struct SettingsPage {
       preferType: SheetType.BOTTOM
     })
 
-      if (this.showHistory) {
-        this.historyPanel()
-      }
       }
       .width('100%')
       .height('100%')
@@ -1607,10 +1429,27 @@ struct SettingsPage {
         dragBar: true,
         showClose: false,
         backgroundColor: $r('app.color.sheet_background'),
-        preferType: SheetType.BOTTOM
+        preferType: SheetType.BOTTOM,
+        shouldDismiss: (sheetDismiss: SheetDismiss): void => {
+          // US4 返回层级拦截：播放浮层打开时拒绝本次关闭请求，转而关闭浮层并保持历史面板打开；
+          // 浮层未打开时放行关闭（下拉/遮罩/返回键等交互关闭均经此回调）
+          if (AppStorage.get<boolean>(Constants.AS_SHOW_PLAYER_OVERLAY) === true) {
+            AppStorage.setOrCreate<boolean>(Constants.AS_SHOW_PLAYER_OVERLAY, false);
+            return;
+          }
+          sheetDismiss.dismiss();
+        }
       })
     }
     .title('设置')
+    .onWillAppear(() => {
+      // US7/T021：设置页在台标志提前到转场开始时置位——驱动首页播放胶囊在本页隐藏
+      AppStorage.setOrCreate<boolean>(Constants.AS_ON_SETTINGS_PAGE, true);
+    })
+    .onWillDisappear(() => {
+      // US7/T021：返回转场开始即复位，配合 Index 侧胶囊显隐动画随转场即时平滑出现
+      AppStorage.setOrCreate<boolean>(Constants.AS_ON_SETTINGS_PAGE, false);
+    })
     .onReady((ctx: NavDestinationContext) => {
       this.navPathStack = ctx.pathStack;
       if (ctx.pathInfo.param === undefined || ctx.pathInfo.param === null) {
@@ -1634,10 +1473,6 @@ struct SettingsPage {
       }
       if (this.showPlayHistory) {
         this.showPlayHistory = false;
-        return true;
-      }
-      if (this.showHistory) {
-        this.showHistory = false;
         return true;
       }
       return false;

@@ -59,9 +59,10 @@ export class MediaSession {
     }
   }
 
+  // force=true 绕过同曲目去重守卫，供设置开关切换等需要重发同曲目元数据的场景（US5）
   async updateTrack(assetId: string, title: string, durationMs: number, coverUrl: string,
-    artist: string): Promise<void> {
-    if (this.session === undefined || assetId === '' || this.lastAssetId === assetId) {
+    artist: string, force: boolean = false): Promise<void> {
+    if (this.session === undefined || assetId === '' || (!force && this.lastAssetId === assetId)) {
       return;
     }
     this.lastAssetId = assetId;
@@ -71,8 +72,11 @@ export class MediaSession {
         title: title,
         artist: artist,
         duration: durationMs,
-        mediaImage: coverUrl,
       };
+      // 空封面（无图模式）不设置 mediaImage 字段，而非传旧值
+      if (coverUrl !== '') {
+        meta.mediaImage = coverUrl;
+      }
       await this.session.setAVMetadata(meta);
     } catch (err) {
       const error = err as BusinessError;

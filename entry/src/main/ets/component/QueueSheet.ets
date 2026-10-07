@@ -4,6 +4,7 @@ import { BiliVideo } from '../model/BiliVideo';
 
 import { Constants } from '../service/Constants';
 import { Appearance } from '../service/Appearance';
+import { AppStore } from '../service/AppStore';
 import { CoverThumb } from './CoverThumb';
 
 // 颜色全部使用 base/dark 双份颜色资源：浅色/深色外观下自动匹配（见 resources/base|dark/element/color.json）
@@ -76,6 +77,8 @@ export struct QueueSheet {
   @State pageHeight: number = 0;
   @State headerHeight: number = 138;
   @State flashIndex: number = -1;
+  // US5：无图模式下条目封面置空（走 CoverThumb 占位），读取链路对齐 MiniPlayer
+  @State dataSaverOn: boolean = false;
 
   @StorageLink('showQueueSheet') showQueueSheet: boolean = false;
   @StorageProp('isWideScreen') isWideScreen: boolean = false;
@@ -171,6 +174,7 @@ export struct QueueSheet {
     }
     this.currentIndex = c.currentIndex;
     this.isPlaying = c.isPlaying;
+    this.dataSaverOn = AppStore.getNumber(Constants.KEY_DATA_SAVER, 0) === 1;
 
   }
 
@@ -340,60 +344,61 @@ export struct QueueSheet {
         .width('100%')
 
         // 操作行（US5）：定位/搜索/多选/清空独占第二行；多选模式下整行隐藏（多选操作行独立如旧）
+        // US7/T025：按钮尺寸与多选态统一 36vp（高/圆角/字号/内边距对齐），切换多选模式无尺寸跳变
         if (!this.selectMode) {
           Row({ space: 8 }) {
             if (this.currentIndex >= 0) {
               Button('定位')
-                .height(30)
-                .padding({ left: 12, right: 12 })
+                .height(36)
+                .padding({ left: 14, right: 14 })
                 .backgroundColor($r('app.color.btn_glass'))
                 .backdropBlur(20)
                 .border({ width: 1, color: $r('app.color.btn_border') })
                 .fontColor(this.textPrimary())
-                .borderRadius(15)
-                .fontSize(12)
+                .borderRadius(18)
+                .fontSize(13)
                 .onClick(() => {
                   this.locateCurrent();
                 })
             }
 
             Button('搜索')
-              .height(30)
-              .padding({ left: 12, right: 12 })
+              .height(36)
+              .padding({ left: 14, right: 14 })
               .backgroundColor($r('app.color.btn_glass'))
               .backdropBlur(20)
               .border({ width: 1, color: $r('app.color.btn_border') })
               .fontColor(this.textPrimary())
-              .borderRadius(15)
-              .fontSize(12)
+              .borderRadius(18)
+              .fontSize(13)
               .onClick(() => {
                 this.showSearch = true;
               })
 
             if (this.items.length > 0) {
               Button('多选')
-                .height(30)
-                .padding({ left: 12, right: 12 })
+                .height(36)
+                .padding({ left: 14, right: 14 })
                 .backgroundColor($r('app.color.btn_glass'))
                 .backdropBlur(20)
                 .border({ width: 1, color: $r('app.color.btn_border') })
                 .fontColor(this.textPrimary())
-                .borderRadius(15)
-                .fontSize(12)
+                .borderRadius(18)
+                .fontSize(13)
                 .onClick(() => {
                   this.selectMode = true;
                   this.selectedBvids = [];
                 })
 
               Button('清空')
-                .height(30)
-                .padding({ left: 12, right: 12 })
+                .height(36)
+                .padding({ left: 14, right: 14 })
                 .backgroundColor($r('app.color.btn_glass'))
                 .backdropBlur(20)
                 .border({ width: 1, color: $r('app.color.btn_border') })
                 .fontColor(this.textPrimary())
-                .borderRadius(15)
-                .fontSize(12)
+                .borderRadius(18)
+                .fontSize(13)
                 .onClick(() => {
                   this.clearQueue();
                 })
@@ -544,7 +549,7 @@ export struct QueueSheet {
                       })
                   }
 
-                  CoverThumb({ cover: item.cover, highlight: index === this.currentIndex })
+                  CoverThumb({ cover: this.dataSaverOn ? '' : item.cover, highlight: index === this.currentIndex })
 
                   Column() {
                     Row() {

@@ -34,14 +34,14 @@ export function SourcePageBuilder() {
   SourcePage()
 }
 
-// 源详情：剧集列表（正序展示，老在上）/ NEW 徽标 / 已播置灰 / 播放全部 / 刷新 / 取消订阅
-// season/series 支持向上「加载更早」（按需翻页，只进内存不写缓存）
+// 源详情：剧集列表（新在上）/ NEW 徽标 / 已播标记 / 播放全部 / 刷新 / 取消订阅
+// season/series 支持触底「加载更早」（按需翻页，只进内存不写缓存）
 @Component
 struct SourcePage {
   @StorageProp('accentColor') accentColor: string = Constants.ACCENT_DEFAULT;
   @StorageProp('miniPlayerVisible') miniPlayerVisible: boolean = false; // key 与 Constants.AS_MINI_PLAYER_VISIBLE 对应
   @State navTitle: string = '';
-  @State episodes: BiliVideo[] = [];      // 展示序：正序（老在上）
+  @State episodes: BiliVideo[] = [];      // 展示序：倒序（新在上，与缓存一致）
   @State refreshing: boolean = false;
   @State canLoadOlder: boolean = false;
   @State loadingOlder: boolean = false;
@@ -50,6 +50,7 @@ struct SourcePage {
   private olderPage: number = 1;          // 已加载的最大页号（sortReverse 语义）
   private sub: Subscription = new Subscription();
   private playedSet: Set<string> = new Set();
+  private scroller: Scroller = new Scroller();
   private navPathStack: NavPathStack = new NavPathStack();
   private controller: PlayerController = PlayerController.getInstance();
 
@@ -82,12 +83,15 @@ struct SourcePage {
   }
 
   private loadFromCache(): void {
+    // 缓存本身即新→旧（SubscriptionStore 刷新时按 pubdate 倒序落盘），直接按缓存顺序渲染
     const cached: BiliVideo[] = SubscriptionStore.loadEpisodes(this.sub.id);
-    this.episodes = cached.slice().reverse();
+    this.episodes = cached.slice();
     this.episodeCount = this.episodes.length;
     this.olderPage = 1;
     const paginated: boolean = this.sub.type === Subscription.TYPE_SEASON || this.sub.type === Subscription.TYPE_SERIES;
-    this.canLoadOlder = paginated && cached.length > 0;
+    // 缓存不足一页说明已到最早内容，触底不再触发翻页请求
+    const pageSize: number = this.sub.type === Subscription.TYPE_SEASON ? 20 : 30;
+    this.canLoadOlder = paginated && cached.length >= pageSize;
   }
 
   private markSeen(): void {
@@ -119,13 +123,17 @@ struct SourcePage {
     SubscriptionStore.refreshSubscription(this.sub).then((): void => {
       this.loadFromCache();
       this.refreshing = false;
+      // 刷新完成后回到顶部，与「新在上」列表语义一致
+      if (this.episodes.length > 0) {
+        this.scroller.scrollToIndex(0);
+      }
     }).catch((err: BusinessError): void => {
       this.refreshing = false;
       promptAction.showToast({ message: `刷新失败: ${err.message}` });
     });
   }
 
-  // 向上加载更早：season/series 按需翻页（sortReverse 倒序，页号越大越老），只进内存不写缓存
+  // 触底加载更早：season/series 按需翻页（sortReverse 倒序，页号越大越老），只进内存不写缓存
   private loadOlder(): void {
     if (this.loadingOlder || !this.canLoadOlder) {
       return;
@@ -140,8 +148,8 @@ struct SourcePage {
         this.canLoadOlder = false;
       } else {
         this.olderPage = nextPage;
-        const older: BiliVideo[] = page.slice().reverse();
-        this.episodes = older.concat(this.episodes);
+        // page 本身即新→旧序，直接追加到列表尾部
+        this.episodes = this.episodes.concat(page);
         this.episodeCount = this.episodes.length;
         const ps: number = this.sub.type === Subscription.TYPE_SEASON ? 20 : 30;
         if (page.length < ps) {
@@ -255,21 +263,6 @@ struct SourcePage {
           })
         }
 
-        if (this.loadingOlder) {
-          Row() {
-            LoadingProgress()
-              .width(18)
-              .height(18)
-              .color($r('app.color.text_secondary'))
-            Text('加载中...')
-              .fontSize(13)
-              .fontColor($r('app.color.text_secondary'))
-              .margin({ left: 6 })
-          }
-          .padding({ left: 14, right: 14, top: 6, bottom: 6 })
-          .margin({ left: 16, bottom: 8 })
-        }
-
         if (this.episodeCount === 0) {
           Column() {
             Text('暂无节目')
@@ -280,17 +273,23 @@ struct SourcePage {
           .layoutWeight(1)
           .justifyContent(FlexAlign.Center)
         } else {
-          List({ space: 4 }) {
+          List({ space: 4, scroller: this.scroller }) {
             ForEach(this.episodes, (item: BiliVideo, index: number) => {
               ListItem() {
                 Row() {
                   Column() {
                     Text(item.title)
                       .fontSize(15)
-                      .fontColor(this.isPlayed(item) ? $r('app.color.text_secondary') : $r('app.color.text_primary'))
+                      .fontColor($r('app.color.text_primary'))
                       .maxLines(2)
                       .textOverflow({ overflow: TextOverflow.Ellipsis })
                     Row() {
+                      if (this.isPlayed(item)) {
+                        SymbolGlyph($r('sys.symbol.checkmark_circle'))
+                          .fontSize(13)
+                          .fontColor([$r('app.color.text_disabled')])
+                          .margin({ right: 4 })
+                      }
                       Text(formatDate(item.pubdate))
                         .fontSize(12)
                         .fontColor($r('app.color.text_disabled'))
@@ -323,11 +322,28 @@ struct SourcePage {
                 })
               }
             }, (item: BiliVideo) => item.bvid)
+            if (this.loadingOlder) {
+              ListItem() {
+                Row() {
+                  LoadingProgress()
+                    .width(18)
+                    .height(18)
+                    .color($r('app.color.text_secondary'))
+                  Text('加载中...')
+                    .fontSize(13)
+                    .fontColor($r('app.color.text_secondary'))
+                    .margin({ left: 6 })
+                }
+                .width('100%')
+                .justifyContent(FlexAlign.Center)
+                .padding({ top: 6, bottom: 6 })
+              }
+            }
           }
           .width('100%')
           .padding({ left: 12, right: 12, top: 4, bottom: this.miniPlayerVisible ? Constants.MINI_PLAYER_CLEARANCE : 12 })
           .layoutWeight(1)
-          .onReachStart(() => {
+          .onReachEnd(() => {
             this.loadOlder();
           })
         }

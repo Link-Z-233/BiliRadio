@@ -88,6 +88,14 @@
 - **原因**：更多页仅聚合「播放历史」「关于」两个二级入口，二者在设置页均有同款卡片，独立页面无存在必要。
 - **恢复线索**：`git log --diff-filter=D -- entry/src/main/ets/pages/MorePage.ets` 定位删除提交后恢复文件，并在 `router_map.json` 重新登记 `morePage` 条目。
 
+### REM-3 取消收藏历史（整链移除）
+
+- **本轮（ux-feedback-round5，2026-10-07）**：移除「取消收藏后可找回」的本地历史记录整条链路；取消收藏操作本身仍即时生效，仅不再留痕。
+- **移除内容**：`entry/src/main/ets/model/UnfavoriteRecord.ets`（模型文件已删除）；SettingsPage 侧历史面板全链（`showHistory`/`historyItems`/`historyVersion` 状态、`openHistory`/`formatRemovedAt`、`historyPanel` builder、设置页入口行及 `NavDestination.onBackPressed` 分支）；PlayerController 的 `unfavoriteHistory`/`pushHistory`/`refavoriteFromHistory`/`clearUnfavoriteHistory` 及取消收藏路径上的入史调用；AppStore 的 `loadUnfavoriteHistory`/`saveUnfavoriteHistory` 持久化；`Constants.AS_SHOW_HISTORY` 键。
+- **原因**：实机反馈使用率极低，且与「清空队列」「播放历史」职责重叠；面板入口长期占据设置页空间。
+- **恢复线索**：`git log --diff-filter=D -- entry/src/main/ets/model/UnfavoriteRecord.ets` 定位删除提交（ux-feedback-round5 轮），按上述移除内容反向恢复各调用点。
+- **遗留数据**：老版本写入的 `unfavorite_history.json` 本轮不清理（应用不再读写，无功能影响）；若未来恢复该功能，旧文件数据仍可重新读取。
+
 ## 三、规划与预告
 
 - **列表添加逻辑重构预告（US6 后续）**：源详情页「点单集」已改为仅该集入队播放；队列输入框「添加并播放」（`addByBv`）的入队行为后续还会改——计划从「加载并立即播放」调整为「追加进队列不打断当前播放」，落地后与「点单集」路径统一收敛。
@@ -95,6 +103,7 @@
 - **点赞 / 投币 / 收藏**：依赖登录态与 csrf，交互形态待定，两轮内未排期。
 - **播放历史云端同步**：本地字段/单位对齐已完成（play-history-progress 轮：`PlayHistoryItem` 补齐 viewAt/progress/duration/cid，秒级单位对齐 B 站 `view_at`/`progress` 语义，-1=看完；`HistoryMapper` 预留 `toBiliHistory`/`fromBiliHistory` 映射边界，本轮零网络请求），云端同步（登录态下心跳上报/历史拉取合并）待后续。
 - **audio 三元组优先级限制**：播控中心/后台卡片展示元数据依赖 audio 三元组等系统侧信息优先级策略，B 站侧字段缺失时标题/作者/封面可能展示不全，属系统与上游数据限制，暂不做适配。
+- **无图模式覆盖面扩展（ux-feedback-round5 范围外）**：本轮（2026-10-07）已将无图模式（原「省流量模式」，设置页分组现名「无图与网络设置」）扩展至播放列表条目封面（QueueSheet）与系统播控（AVSession/MediaSession，开关翻转后经 `PlayerController.refreshMediaSessionMetadata()` 强制重发当前曲目元数据）；以下位置仍不判无图模式、保持现状，待后续轮次统一：① 首页订阅列表行封面（HomePage）；② 订阅源详情页头图与列表项（SourcePage）；③ 添加订阅面板 UP 头像/合集封面（AddSubscriptionSheet——该场景封面用于确认订阅目标，刻意不省图）。另：随「取消收藏历史」移除而遗留的 `unfavorite_history.json` 本轮不清理，应用不再读取即无功能影响。
 
 ## 四、API 26 基线化
 
