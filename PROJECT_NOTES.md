@@ -9,27 +9,28 @@
 
 - **交互约定**：左滑露出「删除」按钮，**点击**执行删除（`ListItem.swipeAction({ end: { builder } })`），不做「滑过阈值直接删」。
 - **待实现清单**：
-  1. **首页订阅列表** [HomePage.ets](entry/src/main/ets/pages/HomePage.ets)：`ListItem` 位于 `LazyForEach`（L365-367）；删除复用既有 `removeSub(row)`（含清剧集缓存、持久化、刷新列表）。
+  1. **首页订阅列表** [HomePage.ets](entry/src/main/ets/pages/HomePage.ets)：`ListItem` 位于 `LazyForEach`（登记 L365-367 已漂移，2026-10-07 实测 L309-313）；删除复用既有 `removeSub(row)`（含清剧集缓存、持久化、刷新列表）。
   2. **播放队列** [QueueSheet.ets](entry/src/main/ets/component/QueueSheet.ets)：`LazyForEach` + `ListItem`；删除可复用 `PlayerController.removeSelectedFromPlaylist([bvid])`（[PlayerController.ets](entry/src/main/ets/service/PlayerController.ets) L1028）；需处理与多选（长按 + 竖向滑动选择）手势的共存。
   3. ~~**播放历史** [SettingsPage.ets](entry/src/main/ets/pages/SettingsPage.ets) 的 `playHistoryPanel`~~ **已完成（play-history-progress 轮，2026-10-06）**：`playHistoryPanel` 已挂 `ListItem.swipeAction({ end: 删除按钮 builder })`，`HistoryDataSource.notifyDataDelete` 增量同步 LazyForEach；单条删除 API 为 `PlayerController.removePlayHistoryItem(bvid)`（splice + `playHistoryVersion++` + 异步写盘），`clearPlayHistory` 行为不变。
 - **状态**：部分实现——播放历史项已完成（见上），首页订阅列表/播放队列两项仍待实现（仅登记）。
 
-### KI-4 短链识别与解析待优化
+### KI-4 短链识别与解析（已修复：bili-link-recognize 轮，2026-10-07）
 
-- **位置**：[AddSubscriptionSheet.ets](entry/src/main/ets/pages/AddSubscriptionSheet.ets) L144 的短链判定；[BiliService.ets](entry/src/main/ets/service/BiliService.ets) L707-736 的 `resolveShortUrl`。
-- **现象/不足**：
-  1. **只认 `b23.tv` 且区分大小写**：`trimmed.indexOf('b23.tv') >= 0` 命中不了 `B23.TV` 等大小写变体，也不识别 `bili2233.cn` 等其它 B 站短链域名，且不校验是否带 `http(s)://` 前缀。
-  2. **不从文本抽取 URL**：B 站分享文案常形如「【标题】 https://b23.tv/xxxx …」，现实现把整段文本直接当作 URL 去请求，导致解析失败；应先从文本用正则抽取 `https?://(?:b23\.tv|bili2233\.cn)/\S+` 再请求。
-  3. **不读重定向 Location**：`resolveShortUrl` 走 GET 后在**响应正文**里正则找 `BV[0-9A-Za-z]{10}` / `bilibili.com/...`（L723-730），而不是读 `response.header['location']`；当 302 未被跟随、或正文不含目标 URL（JSON/空 body）时拿不到结果。
-  4. **失败静默降级**：异常一律 `return shortUrl`（L731-734），上游只提示「短链解析后未识别到有效链接」，无法区分网络失败、风控、非 B 站短链等原因。
-  5. **目标类型覆盖窄**：正文正则只认 `BV...` 与 `bilibili.com/...`；对 `av` 号、收藏夹 `/medialist/`、合集/系列、UP 空间等目标支持不完整。
-  6. **无缓存、无专用超时**：同一短链每次重新解析，且复用通用 `connect/read` 超时（短链重定向本可更快）。
-- **建议修复**：
-  - 判定改为「文本包含 B 站短链域名（`b23.tv` / `bili2233.cn`，忽略大小写）」，并先抽取 URL 再请求。
-  - 优先读 `response.header['location']`（处理 3xx 与相对 Location），正文正则仅作兜底。
-  - 失败时区分错误类型并抛出可读原因；对同一短链做短期缓存。
-  - 抽取到目标后统一交给 `recognizeInput`，补齐 `av` 号、`medialist/space` 等类型覆盖。
-- **状态**：未修复（仅登记）。
+- **位置**：识别/抽取/解析逻辑集中至新增 [LinkResolver.ets](entry/src/main/ets/service/LinkResolver.ets)；[AddSubscriptionSheet.ets](entry/src/main/ets/pages/AddSubscriptionSheet.ets) 仅保留「抽取 → 判定 → 解析 → 分发」编排；[BiliService.ets](entry/src/main/ets/service/BiliService.ets) 原 `resolveShortUrl` 已删除。
+- **原登记行号漂移修正**：短链判定原登记 L144，修复前实际已漂移至 L165；`resolveShortUrl` 原登记 L707-736，修复前实际已漂移至 L935-966（两处本轮均已移除/改写，原行号登记就此作废）。
+- **修复说明**（对应原六条缺陷）：
+  1. **前置抽取**（原 #2）：`extractBiliUrl` 在任何识别判断前，从分享文案抽取第一个 B 站域名（b23.tv / bili2233.cn / bilibili.com 及任意子域，忽略大小写，须带 http(s) 前缀）链接并清除尾随中英文标点；未抽到回退 trim 原文，短链与非短链分支统一使用清洗结果。
+  2. **判定修正**（原 #1）：`isBiliShortLink` 按 host 精确判定（忽略大小写），补齐 bili2233.cn；无协议前缀的裸短链（如 `b23.tv/xxx`）自动补 `https://` 后处理。
+  3. **Location 解析**（原 #3）：`resolveShortLink` 请求设 `maxRedirects: 0` 禁跟随重定向，直读 3xx 响应头 `location`（键大小写不敏感、相对地址按当前短链协议+域名补全）；Location 仍为短链域名则迭代跟进（上限 3 跳）；最终目标须为 bilibili.com 域名；正文兜底仅在无 Location 时启用，且只提取可被识别器分类的 bilibili.com 完整 URL（禁止裸扫孤立 BV 号，防误播）。
+  4. **错误分型**（原 #4）：`ShortLinkResult` 结果模型区分网络失败 / 超出跳数 / 无有效目标 / 目标无法识别四类结局，各自携带互不重复的中文提示，不再静默降级 `return shortUrl`。
+  5. **目标覆盖**（原 #5）：`recognizeInput` 迁入 LinkResolver 并扩展 av 号 URL 形态（`bilibili.com/video/av{数字}`）、`m.bilibili.com/space/{uid}` 移动端空间、lists/seriesdetail/collectiondetail host 放宽为 bilibili.com 任意子域；短链 path 含视频号（如 `b23.tv/BV…`）时零网络短路直达视频。
+  6. **缓存与专用超时**（原 #6）：会话级 LRU 缓存（模块级 Map + 插入序数组，容量 50，仅缓存成功结果，命中先删后插、零网络请求，不持久化）；专用超时 `Constants.SHORT_LINK_CONNECT_MS / SHORT_LINK_READ_MS = 8000ms`（通用 15s/30s 保留不动）。
+  7. **输入保持**：解析成功不再回写输入框（原 `mainInput = resolved` 已删除，FR-010）。
+- **配套 UX 修正（2026-10-07，随实机复核轮）**：
+  1. **提示文案补全**：占位符缩短为「粘贴 B 站链接或 ID」（占位符不换行，长枚举在大字模式溢出）；完整能力枚举移至输入框下方常驻说明行「支持分享文案、短链、BV 号、av 号、UP 主 UID」（Text 可换行，任意缩放不溢出）；识别失败 toast 同步补「BV 号 / av 号」。
+  2. **二级页返回按钮加大**：抽共享 `secondaryHeader` builder（收藏夹/合集与系列两视图共用），返回图标触控区由裸 16vp 扩至 40vp（图标 20 + padding 10 + 负 margin 抵消位移）。
+  3. **系统返回支持**：`HomePage` 的 `bindSheet` 挂 `onWillDismiss`，`DismissReason.PRESS_BACK` 时经 `AddSheetBackHandler.requestBack()` 询问面板——二级视图在场则拦截关闭、动画退回一级；一级视图或下滑/关闭按钮/点遮罩路径正常关面板。
+- **状态**：已修复（待实机复核 US1/US2）。
 
 ### KI-5 播放层 UI 冻结（已定位并修复：API 24 ModalPage 渲染管线挂载即断开）
 
@@ -55,6 +56,19 @@
 - **位置**：入口为播放层 timer 按钮（`PlayerOverlay`）；控制器为 [SleepTimerController.ets](entry/src/main/ets/service/SleepTimerController.ets)（单例、墙钟零漂移倒计时、内存态不持久化）。
 - **待验证点**：倒计时显示与归零暂停、后台/锁屏节流后切回校准、入口按钮状态联动。
 - **状态**：实现完成、待实机验证；验证通过后移除本条目及 `SleepTimerController.ets` 文件头的 `[UNVERIFIED 2026-10]` 标注。
+
+### KI-7 链接识别链路遗留问题（bili-link-recognize 轮走查发现，本轮范围外）
+
+- **位置**：[LinkResolver.ets](entry/src/main/ets/service/LinkResolver.ets) `recognizeInput`（编号沿用特性走查记录）。
+- **登记项**：
+  1. **B3 系列默认类型歧义**：`lists` 路径无 `type=series` 参数时默认按合集（season）处理，实际可能为系列，订阅类型判定存在歧义。
+  2. **B4 BV 优先级全文遮蔽**：BV 号全文扫描置于全部 URL 规则之前，含 BV 号的复合链接（如带 BV 参数的合集/收藏夹页）会被遮蔽误判为视频。
+  3. **B5 fav 弱启发式**：收藏夹判定依赖 `(?:fid|media_id)=(\d+)` + 文本含 fav/collection/favlist 的弱启发式，非收藏夹页面出现同参数时存在误判可能。
+  4. **B7 裸数字语义歧义**：纯数字输入一律按 UP 主 UID 处理，用户意图可能是 av 号/合集 ID 等，语义有歧义（现状维持 UID 优先）。
+  5. **B8 BV 无合法性校验**：`BV[0-9A-Za-z]{10}` 仅匹配形态不校验合法性，伪 BV 号要进入网络请求后才失败。
+  6. **C1 解析结果回写——已解决**：短链解析成功后的 `mainInput` 回写已随 bili-link-recognize 轮移除（FR-010），登记备查。
+  7. **C2 动态/直播/watchlist 目标不识别**：`recognizeInput` 无动态（t.bilibili.com）/直播（live.bilibili.com）/watchlist 目标规则，短链解析到该类页面按「目标无法识别」分型提示（不再误播随机视频，但无法直达）。
+- **状态**：未修复（仅登记；其中 C1 已解决）。
 
 ## 二、已移除与禁用功能
 

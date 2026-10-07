@@ -932,39 +932,6 @@ export class BiliService {
     return items;
   }
 
-  static async resolveShortUrl(shortUrl: string): Promise<string> {
-    const httpRequest: http.HttpRequest = http.createHttp();
-    try {
-      const response: http.HttpResponse = await httpRequest.request(shortUrl, {
-        method: http.RequestMethod.GET,
-        header: {
-          'User-Agent': USER_AGENT,
-          'Referer': REFERER,
-        },
-        usingCache: false,
-        expectDataType: http.HttpDataType.STRING,
-        connectTimeout: Constants.CONNECT_TIMEOUT_MS,
-        readTimeout: Constants.READ_TIMEOUT_MS,
-      });
-      httpRequest.destroy();
-      const body: string = response.result as string;
-      Logger.log('net', logUrl(shortUrl), `HTTP ${response.responseCode}`);
-      const bvMatch: RegExpMatchArray | null = body.match(/BV[0-9A-Za-z]{10}/);
-      if (bvMatch !== null) {
-        return `https://www.bilibili.com/video/${bvMatch[0]}`;
-      }
-      const urlMatch: RegExpMatchArray | null = body.match(/https?:\/\/(?:www\.)?bilibili\.com\/[^\s"'<>]+/);
-      if (urlMatch !== null) {
-        return urlMatch[0];
-      }
-      return shortUrl;
-    } catch (_err) {
-      httpRequest.destroy();
-      Logger.log('error', logUrl(shortUrl), '短链解析失败');
-      return shortUrl;
-    }
-  }
-
   static async fetchUpInfo(mid: number): Promise<UpInfo> {
     const params: Record<string, string> = {
       'mid': mid.toString(),

@@ -11,78 +11,21 @@ import { FavFolder } from '../model/FavFolder';
 import { PlayerController } from '../service/PlayerController';
 import { Constants } from '../service/Constants';
 import { CoverThumb } from '../component/CoverThumb';
+import {
+  RecognizeResult,
+  recognizeInput,
+  extractBiliUrl,
+  isBiliShortLink,
+  normalizeShortLinkUrl,
+  resolveShortLink,
+  ShortLinkOutcome,
+  ShortLinkResult,
+} from '../service/LinkResolver';
 
-class RecognizeResult {
-  type: string = '';
-  id: string = '';
-  ownerMid: string = '';
-}
-
-function recognizeInput(input: string): RecognizeResult {
-  const r: RecognizeResult = new RecognizeResult();
-  const trimmed: string = input.trim();
-  if (trimmed === '') {
-    return r;
-  }
-  let m: RegExpExecArray | null = new RegExp('BV[0-9A-Za-z]{10}').exec(trimmed);
-  if (m !== null) {
-    r.type = 'bv';
-    r.id = m[0];
-    return r;
-  }
-  // av 号（忽略大小写，如 av170001 / AV170001），置于 BV 分支之后
-  m = new RegExp('^av(\\d+)$', 'i').exec(trimmed);
-  if (m !== null) {
-    r.type = 'av';
-    r.id = m[1];
-    return r;
-  }
-  m = new RegExp('space\\.bilibili\\.com/(\\d+)/lists/(\\d+)').exec(trimmed);
-  if (m !== null) {
-    r.ownerMid = m[1];
-    r.id = m[2];
-    r.type = new RegExp('type=series').test(trimmed) ? 'series' : 'season';
-    return r;
-  }
-  m = new RegExp('seriesdetail\\?[^&]*sid=(\\d+)').exec(trimmed);
-  if (m !== null) {
-    r.type = 'series';
-    r.id = m[1];
-    const midM: RegExpExecArray | null = new RegExp('space\\.bilibili\\.com/(\\d+)').exec(trimmed);
-    if (midM !== null) {
-      r.ownerMid = midM[1];
-    }
-    return r;
-  }
-  m = new RegExp('collectiondetail\\?[^&]*sid=(\\d+)').exec(trimmed);
-  if (m !== null) {
-    r.type = 'season';
-    r.id = m[1];
-    const midM: RegExpExecArray | null = new RegExp('space\\.bilibili\\.com/(\\d+)').exec(trimmed);
-    if (midM !== null) {
-      r.ownerMid = midM[1];
-    }
-    return r;
-  }
-  m = new RegExp('(?:fid|media_id)=(\\d+)').exec(trimmed);
-  if (m !== null && (trimmed.indexOf('fav') >= 0 || trimmed.indexOf('collection') >= 0 || trimmed.indexOf('favlist') >= 0)) {
-    r.type = 'fav';
-    r.id = m[1];
-    return r;
-  }
-  m = new RegExp('space\\.bilibili\\.com/(\\d+)').exec(trimmed);
-  if (m !== null) {
-    r.type = 'up';
-    r.id = m[1];
-    return r;
-  }
-  m = new RegExp('^(\\d+)$').exec(trimmed);
-  if (m !== null) {
-    r.type = 'up';
-    r.id = m[1];
-    return r;
-  }
-  return r;
+// 系统返回拦截句柄：宿主页面在 bindSheet onWillDismiss 中经 requestBack 询问面板是否消费返回事件
+// （返回 true=面板已处理——如从二级视图退回一级；false=未消费，宿主正常关闭面板）
+export class AddSheetBackHandler {
+  requestBack: () => boolean = (): boolean => false;
 }
 
 @Component
@@ -111,9 +54,14 @@ export struct AddSubscriptionSheet {
   };
   onDismiss: () => void = () => {
   };
+  // 系统返回拦截句柄（由宿主 HomePage 持有并传入，onWillDismiss PRESS_BACK 时调用）
+  backHandler: AddSheetBackHandler = new AddSheetBackHandler();
   private controller: PlayerController = PlayerController.getInstance();
 
   aboutToAppear(): void {
+    this.backHandler.requestBack = (): boolean => {
+      return this.handleSheetBackPress();
+    };
     const session: BiliSession = BiliSession.getInstance();
     this.isLogged = session.isLogged();
     if (this.isLogged) {
@@ -154,66 +102,8 @@ export struct AddSubscriptionSheet {
     promptAction.showToast({ message: `已订阅「${sub.title}」` });
   }
 
-  private handleMainInput(): void {
-    // US5：提交查询统一收起软键盘（覆盖按钮点击/输入法提交/非法输入全部分支）
-    try {
-      inputMethod.getController().stopInputSession();
-    } catch (e) {
-      // 收起失败静默：不影响查询主流程
-    }
-    const trimmed: string = this.mainInput.trim();
-    if (trimmed.indexOf('b23.tv') >= 0) {
-      if (this.mainBusy) {
-        return;
-      }
-      this.mainBusy = true;
-      this.mainMsg = '解析短链中…';
-      BiliService.resolveShortUrl(trimmed).then((resolved: string): void => {
-        this.mainBusy = false;
-        this.mainMsg = '';
-        const parsed: RecognizeResult = recognizeInput(resolved);
-        if (parsed.type === '') {
-          promptAction.showToast({ message: '短链解析后未识别到有效链接' });
-          return;
-        }
-        this.mainInput = resolved;
-        switch (parsed.type) {
-          case 'bv':
-            this.playBv(parsed.id);
-            break;
-          case 'av':
-            this.playAv(parsed.id);
-            break;
-          case 'up':
-            this.lookupUid(parsed.id);
-            break;
-          case 'fav':
-            this.subscribeFolderById(parsed.id);
-            break;
-          case 'season':
-            this.subscribeSeasonById(parsed.id);
-            break;
-          case 'series':
-            this.subscribeSeriesById(parsed.id);
-            break;
-          default:
-            break;
-        }
-      }).catch((): void => {
-        this.mainBusy = false;
-        this.mainMsg = '';
-        promptAction.showToast({ message: '短链解析失败' });
-      });
-      return;
-    }
-    const parsed: RecognizeResult = recognizeInput(this.mainInput);
-    if (parsed.type === '') {
-      promptAction.showToast({ message: '未识别到有效链接或 UP 主 UID' });
-      return;
-    }
-    if (this.mainBusy) {
-      return;
-    }
+  // 识别结果 → 既有六分支分发（bv/av/up/fav/season/series；六个动作方法零改动）
+  private dispatchRecognized(parsed: RecognizeResult): void {
     switch (parsed.type) {
       case 'bv':
         this.playBv(parsed.id);
@@ -236,6 +126,57 @@ export struct AddSubscriptionSheet {
       default:
         break;
     }
+  }
+
+  private handleMainInput(): void {
+    // US5：提交查询统一收起软键盘（覆盖按钮点击/输入法提交/非法输入全部分支）
+    try {
+      inputMethod.getController().stopInputSession();
+    } catch (e) {
+      // 收起失败静默：不影响查询主流程
+    }
+    // KI-4：全分支统一前置清洗——从分享文案抽取第一个 B 站链接（含尾随标点清除），未抽到回退 trim 原文
+    const cleaned: string = extractBiliUrl(this.mainInput);
+    const normalized: string = normalizeShortLinkUrl(cleaned);
+    if (isBiliShortLink(normalized)) {
+      if (this.mainBusy) {
+        return;
+      }
+      this.mainBusy = true;
+      this.mainMsg = '解析短链中…';
+      resolveShortLink(normalized).then((res: ShortLinkResult): void => {
+        this.mainBusy = false;
+        this.mainMsg = '';
+        if (res.outcome !== ShortLinkOutcome.OK) {
+          // 失败分型提示：网络失败 / 超出跳数 / 无有效目标 / 目标无法识别（FR-005）
+          promptAction.showToast({ message: res.message });
+          return;
+        }
+        // 解析成功不回写输入框（FR-010），识别目标后走既有分发
+        const parsed: RecognizeResult = recognizeInput(res.target);
+        if (parsed.type === '') {
+          promptAction.showToast({ message: '短链目标无法识别' });
+          return;
+        }
+        this.dispatchRecognized(parsed);
+      }).catch((): void => {
+        // 防御网：resolveShortLink 内部已捕获全部失败，此处仅兜底复位 busy 状态
+        this.mainBusy = false;
+        this.mainMsg = '';
+        promptAction.showToast({ message: '短链解析失败' });
+      });
+      return;
+    }
+    // 非短链分支：对清洗后文本直接识别（修复未 trim 失配）+ 既有分发
+    const parsed: RecognizeResult = recognizeInput(cleaned);
+    if (parsed.type === '') {
+      promptAction.showToast({ message: '未识别到有效链接、BV 号 / av 号或 UP 主 UID' });
+      return;
+    }
+    if (this.mainBusy) {
+      return;
+    }
+    this.dispatchRecognized(parsed);
   }
 
   private playBv(bvid: string): void {
@@ -469,6 +410,38 @@ export struct AddSubscriptionSheet {
     });
   }
 
+  // 系统返回（bindSheet onWillDismiss 的 PRESS_BACK）：二级视图在场时消费返回事件，退回一级视图
+  private handleSheetBackPress(): boolean {
+    if (this.upDetailView || this.folderView) {
+      this.backToMainView();
+      return true;
+    }
+    return false;
+  }
+
+  // 二级视图标题行：返回图标外扩至 40vp 触控区（padding 10），负 margin 抵消布局位移保持视觉位置不变
+  @Builder
+  private secondaryHeader(title: string) {
+    Row() {
+      SymbolGlyph($r('sys.symbol.chevron_left'))
+        .fontSize(20)
+        .fontColor([$r('app.color.text_primary')])
+        .padding(10)
+        .margin({ left: -10 })
+        .borderRadius(20)
+        .onClick(() => {
+          this.backToMainView();
+        })
+      Text(title)
+        .fontSize(16)
+        .fontWeight(FontWeight.Medium)
+        .fontColor($r('app.color.text_primary'))
+        .margin({ left: -6 })
+    }
+    .width('100%')
+    .padding({ top: 8, bottom: 12 })
+  }
+
   @Builder
   private sectionTitle(text: string) {
     Text(text)
@@ -512,7 +485,7 @@ export struct AddSubscriptionSheet {
   private mainView() {
     this.sectionTitle('添加订阅')
     Row() {
-      TextInput({ placeholder: '粘贴链接 / UP 主 UID / av 号', text: this.mainInput })
+      TextInput({ placeholder: '粘贴 B 站链接或 ID', text: this.mainInput })
         .fontSize(14)
         .fontColor($r('app.color.text_primary'))
         .placeholderColor($r('app.color.placeholder_color'))
@@ -545,6 +518,12 @@ export struct AddSubscriptionSheet {
       }
     }
     .width('100%')
+
+    // 能力枚举放说明行而非占位符：Text 可自动换行，大字模式缩放不溢出
+    Text('支持分享文案、短链、BV 号、av 号、UP 主 UID')
+      .fontSize(12)
+      .fontColor($r('app.color.text_secondary'))
+      .margin({ top: 6 })
 
     if (this.upInfo !== null) {
       // 查询结果区域整体挂出现/消失过渡（透明度+位移入位），配合 lookupUid 内 animateTo
@@ -598,21 +577,7 @@ export struct AddSubscriptionSheet {
 
   @Builder
   private folderListView() {
-    Row() {
-      SymbolGlyph($r('sys.symbol.chevron_left'))
-        .fontSize(16)
-        .fontColor([$r('app.color.text_primary')])
-        .onClick(() => {
-          this.backToMainView();
-        })
-      Text('我的收藏夹')
-        .fontSize(16)
-        .fontWeight(FontWeight.Medium)
-        .fontColor($r('app.color.text_primary'))
-        .margin({ left: 8 })
-    }
-    .width('100%')
-    .padding({ top: 8, bottom: 12 })
+    this.secondaryHeader('我的收藏夹')
 
     if (this.foldersBusy) {
       LoadingProgress()
@@ -659,21 +624,7 @@ export struct AddSubscriptionSheet {
   // UP 合集/系列二级视图：返回行对齐 folderListView，条目行样式沿用原 upResultsView
   @Builder
   private upDetailListView() {
-    Row() {
-      SymbolGlyph($r('sys.symbol.chevron_left'))
-        .fontSize(16)
-        .fontColor([$r('app.color.text_primary')])
-        .onClick(() => {
-          this.backToMainView();
-        })
-      Text(`${this.upName} 的合集与系列`)
-        .fontSize(16)
-        .fontWeight(FontWeight.Medium)
-        .fontColor($r('app.color.text_primary'))
-        .margin({ left: 8 })
-    }
-    .width('100%')
-    .padding({ top: 8, bottom: 12 })
+    this.secondaryHeader(`${this.upName} 的合集与系列`)
 
     if (this.seasons.length + this.series.length === 0) {
       if (this.seasonsLoaded && this.seriesLoaded) {

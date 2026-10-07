@@ -86,6 +86,9 @@ export class Constants {
   static readonly PREV_SEEK_THRESHOLD_MS: number = 3000;
   static readonly CONNECT_TIMEOUT_MS: number = 15000;
   static readonly READ_TIMEOUT_MS: number = 30000;
+  // 短链解析专用超时（bili-link-recognize / KI-4 修复）：302 响应体实测 ≤1KB，8s 覆盖弱网单跳往返且短于通用值
+  static readonly SHORT_LINK_CONNECT_MS: number = 8000;
+  static readonly SHORT_LINK_READ_MS: number = 8000;
   static readonly STREAM_TIMEOUT_MS: number = 120000;
   static readonly SLEEP_TIMER_PRESETS: number[] = [15 * 60, 30 * 60, 60 * 60];
   static readonly SLEEP_TIMER_MAX_HOURS: number = 12;

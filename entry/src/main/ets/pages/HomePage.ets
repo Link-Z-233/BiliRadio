@@ -3,7 +3,7 @@ import { BiliVideo } from '../model/BiliVideo';
 import { SubscriptionStore } from '../service/SubscriptionStore';
 import { Constants } from '../service/Constants';
 import { CoverThumb } from '../component/CoverThumb';
-import { AddSubscriptionSheet } from './AddSubscriptionSheet';
+import { AddSubscriptionSheet, AddSheetBackHandler } from './AddSubscriptionSheet';
 import { promptAction } from '@kit.ArkUI';
 
 interface PopupStateChange {
@@ -58,6 +58,8 @@ export struct HomePage {
   // @State refreshing: boolean = false;
   @State rowCount: number = 0;
   @State showAddSheet: boolean = false;
+  // 添加订阅面板的系统返回拦截句柄（onWillDismiss PRESS_BACK 时经其询问面板是否消费）
+  private addSheetBack: AddSheetBackHandler = new AddSheetBackHandler();
   private subs: Subscription[] = [];
   private provider: SubDataSource = new SubDataSource();
   private refreshingNow: boolean = false;
@@ -166,6 +168,7 @@ export struct HomePage {
   @Builder
   private addSheetBuilder() {
     AddSubscriptionSheet({
+      backHandler: this.addSheetBack,
       onSubscribed: (sub: Subscription): void => {
         this.addSubscription(sub);
       },
@@ -323,7 +326,15 @@ export struct HomePage {
     .bindSheet($$this.showAddSheet, this.addSheetBuilder(), {
       detents: [SheetSize.MEDIUM, SheetSize.LARGE],
       showClose: true,
-      preferType: SheetType.BOTTOM
+      preferType: SheetType.BOTTOM,
+      onWillDismiss: (dismiss: DismissSheetAction) => {
+        // 系统返回时若面板处于二级视图（收藏夹/合集与系列），拦截关闭并退回一级视图；
+        // 下滑关闭、右上角关闭按钮、点遮罩等其余关闭路径正常放行
+        if (dismiss.reason === DismissReason.PRESS_BACK && this.addSheetBack.requestBack()) {
+          return;
+        }
+        dismiss.dismiss();
+      }
     })
   }
 }
