@@ -152,11 +152,12 @@ function randomDmImgStr(minBytes: number, maxBytes: number): string {
 // US3：空间投稿查询参数——在既有参数上补齐 dm_img 全套风控指纹
 // （dm_img_list/dm_img_str/dm_cover_img_str/dm_img_inter/web_location/order_avoided/tid），
 // 每次调用随机值刷新（PiliPlus 每次请求重新生成）
-function buildUpQueryParams(mid: number): Record<string, string> {
+// US1 触底翻页（round5 修复）：pn 参数化，默认 1 保持既有调用点行为
+function buildUpQueryParams(mid: number, pn: number = 1): Record<string, string> {
   return {
     'mid': mid.toString(),
     'ps': '30',
-    'pn': '1',
+    'pn': pn.toString(),
     'order': 'pubdate',
     'platform': 'web',
     'tid': '0',
@@ -692,11 +693,11 @@ export class BiliService {
   // T018：参数对齐 PiliPlus spaceArchive 的 BiliDroid 调用形态（version/c_locale/channel/
   // s_locale/qn/statistics）；statistics 为 JSON 串，由 fetchUpVideosOnce 统一 encodeURIComponent
   // 后拼入 query（花括号/引号不会破坏 URL）
-  private static async fetchUpVideosViaApp(mid: number): Promise<BiliVideo[]> {
+  private static async fetchUpVideosViaApp(mid: number, pn: number = 1): Promise<BiliVideo[]> {
     const params: Record<string, string> = {
       'vmid': mid.toString(),
       'ps': '30',
-      'pn': '1',
+      'pn': pn.toString(),
       'build': '8430300',
       'version': '8.43.0',
       'c_locale': 'zh_CN',
@@ -822,15 +823,30 @@ export class BiliService {
   // Web 链内 -352/-412/风控页/网络错误等可重试错误重置 buvid 指数退避后进下一轮，
   // -404/-400/-101 等业务错误立即失败；全败时抛出最后一轮真实错误（含错误码）
   static async fetchUpVideos(mid: number): Promise<BiliVideo[]> {
+    return BiliService.fetchUpVideosPaged(mid, 1);
+  }
+
+  // US1 触底加载更早（round5 修复）：按页号抓取 UP 主更早投稿（页号越大越老，每页 30 条）。
+  // 与刷新链共用同一实现：真机实测 APP 端点裸 UA 恒 -400（PiliPlus 同端点实际经 AccountManager
+  // 拦截器携带登录 cookie，裸调不可用），Web 单发在风控期必 -799——
+  // 本设备唯一被验证可靠的是 Web 三轮 buvid 退避链（刷新链实测可穿透风控），
+  // 故翻页不再单发直抛，与刷新链同源退避；配合 SourcePage 手势触发权（一次手势最多一轮）不会形成请求风暴
+  static async fetchUpVideosByPage(mid: number, pn: number): Promise<BiliVideo[]> {
+    return BiliService.fetchUpVideosPaged(mid, Math.max(pn, 1));
+  }
+
+  // 刷新链与翻页链共用实现：APP 端点预检 + Web 三轮 buvid 退避（直连→WBI 签名）
+  private static async fetchUpVideosPaged(mid: number, pn: number): Promise<BiliVideo[]> {
+    const label: string = pn > 1 ? 'UP投稿翻页' : 'UP投稿列表';
     // US3：APP 端点优先——BiliDroid 渠道不依赖 cookie/WBI，未登录查询首选；
     // T018：APP 端点失败不再区分错误码（-400/-404/-101 也一样），一律记日志后落入 Web 降级链
     try {
-      const appItems: BiliVideo[] = await BiliService.fetchUpVideosViaApp(mid);
-      Logger.log('net', 'UP投稿列表', `APP端点成功 mid=${mid} count=${appItems.length}`);
+      const appItems: BiliVideo[] = await BiliService.fetchUpVideosViaApp(mid, pn);
+      Logger.log('net', label, `APP端点成功 mid=${mid} pn=${pn} count=${appItems.length}`);
       return appItems;
     } catch (appErr) {
       const appError: Error = appErr instanceof Error ? appErr : new Error(String(appErr));
-      Logger.log('error', 'UP投稿列表', `APP端点失败 mid=${mid}: ${appError.message}，降级Web链`);
+      Logger.log('error', label, `APP端点失败 mid=${mid} pn=${pn}: ${appError.message}，降级Web链`);
     }
 
     const spaceHeaders: Record<string, string> = buildSpaceHeaders(mid);
@@ -841,15 +857,16 @@ export class BiliService {
         await sleep(2000 * attempt);
       }
       // US3：每轮注入全套 dm_img 风控指纹参数（随机值按轮刷新）
-      const params: Record<string, string> = buildUpQueryParams(mid);
+      const params: Record<string, string> = buildUpQueryParams(mid, pn);
       try {
         const plainResult: string = await BiliService.fetchUpVideosOnce(`${BILI_SPACE_ARC_URL}`, params, spaceHeaders);
-        Logger.log('net', 'UP投稿列表', `第${attempt + 1}轮直连成功 mid=${mid}`);
-        return BiliService.parseUpVideoList(plainResult);
+        const parsed: BiliVideo[] = BiliService.parseUpVideoList(plainResult);
+        Logger.log('net', label, `第${attempt + 1}轮直连成功 mid=${mid} pn=${pn}`);
+        return parsed;
       } catch (plainErr) {
         const plainError: Error = plainErr instanceof Error ? plainErr : new Error(String(plainErr));
         lastError = plainError;
-        Logger.log('error', 'UP投稿列表', `第${attempt + 1}轮直连失败 mid=${mid}: ${plainError.message}`);
+        Logger.log('error', label, `第${attempt + 1}轮直连失败 mid=${mid} pn=${pn}: ${plainError.message}`);
         if (isUpQueryFatal(plainError)) {
           throw plainError;
         }
@@ -859,18 +876,19 @@ export class BiliService {
         const signedQuery: string = await WbiSigner.signParams(params, mixinKey);
         const wbiResult: string = await BiliService.fetchUpVideosOnce(
           `${BILI_SPACE_ARC_SEARCH_URL}?${signedQuery}`, {}, spaceHeaders);
-        Logger.log('net', 'UP投稿列表', `第${attempt + 1}轮WBI成功 mid=${mid}`);
-        return BiliService.parseUpVideoList(wbiResult);
+        const wbiParsed: BiliVideo[] = BiliService.parseUpVideoList(wbiResult);
+        Logger.log('net', label, `第${attempt + 1}轮WBI成功 mid=${mid} pn=${pn}`);
+        return wbiParsed;
       } catch (wbiErr) {
         const wbiError: Error = wbiErr instanceof Error ? wbiErr : new Error(String(wbiErr));
         lastError = wbiError;
-        Logger.log('error', 'UP投稿列表', `第${attempt + 1}轮WBI失败 mid=${mid}: ${wbiError.message}`);
+        Logger.log('error', label, `第${attempt + 1}轮WBI失败 mid=${mid} pn=${pn}: ${wbiError.message}`);
         if (isUpQueryFatal(wbiError)) {
           throw wbiError;
         }
       }
     }
-    Logger.log('error', 'UP投稿列表', `3轮均失败 mid=${mid}: ${lastError.message}`);
+    Logger.log('error', label, `3轮均失败 mid=${mid} pn=${pn}: ${lastError.message}`);
     throw lastError;
   }
 
@@ -1133,58 +1151,11 @@ export class BiliService {
         break;
       }
       const medias: Object[] = mediasRaw as Object[];
-      for (let i = 0; i < medias.length; i++) {
-        const rec: Record<string, Object> = medias[i] as Record<string, Object>;
-        const bvid: string = rec['bvid'] as string;
-        if (bvid === '' || bvid === undefined || rec['id'] === undefined) {
-          result.skipped++;
-          continue;
-        }
-        const attrRaw: Object = rec['attr'];
-        const attr: number = attrRaw === undefined || attrRaw === null ? 0 : attrRaw as number;
-        const rawTitle: Object = rec['title'];
-        const titleStr: string = rawTitle === undefined || rawTitle === null ? '' : rawTitle as string;
-        if ((attr & 1) !== 0 || titleStr === '已失效视频') {
-          result.skipped++;
-          continue;
-        }
-        const item: BiliVideo = new BiliVideo();
-        item.bvid = bvid;
-        item.aid = rec['id'] as number;
-        item.title = cleanTitle(rec['title'] as string);
-        item.cover = rec['cover'] as string;
-        item.duration = rec['duration'] as number;
-        const upperRaw: Object = rec['upper'];
-        if (upperRaw !== undefined && upperRaw !== null) {
-          const upper: Record<string, Object> = upperRaw as Record<string, Object>;
-          if (upper['mid'] !== undefined) {
-            item.ownerMid = upper['mid'] as number;
-          }
-          if (upper['name'] !== undefined) {
-            item.ownerName = upper['name'] as string;
-          }
-          if (upper['face'] !== undefined) {
-            item.ownerFace = upper['face'] as string;
-          }
-        }
-        const introRaw: Object = rec['intro'];
-        if (introRaw !== undefined && introRaw !== null) {
-          item.desc = introRaw as string;
-        }
-        const pubtimeRaw: Object = rec['pubtime'];
-        if (pubtimeRaw !== undefined && pubtimeRaw !== null) {
-          item.pubdate = pubtimeRaw as number;
-        }
-        const cntRaw: Object = rec['cnt_info'];
-        if (cntRaw !== undefined && cntRaw !== null) {
-          const cnt: Record<string, Object> = cntRaw as Record<string, Object>;
-          const playRaw: Object = cnt['play'];
-          if (playRaw !== undefined && playRaw !== null) {
-            item.view = playRaw as number;
-          }
-        }
-        result.items.push(item);
+      const parsedPage: BiliVideo[] = BiliService.parseFolderMedias(medias);
+      for (let i = 0; i < parsedPage.length; i++) {
+        result.items.push(parsedPage[i]);
       }
+      result.skipped += medias.length - parsedPage.length;
       result.rawCount += medias.length;
       if (onProgress !== undefined) {
         onProgress(result.rawCount, totalCount);
@@ -1208,6 +1179,78 @@ export class BiliService {
       }
     }
     return result;
+  }
+
+  // 收藏夹 medias 记录解析 + 有效性过滤（attr&1 失效 / 「已失效视频」标题 剔除），
+  // fetchFolderVideos 与 fetchFolderVideosByPage 共用，保证两链路口径一致
+  private static parseFolderMedias(medias: Object[]): BiliVideo[] {
+    const items: BiliVideo[] = [];
+    for (let i: number = 0; i < medias.length; i++) {
+      const rec: Record<string, Object> = medias[i] as Record<string, Object>;
+      const bvid: string = rec['bvid'] as string;
+      if (bvid === '' || bvid === undefined || rec['id'] === undefined) {
+        continue;
+      }
+      const attrRaw: Object = rec['attr'];
+      const attr: number = attrRaw === undefined || attrRaw === null ? 0 : attrRaw as number;
+      const rawTitle: Object = rec['title'];
+      const titleStr: string = rawTitle === undefined || rawTitle === null ? '' : rawTitle as string;
+      if ((attr & 1) !== 0 || titleStr === '已失效视频') {
+        continue;
+      }
+      const item: BiliVideo = new BiliVideo();
+      item.bvid = bvid;
+      item.aid = rec['id'] as number;
+      item.title = cleanTitle(rec['title'] as string);
+      item.cover = rec['cover'] as string;
+      item.duration = rec['duration'] as number;
+      const upperRaw: Object = rec['upper'];
+      if (upperRaw !== undefined && upperRaw !== null) {
+        const upper: Record<string, Object> = upperRaw as Record<string, Object>;
+        if (upper['mid'] !== undefined) {
+          item.ownerMid = upper['mid'] as number;
+        }
+        if (upper['name'] !== undefined) {
+          item.ownerName = upper['name'] as string;
+        }
+        if (upper['face'] !== undefined) {
+          item.ownerFace = upper['face'] as string;
+        }
+      }
+      const introRaw: Object = rec['intro'];
+      if (introRaw !== undefined && introRaw !== null) {
+        item.desc = introRaw as string;
+      }
+      const pubtimeRaw: Object = rec['pubtime'];
+      if (pubtimeRaw !== undefined && pubtimeRaw !== null) {
+        item.pubdate = pubtimeRaw as number;
+      }
+      const cntRaw: Object = rec['cnt_info'];
+      if (cntRaw !== undefined && cntRaw !== null) {
+        const cnt: Record<string, Object> = cntRaw as Record<string, Object>;
+        const playRaw: Object = cnt['play'];
+        if (playRaw !== undefined && playRaw !== null) {
+          item.view = playRaw as number;
+        }
+      }
+      items.push(item);
+    }
+    return items;
+  }
+
+  // US1 触底加载更早（round5 修复）：按页号抓取收藏夹单页内容（ps=20，mtime 倒序，页号越大越老）
+  static async fetchFolderVideosByPage(mediaId: number, pn: number): Promise<BiliVideo[]> {
+    const ps: number = 20;
+    const resultStr: string = await httpGet(
+      `${BILI_FAV_RESOURCE_URL}?media_id=${mediaId}&pn=${pn}&ps=${ps}` +
+      `&keyword=&order=mtime&type=2&tid=0&platform=web`
+    );
+    const data: Record<string, Object> = parseApiData(resultStr);
+    const mediasRaw: Object = data['medias'];
+    if (mediasRaw === undefined || mediasRaw === null) {
+      return [];
+    }
+    return BiliService.parseFolderMedias(mediasRaw as Object[]);
   }
 
   static async unfavorite(aid: number, mediaIds: number[]): Promise<void> {

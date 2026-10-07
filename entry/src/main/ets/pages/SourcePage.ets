@@ -35,7 +35,7 @@ export function SourcePageBuilder() {
 }
 
 // 源详情：剧集列表（新在上）/ NEW 徽标 / 已播标记 / 播放全部 / 刷新 / 取消订阅
-// season/series 支持触底「加载更早」（按需翻页，只进内存不写缓存）
+// 四类订阅（UP/收藏夹/合集/系列）统一支持触底「加载更早」（按需翻页，只进内存不写缓存）
 @Component
 struct SourcePage {
   @StorageProp('accentColor') accentColor: string = Constants.ACCENT_DEFAULT;
@@ -48,6 +48,8 @@ struct SourcePage {
   @State episodeCount: number = 0;
   private seenBefore: number = 0;         // 进入时的 lastSeenAt，NEW 徽标基准
   private olderPage: number = 1;          // 已加载的最大页号（sortReverse 语义）
+  private endArmed: boolean = true;       // 触底触发权：每次触摸手势（TouchType.Down）武装一次，加载一页即没收，
+                                         // 抬手重新按下才归还——一次手势最多一页请求，防按住不放链式连发打爆风控
   private sub: Subscription = new Subscription();
   private playedSet: Set<string> = new Set();
   private scroller: Scroller = new Scroller();
@@ -88,10 +90,20 @@ struct SourcePage {
     this.episodes = cached.slice();
     this.episodeCount = this.episodes.length;
     this.olderPage = 1;
-    const paginated: boolean = this.sub.type === Subscription.TYPE_SEASON || this.sub.type === Subscription.TYPE_SERIES;
-    // 缓存不足一页说明已到最早内容，触底不再触发翻页请求
-    const pageSize: number = this.sub.type === Subscription.TYPE_SEASON ? 20 : 30;
-    this.canLoadOlder = paginated && cached.length >= pageSize;
+    this.endArmed = true;
+    // 触底门槛按类型区分：
+    // - UP/SEASON/SERIES：缓存达满页才可能有更早内容，短页即已到最早
+    // - FAV：刷新只抓第一页且会过滤失效视频，缓存短页是正常现象，只要非空即允许触底尝试
+    if (this.sub.type === Subscription.TYPE_FAV) {
+      this.canLoadOlder = cached.length > 0;
+    } else {
+      this.canLoadOlder = cached.length >= this.olderPageSize();
+    }
+  }
+
+  // 各类型翻页接口的单页大小（FAV 不走此门槛/终止规则，见 loadFromCache/loadOlder）
+  private olderPageSize(): number {
+    return this.sub.type === Subscription.TYPE_SEASON ? 20 : 30;
   }
 
   private markSeen(): void {
@@ -133,34 +145,75 @@ struct SourcePage {
     });
   }
 
-  // 触底加载更早：season/series 按需翻页（sortReverse 倒序，页号越大越老），只进内存不写缓存
+  // 触底加载更早：四类订阅统一分派（页号越大越老），只进内存不写缓存。
+  // endArmed 触发权：一次触摸手势最多加载一页（TouchType.Down 武装，加载即没收）——
+  // ArkUI onReachEnd 在按住底端时每帧重触发，且追加内容/移除指示器引发的 onScrollIndex 布局回调
+  // 无法与真实滚离区分，故不采用"滚离归还"方案，改按手势武装，物理上杜绝链式连发打爆风控
   private loadOlder(): void {
-    if (this.loadingOlder || !this.canLoadOlder) {
+    if (this.loadingOlder || !this.canLoadOlder || !this.endArmed) {
       return;
     }
+    this.endArmed = false;
     this.loadingOlder = true;
     const nextPage: number = this.olderPage + 1;
-    const task: Promise<BiliVideo[]> = this.sub.type === Subscription.TYPE_SEASON
-      ? BiliService.fetchSeasonVideos(this.sub.ownerMid, this.sub.sourceId, nextPage, true)
-      : BiliService.fetchSeriesVideos(this.sub.ownerMid, this.sub.sourceId, nextPage, true);
-    task.then((page: BiliVideo[]): void => {
+    this.fetchOlderPage(nextPage).then((page: BiliVideo[]): void => {
       if (page.length === 0) {
         this.canLoadOlder = false;
-      } else {
-        this.olderPage = nextPage;
+        this.loadingOlder = false;
+        return;
+      }
+      // 追加前按 bvid 去重：防刷新链与翻页链排序漂移产生重复条目
+      const known: Set<string> = new Set<string>();
+      for (let i = 0; i < this.episodes.length; i++) {
+        known.add(this.episodes[i].bvid);
+      }
+      const fresh: BiliVideo[] = [];
+      for (let i = 0; i < page.length; i++) {
+        if (!known.has(page[i].bvid)) {
+          fresh.push(page[i]);
+          known.add(page[i].bvid);
+        }
+      }
+      this.olderPage = nextPage;
+      if (fresh.length > 0) {
         // page 本身即新→旧序，直接追加到列表尾部
-        this.episodes = this.episodes.concat(page);
+        this.episodes = this.episodes.concat(fresh);
         this.episodeCount = this.episodes.length;
-        const ps: number = this.sub.type === Subscription.TYPE_SEASON ? 20 : 30;
-        if (page.length < ps) {
+      }
+      if (this.sub.type === Subscription.TYPE_FAV) {
+        // FAV：失效视频过滤致短页是正常现象，不按短页终止；
+        // 仅当整页全部重复（已翻到刷新链缓存过的内容）时判定到底
+        if (fresh.length === 0) {
+          this.canLoadOlder = false;
+        }
+      } else {
+        // UP/SEASON/SERIES：短页（< 页大小）即已到最早内容
+        if (page.length < this.olderPageSize()) {
           this.canLoadOlder = false;
         }
       }
       this.loadingOlder = false;
     }).catch((err: BusinessError): void => {
       this.loadingOlder = false;
+      // 失败不归还触发权（防按住底端时 onReachEnd 每帧重试形成 403 风暴），
+      // 重试 = 抬手后再次触摸滚动到底
       promptAction.showToast({ message: `加载失败: ${err.message}` });
     });
+  }
+
+  // 各类型按页号取一页更早内容：UP/FAV 的 mid/mediaId 在 sourceId（ownerMid 仅合集/系列有值，
+  // UP 订阅传 ownerMid 会得到 mid=0 → 三端点全失败 -400/-799）；SEASON/SERIES sortReverse 倒序翻页
+  private fetchOlderPage(pn: number): Promise<BiliVideo[]> {
+    if (this.sub.type === Subscription.TYPE_UP) {
+      return BiliService.fetchUpVideosByPage(this.sub.sourceId, pn);
+    }
+    if (this.sub.type === Subscription.TYPE_FAV) {
+      return BiliService.fetchFolderVideosByPage(this.sub.sourceId, pn);
+    }
+    if (this.sub.type === Subscription.TYPE_SEASON) {
+      return BiliService.fetchSeasonVideos(this.sub.ownerMid, this.sub.sourceId, pn, true);
+    }
+    return BiliService.fetchSeriesVideos(this.sub.ownerMid, this.sub.sourceId, pn, true);
   }
 
   private playAll(): void {
@@ -345,6 +398,13 @@ struct SourcePage {
           .layoutWeight(1)
           .onReachEnd(() => {
             this.loadOlder();
+          })
+          .onTouch((event: TouchEvent): void => {
+            // 触底触发权按手势武装：手指按下（新拖拽开始）时归还，一次手势最多加载一页。
+            // 不用 onScrollIndex 归还——追加内容/移除加载指示器引发的布局回调与真实滚离无法区分
+            if (event.type === TouchType.Down) {
+              this.endArmed = true;
+            }
           })
         }
       }
