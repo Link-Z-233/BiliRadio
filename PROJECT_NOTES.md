@@ -70,6 +70,17 @@
   7. **C2 动态/直播/watchlist 目标不识别**：`recognizeInput` 无动态（t.bilibili.com）/直播（live.bilibili.com）/watchlist 目标规则，短链解析到该类页面按「目标无法识别」分型提示（不再误播随机视频，但无法直达）。
 - **状态**：未修复（仅登记；其中 C1 已解决）。
 
+### KI-8 首页订阅行 latestTitle/newCount 陈旧（已修复：appsign-up-fetch 轮，2026-10-08）
+
+- **根因**：[HomePage.ets](entry/src/main/ets/pages/HomePage.ets) `LazyForEach` 键值生成器返回恒定 `row.sub.id`，数据重载后键值不变 → 框架复用旧组件、不重跑 builder → 行内字幕与 newCount 徽标停在首次挂载值；随 fec92f8 引入的既有 bug，此前被 APP 链 pubdate=0 数据层缺陷掩盖（该缺陷已随本轮 ctime 回退修复）。
+- **修复**：键值改为 `` `${row.sub.id}_${row.latestTitle}_${row.newCount}` ``，字段变化即重建该行，兼修 newCount 徽标会话内不清零。
+- **遗留**：活体判别待未来新投稿事件自然观察（机制由键值→重建语义保证，本轮验证为渲染无回归）。
+
+### KI-9 APP/Web 链页界不对齐（appsign-up-fetch 轮登记）
+
+- **现象**：APP 签名链 20 条/页（服务端钳制）vs Web 退避链 30 条/页，会话内链路切换（降级/回切）时页界不对齐可能漏条目；现有 bvid 去重兜底，未见用户可见异常。
+- **待处理**：下轮统一页界（Web 链 ps 降为 20 或翻页记账按链路分别校准）。
+
 ## 二、已移除与禁用功能
 
 ### REM-1 下载页（三文件移除）
@@ -116,6 +127,9 @@
 - **403 首次添加根因修复（延后）**：首次添加订阅偶发 403/风控拦截，本轮仅做了日志观察（`BiliService` 全链路钩子 + 设置页日志面板，见 US9），待实机日志积累、锁定风控触发模式后针对性修复（候选方向：WBI 签名覆盖面 / buvid 预热策略）。
   - **实机风控结论补充（US1 触底翻页轮，2026-10-07）**：UP 投稿查询真机实测——APP 端点（spaceArchive BiliDroid 形态）裸 UA 恒 **-400**（PiliPlus 同端点实际经 AccountManager 拦截器携带登录 cookie，未登录裸调不可用）；Web 端点单发在风控期必 **-799**；本设备唯一被验证可靠的是 **Web 三轮 buvid 指数退避链**（直连→WBI 签名），UP 翻页链（`fetchUpVideosByPage`）已与刷新链共用该实现，不再单发直抛。
   - **配套防风暴**：SourcePage 触底加载挂 `endArmed` 手势触发权（`TouchType.Down` 武装、加载即没收、失败不归还）——ArkUI `onReachEnd` 按住底端时每帧重触发，且 `onScrollIndex` 布局回调与真实滚离无法区分，一次手势最多一页请求，物理上杜绝链式连发打爆风控。US1 触底「加载更早」本轮已扩展至全部四类订阅（UP/FAV 补翻页端点；FAV 失效视频过滤致短页属正常、不按短页终止，仅整页重复判到底；追加前按 bvid 去重防刷新链与翻页链排序漂移产生重复条目）。
+  - **AppSign 接入结论（appsign-up-fetch 轮，2026-10-08）**：UP 投稿 APP 端点已接入 AppSign 游客签名（TV appkey `dfca71928277209b`，[AppSigner.ets](entry/src/main/ets/service/AppSigner.ets) MD5 键序签名、无 `!'()*` 过滤）——真机验证 **-400 消失**，签名链头页与 cursor 翻页均一页恰 1 请求（HTTP 200），81 条全集触底翻页无重复无跳空、到底正确停止，签名链故障时 Web 退避链无缝降级。实测要点（与 PiliPlus 模型差异）：响应为 `data.item[]`（非 `data.list.vlist`）、视频链 `data.next` 恒空（翻页语义=纯 aid 锚点，`fetchUpVideosOlder` 即此形态）、服务端将 ps 钳制为 20（请求 30）。
+  - **endArmed 后续安排（appsign-up-fetch 轮验证通过，2026-10-08）**：签名链真机验证可靠可用（见上条结论），**下一轮可删除 endArmed 手势触发权与「失败不归还」惩罚**（回退 loadingOlder + canLoadOlder 两道门槛，对应 spec FR-005）；删除后若降级链再遇 403 风暴按需恢复。
+- **源页刷新无反馈假象（产品决策待定）**：刷新前后内容相同时无可视指示，易误判按钮失效（appsign-up-fetch 轮 US2 首验 FAIL 即此假象——刷新实际成功、cursor 已重建，但列表无可视变化）；可考虑加载动画或轻提示，待产品定夺。
 - **点赞 / 投币 / 收藏**：依赖登录态与 csrf，交互形态待定，两轮内未排期。
 - **播放历史云端同步**：本地字段/单位对齐已完成（play-history-progress 轮：`PlayHistoryItem` 补齐 viewAt/progress/duration/cid，秒级单位对齐 B 站 `view_at`/`progress` 语义，-1=看完；`HistoryMapper` 预留 `toBiliHistory`/`fromBiliHistory` 映射边界，本轮零网络请求），云端同步（登录态下心跳上报/历史拉取合并）待后续。
 - **audio 三元组优先级限制**：播控中心/后台卡片展示元数据依赖 audio 三元组等系统侧信息优先级策略，B 站侧字段缺失时标题/作者/封面可能展示不全，属系统与上游数据限制，暂不做适配。

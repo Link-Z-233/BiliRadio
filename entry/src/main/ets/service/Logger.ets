@@ -1,6 +1,8 @@
 import { Constants } from './Constants';
 import { fileIo as fs } from '@kit.CoreFileKit';
 import { common } from '@kit.AbilityKit';
+import { hilog } from '@kit.PerformanceAnalysisKit';
+import { BusinessError } from '@kit.BasicServicesKit';
 
 // 应用内日志条目（US9）：内存环形缓冲 + 异步落盘。
 // time 为毫秒时间戳；category 取 'net'（网络请求）/ 'error'（错误与风控）/ 'player'（播放链路诊断）；
@@ -17,15 +19,29 @@ export class LogEntry {
 // 设置页日志面板（LogSheet）查询内存缓冲。
 // 内存侧：环形缓冲超限按 Constants.LOG_BUFFER_MAX 淘汰最旧，占用有界；
 // 落盘侧（US9 新增）：每条日志以单行可读格式异步追加写入沙箱 filesDir 下日志文件，
-// fire-and-forget 不阻塞主流程，写入全程 try/catch 静默——极端 IO 压力下落盘失败不得影响播放/请求主流程；
+// 文件路径由 EntryAbility.onCreate 调用 init(context) 注入（getContext 在网络回调等非 UI 上下文失效），
+// fire-and-forget 不阻塞主流程，写入 try/catch 兜底（首次失败打一条 hilog 告警后转静默）；
 // 每次（批量）写入前检查文件大小，超 Constants.LOG_FILE_MAX_BYTES 保留最新一半重写（滚动淘汰，字节级有界）；
 // 启动不回读（内存缓冲与文件相互独立）；clear() 仅清内存，不删文件。
 export class Logger {
   private static entries: LogEntry[] = [];
   // US9：落盘写链——串行化追加，避免并发写交错；链上失败静默后继续接后续写入
   private static fileWriteChain: Promise<void> = Promise.resolve();
-  // 沙箱日志文件路径缓存（ getContext 首次成功后固定）
+  // 沙箱日志文件路径缓存（EntryAbility 启动注入 context 后固定；未注入时回退 getContext）
   private static filePathCache: string = '';
+  // 落盘链路健康度：首次写入失败时打一条 hilog 告警，此后不再重复刷屏
+  private static fileFailLogged: boolean = false;
+
+  // 进程启动时由 EntryAbility.onCreate 注入 UIAbilityContext 并解析日志文件路径。
+  // getContext() 是 UI 作用域函数（deprecated since 18）：网络回调等无组件上下文的调用点解析失败，
+  // 且失败被静默吞掉——真机自安装起日志文件 0 字节（US9 落盘失效根因），故改为启动期注入进程级 context
+  static init(context: common.UIAbilityContext): void {
+    try {
+      Logger.filePathCache = `${context.filesDir}/${Constants.LOG_FILE_NAME}`;
+    } catch (e) {
+      Logger.filePathCache = '';
+    }
+  }
 
   // 追加一条日志；内存超限淘汰最旧；同时 fire-and-forget 落盘
   static log(category: string, summary: string, result: string): void {
@@ -62,9 +78,23 @@ export class Logger {
     Logger.entries = [];
   }
 
+  static fileText(): string {
+    return fs.readTextSync(Logger.logFilePath());
+  }
+
+  static memoryText(): string {
+    const all: LogEntry[] = Logger.entries.slice(0).reverse();
+    let text: string = '';
+    for (let i = 0; i < all.length; i++) {
+      text += Logger.buildFileLine(all[i].category, all[i].summary, all[i].result);
+    }
+    return text;
+  }
+
   // —— 以下为 US9 落盘实现（全部静默失败） ——
 
-  // 沙箱日志文件路径：filesDir/biliradio_log.txt，首次取到后缓存
+  // 沙箱日志文件路径：优先用注入 context 解析的缓存；未注入（init 前调用）回退 getContext()。
+  // 旧实现仅靠 getContext()，网络回调上下文中恒失败且被静默，导致落盘从未生效
   private static logFilePath(): string {
     if (Logger.filePathCache !== '') {
       return Logger.filePathCache;
@@ -99,32 +129,51 @@ export class Logger {
     });
   }
 
+  // 落盘链路健康度告警：仅首次失败打 hilog 并附错误码（历史教训——落盘失效曾被静默吞掉，
+  // 真机文件 0 字节两周无人知晓），此后静默避免刷屏
+  private static warnFileFailOnce(stage: string, code: number, message: string): void {
+    if (Logger.fileFailLogged) {
+      return;
+    }
+    Logger.fileFailLogged = true;
+    try {
+      hilog.warn(Constants.LOG_DOMAIN, Constants.LOG_TAG,
+        'Log file write failed at %{public}s, code=%{public}d, msg=%{public}s — file logging disabled until next launch.',
+        stage, code, message);
+    } catch (e) {
+      // hilog 自身失败无能为力，保持静默
+    }
+  }
+
   // 写入单行：写前检查硬上限，超限先滚动淘汰（保留最新一半）再追加
   private static async writeLine(line: string): Promise<void> {
     const path: string = Logger.logFilePath();
     if (path === '') {
+      Logger.warnFileFailOnce('resolve-path', 0, 'empty file path');
       return;
     }
     try {
-      let rotated: boolean = false;
       try {
         const stat: fs.Stat = fs.statSync(path);
         // 字符数近似字节上限（UTF-8 多字节字符会低估，硬上限由滚动机制兜底收敛）
         if (stat.size + line.length > Constants.LOG_FILE_MAX_BYTES) {
           await Logger.rotateFile(path, stat.size);
-          rotated = true;
         }
       } catch (e) {
         // 文件不存在（首次写入）或 stat 失败：直接走追加建文件
       }
-      const file: fs.File = fs.openSync(path, fs.OpenMode.APPEND | fs.OpenMode.CREATE);
+      // POSIX 语义坑：O_APPEND 不隐含写权限，缺 WRITE_ONLY 时访问模式默认 O_RDONLY，
+      // openSync 能建文件但 writeSync 恒抛 13900008（Bad fd）——历史 0 字节文件的第二根因
+      const file: fs.File =
+        fs.openSync(path, fs.OpenMode.WRITE_ONLY | fs.OpenMode.APPEND | fs.OpenMode.CREATE);
       try {
         fs.writeSync(file.fd, line);
       } finally {
         fs.closeSync(file);
       }
     } catch (e) {
-      // 落盘失败静默：不影响主流程（spec 边界场景）
+      const err = e as BusinessError;
+      Logger.warnFileFailOnce('write-line', err.code, err.message);
     }
   }
 

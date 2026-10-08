@@ -310,7 +310,7 @@ export struct HomePage {
             ListItem() {
               this.subRowItem(row)
             }
-          }, (row: SubRow) => row.sub.id)
+          }, (row: SubRow) => `${row.sub.id}_${row.latestTitle}_${row.newCount}`)
         }
         .width('100%')
         .padding({ left: 12, right: 12, top: 4, bottom: this.miniPlayerVisible ? Constants.MINI_PLAYER_CLEARANCE : 12 })

@@ -92,10 +92,14 @@ struct SourcePage {
     this.olderPage = 1;
     this.endArmed = true;
     // 触底门槛按类型区分：
-    // - UP/SEASON/SERIES：缓存达满页才可能有更早内容，短页即已到最早
+    // - UP：游标在（has_next=true）即有更早内容，缓存短页不算到底（服务端钳 ps 至 20）
+    // - SEASON/SERIES：缓存达满页才可能有更早内容，短页即已到最早
     // - FAV：刷新只抓第一页且会过滤失效视频，缓存短页是正常现象，只要非空即允许触底尝试
     if (this.sub.type === Subscription.TYPE_FAV) {
       this.canLoadOlder = cached.length > 0;
+    } else if (this.sub.type === Subscription.TYPE_UP) {
+      this.canLoadOlder =
+        cached.length >= this.olderPageSize() || BiliService.hasUpAppCursor(this.sub.sourceId);
     } else {
       this.canLoadOlder = cached.length >= this.olderPageSize();
     }
@@ -186,8 +190,14 @@ struct SourcePage {
         if (fresh.length === 0) {
           this.canLoadOlder = false;
         }
+      } else if (this.sub.type === Subscription.TYPE_UP) {
+        // UP：APP 签名链以服务端 has_next 为准（游标仍在则短页续翻，防服务端钳 ps 假到底）；
+        // 游标已失（到底/链路失败降级 Web）时保持短页到底语义
+        if (page.length < this.olderPageSize() && !BiliService.hasUpAppCursor(this.sub.sourceId)) {
+          this.canLoadOlder = false;
+        }
       } else {
-        // UP/SEASON/SERIES：短页（< 页大小）即已到最早内容
+        // SEASON/SERIES：短页（< 页大小）即已到最早内容
         if (page.length < this.olderPageSize()) {
           this.canLoadOlder = false;
         }
@@ -205,7 +215,7 @@ struct SourcePage {
   // UP 订阅传 ownerMid 会得到 mid=0 → 三端点全失败 -400/-799）；SEASON/SERIES sortReverse 倒序翻页
   private fetchOlderPage(pn: number): Promise<BiliVideo[]> {
     if (this.sub.type === Subscription.TYPE_UP) {
-      return BiliService.fetchUpVideosByPage(this.sub.sourceId, pn);
+      return this.fetchUpOlderPage(pn);
     }
     if (this.sub.type === Subscription.TYPE_FAV) {
       return BiliService.fetchFolderVideosByPage(this.sub.sourceId, pn);
@@ -214,6 +224,17 @@ struct SourcePage {
       return BiliService.fetchSeasonVideos(this.sub.ownerMid, this.sub.sourceId, pn, true);
     }
     return BiliService.fetchSeriesVideos(this.sub.ownerMid, this.sub.sourceId, pn, true);
+  }
+
+  // UP 触底翻页：APP 签名链 cursor 优先（aid=当前列表末条），失败降级 Web 同页号（ps 同为 30，页界对齐）
+  private fetchUpOlderPage(pn: number): Promise<BiliVideo[]> {
+    const mid: number = this.sub.sourceId;
+    if (!BiliService.hasUpAppCursor(mid)) {
+      return BiliService.fetchUpVideosByPage(mid, pn);
+    }
+    const lastAid: number = this.episodes.length > 0 ? this.episodes[this.episodes.length - 1].aid : 0;
+    return BiliService.fetchUpVideosOlder(mid, lastAid).catch(
+      (): Promise<BiliVideo[]> => BiliService.fetchUpVideosByPage(mid, pn));
   }
 
   private playAll(): void {

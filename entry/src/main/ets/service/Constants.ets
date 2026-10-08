@@ -112,6 +112,8 @@ export class Constants {
   // —— B 站端点与 UA（US3：未登录查询 UP 投稿风控修复） ——
   // APP 投稿端点：BiliDroid 客户端渠道，无需 cookie/WBI 即可查询投稿列表
   static readonly BILI_APP_ARCHIVE_URL: string = 'https://app.bilibili.com/x/v2/space/archive/cursor';
+  static readonly TV_APP_KEY: string = 'dfca71928277209b';
+  static readonly TV_APP_SEC: string = 'b5475a8825547a4fc26c7d518eaaa02e';
   // ExClimbWuzhi 风控网关：buvid 激活（PiliPlus 同源路径）
   static readonly BILI_EXCLIMB_WUZHI_URL: string = 'https://api.bilibili.com/x/internal/gaia-gateway/ExClimbWuzhi';
   // BiliDroid 客户端 UA（与 PiliPlus constants.dart 同源）：APP 端点与 ExClimbWuzhi 激活共用

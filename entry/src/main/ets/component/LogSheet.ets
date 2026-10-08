@@ -1,4 +1,7 @@
 import { Logger, LogEntry } from '../service/Logger';
+import { Constants } from '../service/Constants';
+import { picker, fileIo as fs } from '@kit.CoreFileKit';
+import { promptAction } from '@kit.ArkUI';
 
 // 日志懒加载数据源：LazyForEach 只构建可视区域内的条目（缓冲上限 500 条，见 Constants.LOG_BUFFER_MAX）
 class LogDataSource implements IDataSource {
@@ -57,6 +60,39 @@ export struct LogSheet {
     this.reload();
   }
 
+  private exportLogs(): void {
+    const docPicker: picker.DocumentViewPicker = new picker.DocumentViewPicker(getContext(this));
+    const options: picker.DocumentSaveOptions = new picker.DocumentSaveOptions();
+    options.newFileNames = [Constants.LOG_FILE_NAME];
+    docPicker.save(options).then((uris: Array<string>): void => {
+      if (uris.length === 0) {
+        return;
+      }
+      let text: string = '';
+      let fromFile: boolean = true;
+      try {
+        text = Logger.fileText();
+      } catch (e) {
+        fromFile = false;
+        text = Logger.memoryText();
+      }
+      try {
+        const file: fs.File = fs.openSync(uris[0], fs.OpenMode.WRITE_ONLY | fs.OpenMode.TRUNC);
+        try {
+          fs.writeSync(file.fd, text);
+        } finally {
+          fs.closeSync(file);
+        }
+        promptAction.showToast({
+          message: fromFile ? `已导出日志文件 ${text.length} 字符` : '日志文件读取失败，已导出内存缓冲'
+        });
+      } catch (e) {
+        promptAction.showToast({ message: '导出失败' });
+      }
+    }).catch((): void => {
+    });
+  }
+
   private formatTime(time: number): string {
     const d: Date = new Date(time);
     const h: number = d.getHours();
@@ -85,6 +121,20 @@ export struct LogSheet {
           .fontColor($r('app.color.text_primary'))
           .layoutWeight(1)
 
+        Button('导出')
+          .height(32)
+          .padding({ left: 12, right: 12 })
+          .backgroundColor($r('app.color.btn_glass'))
+          .backdropBlur(20)
+          .border({ width: 1, color: $r('app.color.btn_border') })
+          .fontColor($r('app.color.text_primary'))
+          .borderRadius(16)
+          .fontSize(12)
+          .onClick(() => {
+            this.exportLogs();
+          })
+          .margin({ left: 8 })
+
         if (this.entries.length > 0) {
           Button('清空')
             .height(32)
@@ -95,6 +145,7 @@ export struct LogSheet {
             .fontColor($r('app.color.danger_red'))
             .borderRadius(16)
             .fontSize(12)
+            .margin({ left: 8 })
             .onClick(() => {
               this.clearLogs();
             })

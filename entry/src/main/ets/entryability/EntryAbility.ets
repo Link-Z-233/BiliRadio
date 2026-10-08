@@ -19,6 +19,7 @@ import { window, display } from '@kit.ArkUI';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { Appearance } from '../service/Appearance';
 import { Constants } from '../service/Constants';
+import { Logger } from '../service/Logger';
 
 export default class EntryAbility extends UIAbility {
   private mainWindow: window.Window | undefined = undefined;
@@ -27,6 +28,9 @@ export default class EntryAbility extends UIAbility {
     // 读取持久化外观偏好（自行 getPreferencesSync，不依赖 AppStore.init 时机）并应用应用层颜色模式；
     // 无偏好或读取失败时回退为跟随系统（COLOR_MODE_NOT_SET，与原固定行为一致）
     Appearance.init(this.context);
+    // 注入进程级 context 解析日志文件路径：Logger 落盘在网络回调等非 UI 上下文中，
+    // getContext() 解析失败被静默吞掉，真机日志文件自安装起 0 字节（US9 落盘失效根因）
+    Logger.init(this.context);
     hilog.info(Constants.LOG_DOMAIN, Constants.LOG_TAG, '%{public}s', 'Ability onCreate');
   }
 

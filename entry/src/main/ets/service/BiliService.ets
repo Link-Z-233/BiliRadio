@@ -8,6 +8,7 @@ import { AudioTrack, QualityTier, ResolvedAudio } from '../model/AudioQuality';
 import { BiliSession } from './BiliSession';
 import { Constants, sleep } from './Constants';
 import { WbiSigner } from './WbiSigner';
+import { AppSigner } from './AppSigner';
 import { Logger } from './Logger';
 
 const BILI_VIDEO_INFO_URL: string = 'https://api.bilibili.com/x/web-interface/view';
@@ -79,6 +80,19 @@ export class SeasonMeta {
   cover: string = '';
   seasonId: number = 0;
 }
+
+class UpAppCursor {
+  nextOffset: number = 0;
+}
+
+class UpAppPage {
+  items: BiliVideo[] = [];
+  nextOffset: number = 0;
+  hasNext: boolean = false;
+}
+
+const upAppCursorCache: Map<number, UpAppCursor> = new Map<number, UpAppCursor>();
+const upAppWebSticky: Set<number> = new Set<number>();
 
 function buildHeaders(): Record<string, string> {
   const headers: Record<string, string> = {
@@ -688,16 +702,10 @@ export class BiliService {
     return items;
   }
 
-  // US3：APP 端点投稿查询（app.bilibili.com BiliDroid 渠道）——无 cookie/WBI 依赖，
-  // 未登录亦可靠查询；仅携带 BiliDroid UA
-  // T018：参数对齐 PiliPlus spaceArchive 的 BiliDroid 调用形态（version/c_locale/channel/
-  // s_locale/qn/statistics）；statistics 为 JSON 串，由 fetchUpVideosOnce 统一 encodeURIComponent
-  // 后拼入 query（花括号/引号不会破坏 URL）
-  private static async fetchUpVideosViaApp(mid: number, pn: number = 1): Promise<BiliVideo[]> {
+  private static async fetchUpVideosViaApp(mid: number, aid: number, nextOffset: number): Promise<BiliVideo[]> {
     const params: Record<string, string> = {
       'vmid': mid.toString(),
       'ps': '30',
-      'pn': pn.toString(),
       'build': '8430300',
       'version': '8.43.0',
       'c_locale': 'zh_CN',
@@ -708,147 +716,131 @@ export class BiliService {
       'qn': '80',
       'statistics': '{"appId":1,"platform":3,"version":"8.43.0","abtest":""}',
     };
+    if (aid > 0) {
+      params['aid'] = aid.toString();
+    }
+    if (nextOffset > 0) {
+      params['next'] = nextOffset.toString();
+    }
+    const signedQuery: string = await AppSigner.signQuery(params);
     const headers: Record<string, string> = {
       'User-Agent': Constants.BILI_APP_USER_AGENT,
     };
-    const resultStr: string = await BiliService.fetchUpVideosOnce(
-      Constants.BILI_APP_ARCHIVE_URL, params, headers);
-    return BiliService.parseAppArchiveList(resultStr, mid);
+    const resultStr: string = await httpGet(`${Constants.BILI_APP_ARCHIVE_URL}?${signedQuery}`, headers);
+    const page: UpAppPage = BiliService.parseAppCursorPage(resultStr);
+    if (page.items.length === 0 || !page.hasNext) {
+      upAppCursorCache.delete(mid);
+    } else {
+      const cursor: UpAppCursor = new UpAppCursor();
+      cursor.nextOffset = page.nextOffset;
+      upAppCursorCache.set(mid, cursor);
+    }
+    return page.items;
   }
 
-  // US3：APP 端点响应解析——真实 BiliDroid 响应为 data.item[]（author/play/duration 为顶层字段、
-  // aid 以字符串 param 透出），兼容 data.archives[]（owner{}/stat{} 嵌套）命名；
-  // title 经 cleanTitle、cover 经 normalizeCover 规范化
-  private static parseAppArchiveList(resultStr: string, mid: number): BiliVideo[] {
+  private static parseAppCursorPage(resultStr: string): UpAppPage {
     const root: Record<string, Object> = JSON.parse(resultStr) as Record<string, Object>;
     const code: number = root['code'] as number;
     if (code !== 0) {
-      // 透出真实错误码，供降级链分类与上层提示
       throw new Error(`Bili API error ${code}`);
     }
-    const data: Record<string, Object> = root['data'] as Record<string, Object>;
-    const items: BiliVideo[] = [];
-    let arrRaw: Object = data['item'];
-    if (arrRaw === undefined || arrRaw === null) {
-      arrRaw = data['archives'];
+    const page: UpAppPage = new UpAppPage();
+    const dataRaw: Object = root['data'];
+    if (dataRaw === undefined || dataRaw === null) {
+      return page;
     }
-    if (arrRaw === undefined || arrRaw === null) {
-      return items;
+    const data: Record<string, Object> = dataRaw as Record<string, Object>;
+    const listRaw: Object = data['list'];
+    if (listRaw !== undefined && listRaw !== null) {
+      const list: Record<string, Object> = listRaw as Record<string, Object>;
+      const vlistRaw: Object = list['vlist'];
+      if (vlistRaw !== undefined && vlistRaw !== null) {
+        BiliService.parseVlistRecords(vlistRaw as Object[], page.items);
+      }
     }
-    const arr: Object[] = arrRaw as Object[];
-    for (let i: number = 0; i < arr.length; i++) {
-      const rec: Record<string, Object> = arr[i] as Record<string, Object>;
-      const bvidRaw: Object = rec['bvid'];
-      const bvid: string = bvidRaw === undefined || bvidRaw === null ? '' : bvidRaw as string;
-      if (bvid === '') {
-        continue;
+    if (page.items.length === 0) {
+      const itemRaw: Object = data['item'];
+      if (itemRaw !== undefined && itemRaw !== null) {
+        BiliService.parseVlistRecords(itemRaw as Object[], page.items);
       }
-      const item: BiliVideo = new BiliVideo();
-      item.bvid = bvid;
-      // aid：整数 aid 或字符串 param
-      const aidRaw: Object = rec['aid'];
-      if (aidRaw !== undefined && aidRaw !== null) {
-        item.aid = Number(aidRaw);
-      } else {
-        const paramRaw: Object = rec['param'];
-        if (paramRaw !== undefined && paramRaw !== null) {
-          item.aid = Number(paramRaw);
-        }
-      }
-      const titleRaw: Object = rec['title'];
-      item.title = titleRaw === undefined || titleRaw === null ? '' : cleanTitle(titleRaw as string);
-      item.cover = BiliService.normalizeCover(rec);
-      // duration：APP 端点为秒（可能为 -1），Web 兼容 'm:ss' 字符串
-      const durRaw: Object = rec['duration'];
-      if (durRaw !== undefined && durRaw !== null) {
-        if (typeof durRaw === 'number') {
-          const dur: number = durRaw as number;
-          item.duration = dur > 0 ? dur : 0;
-        } else {
-          item.duration = parseDurationLen(durRaw as string);
-        }
-      }
-      // pubdate：APP 端点为 pubdate，Web 兼容 created
-      const pubRaw: Object = rec['pubdate'];
-      if (pubRaw !== undefined && pubRaw !== null) {
-        item.pubdate = Number(pubRaw);
-      } else {
-        const createdRaw: Object = rec['created'];
-        if (createdRaw !== undefined && createdRaw !== null) {
-          item.pubdate = Number(createdRaw);
-        }
-      }
-      // UP 主：APP item[] 为顶层 author/mid；Web archives[] 为 owner{mid,name,face}
-      const ownerRaw: Object = rec['owner'];
-      if (ownerRaw !== undefined && ownerRaw !== null) {
-        const owner: Record<string, Object> = ownerRaw as Record<string, Object>;
-        const ownerMidRaw: Object = owner['mid'];
-        item.ownerMid = ownerMidRaw === undefined || ownerMidRaw === null ? mid : Number(ownerMidRaw);
-        const ownerNameRaw: Object = owner['name'];
-        item.ownerName = ownerNameRaw === undefined || ownerNameRaw === null ? '' : ownerNameRaw as string;
-        const ownerFaceRaw: Object = owner['face'];
-        item.ownerFace = ownerFaceRaw === undefined || ownerFaceRaw === null ? '' : ownerFaceRaw as string;
-      } else {
-        item.ownerMid = mid;
-        const authorRaw: Object = rec['author'];
-        if (authorRaw !== undefined && authorRaw !== null) {
-          item.ownerName = authorRaw as string;
-        }
-      }
-      // 播放量：Web archives[] 为 stat.view；APP item[] 为顶层 play
-      const statRaw: Object = rec['stat'];
-      if (statRaw !== undefined && statRaw !== null) {
-        const stat: Record<string, Object> = statRaw as Record<string, Object>;
-        const viewRaw: Object = stat['view'];
-        if (viewRaw !== undefined && viewRaw !== null) {
-          item.view = Number(viewRaw);
-        }
-      } else {
-        const playRaw: Object = rec['play'];
-        if (playRaw !== undefined && playRaw !== null) {
-          item.view = Number(playRaw);
-        }
-      }
-      items.push(item);
     }
-    return items;
+    const nextRaw: Object = data['next'];
+    if (nextRaw !== undefined && nextRaw !== null) {
+      page.nextOffset = Number(nextRaw);
+    }
+    const hasNextRaw: Object = data['has_next'];
+    if (hasNextRaw !== undefined && hasNextRaw !== null) {
+      page.hasNext = Boolean(hasNextRaw);
+    }
+    return page;
   }
 
   // UP 主最新投稿（单页 30 条，新集在前）
-  // ponytail: 只取第一页——播客「近期节目」语义；升级路径：SourcePage 滚动到底按需追加页
-  // 风控降级链（US3）：APP 端点优先（BiliDroid 渠道，无 cookie/WBI），失败降级 Web 链——
-  // 最多 3 轮，每轮「无签名 arc/search → WBI 签名」两步；
-  // APP 端点任何失败（含 -400/-404/-101）都只记日志后降级 Web 链（T018：-400 曾被误判为
-  // 业务致命直抛，导致 Web 降级链完全没机会执行）；
-  // Web 链内 -352/-412/风控页/网络错误等可重试错误重置 buvid 指数退避后进下一轮，
+  // 风控降级链：APP 签名链（游客 appkey+ts+sign，无 cookie/WBI 依赖）优先，任何失败只记日志后
+  // 降级 Web 链；Web 链内 -352/-412/风控页/网络错误等可重试错误重置 buvid 指数退避后进下一轮，
   // -404/-400/-101 等业务错误立即失败；全败时抛出最后一轮真实错误（含错误码）
   static async fetchUpVideos(mid: number): Promise<BiliVideo[]> {
-    return BiliService.fetchUpVideosPaged(mid, 1);
-  }
-
-  // US1 触底加载更早（round5 修复）：按页号抓取 UP 主更早投稿（页号越大越老，每页 30 条）。
-  // 与刷新链共用同一实现：真机实测 APP 端点裸 UA 恒 -400（PiliPlus 同端点实际经 AccountManager
-  // 拦截器携带登录 cookie，裸调不可用），Web 单发在风控期必 -799——
-  // 本设备唯一被验证可靠的是 Web 三轮 buvid 退避链（刷新链实测可穿透风控），
-  // 故翻页不再单发直抛，与刷新链同源退避；配合 SourcePage 手势触发权（一次手势最多一轮）不会形成请求风暴
-  static async fetchUpVideosByPage(mid: number, pn: number): Promise<BiliVideo[]> {
-    return BiliService.fetchUpVideosPaged(mid, Math.max(pn, 1));
-  }
-
-  // 刷新链与翻页链共用实现：APP 端点预检 + Web 三轮 buvid 退避（直连→WBI 签名）
-  private static async fetchUpVideosPaged(mid: number, pn: number): Promise<BiliVideo[]> {
-    const label: string = pn > 1 ? 'UP投稿翻页' : 'UP投稿列表';
-    // US3：APP 端点优先——BiliDroid 渠道不依赖 cookie/WBI，未登录查询首选；
-    // T018：APP 端点失败不再区分错误码（-400/-404/-101 也一样），一律记日志后落入 Web 降级链
     try {
-      const appItems: BiliVideo[] = await BiliService.fetchUpVideosViaApp(mid, pn);
-      Logger.log('net', label, `APP端点成功 mid=${mid} pn=${pn} count=${appItems.length}`);
+      const appItems: BiliVideo[] = await BiliService.fetchUpVideosViaApp(mid, 0, 0);
+      if (upAppWebSticky.delete(mid)) {
+        Logger.log('net', 'UP投稿列表', `APP签名链回切 mid=${mid}`);
+      }
+      Logger.log('net', 'UP投稿列表',
+        `APP签名链成功 mid=${mid} count=${appItems.length} 续游标=${BiliService.hasUpAppCursor(mid)}`);
       return appItems;
     } catch (appErr) {
       const appError: Error = appErr instanceof Error ? appErr : new Error(String(appErr));
-      Logger.log('error', label, `APP端点失败 mid=${mid} pn=${pn}: ${appError.message}，降级Web链`);
+      upAppCursorCache.delete(mid);
+      upAppWebSticky.add(mid);
+      Logger.log('error', 'UP投稿列表', `APP签名链失败 mid=${mid}: ${appError.message}`);
+      Logger.log('net', 'UP投稿列表', `APP签名链降级Web退避链 mid=${mid}`);
     }
+    const webItems: BiliVideo[] = await BiliService.fetchUpVideosViaWeb(mid, 1);
+    Logger.log('net', 'UP投稿列表', `Web退避链头页成功 mid=${mid} count=${webItems.length}`);
+    return webItems;
+  }
 
+  static hasUpAppCursor(mid: number): boolean {
+    return upAppCursorCache.has(mid);
+  }
+
+  // US1/US2 触底加载更早：APP 签名链 cursor 语义（aid=列表末条 + next=上页服务端游标）；
+  // 无游标或链路失败抛错，由调用方降级 fetchUpVideosByPage 同页号 Web 链
+  static async fetchUpVideosOlder(mid: number, lastAid: number): Promise<BiliVideo[]> {
+    const cursor: UpAppCursor | undefined = upAppCursorCache.get(mid);
+    if (cursor === undefined) {
+      throw new Error('无APP翻页游标');
+    }
+    if (lastAid <= 0) {
+      throw new Error('缺少末条aid');
+    }
+    try {
+      const olderItems: BiliVideo[] = await BiliService.fetchUpVideosViaApp(mid, lastAid, cursor.nextOffset);
+      Logger.log('net', 'UP投稿翻页',
+        `APP签名链翻页成功 mid=${mid} aid=${lastAid} count=${olderItems.length} 续游标=${BiliService.hasUpAppCursor(mid)}`);
+      return olderItems;
+    } catch (appErr) {
+      const appError: Error = appErr instanceof Error ? appErr : new Error(String(appErr));
+      upAppCursorCache.delete(mid);
+      upAppWebSticky.add(mid);
+      Logger.log('error', 'UP投稿翻页', `APP签名链翻页失败 mid=${mid} aid=${lastAid}: ${appError.message}`);
+      Logger.log('net', 'UP投稿翻页', `APP签名链降级Web退避链 mid=${mid}`);
+      throw appError;
+    }
+  }
+
+  // 按页号抓取 UP 主更早投稿（页号越大越老，每页 30 条），纯 Web 三轮退避链
+  static async fetchUpVideosByPage(mid: number, pn: number): Promise<BiliVideo[]> {
+    const page: number = Math.max(pn, 1);
+    if (page === 1) {
+      return BiliService.fetchUpVideos(mid);
+    }
+    return BiliService.fetchUpVideosViaWeb(mid, page);
+  }
+
+  // Web 三轮 buvid 退避（直连→WBI 签名）
+  private static async fetchUpVideosViaWeb(mid: number, pn: number): Promise<BiliVideo[]> {
+    const label: string = pn > 1 ? 'UP投稿翻页' : 'UP投稿列表';
     const spaceHeaders: Record<string, string> = buildSpaceHeaders(mid);
     let lastError: Error = new Error('查询UP主投稿失败');
     for (let attempt: number = 0; attempt < 3; attempt++) {
@@ -916,38 +908,57 @@ export class BiliService {
       const list: Record<string, Object> = listRaw as Record<string, Object>;
       const vlistRaw: Object = list['vlist'];
       if (vlistRaw !== undefined && vlistRaw !== null) {
-        const arr: Object[] = vlistRaw as Object[];
-        for (let i: number = 0; i < arr.length; i++) {
-          const rec: Record<string, Object> = arr[i] as Record<string, Object>;
-          const bvidRaw: Object = rec['bvid'];
-          const bvid: string = bvidRaw === undefined || bvidRaw === null ? '' : bvidRaw as string;
-          if (bvid === '') {
-            continue;
-          }
-          const item: BiliVideo = new BiliVideo();
-          item.bvid = bvid;
-          if (rec['aid'] !== undefined && rec['aid'] !== null) {
-            item.aid = rec['aid'] as number;
-          }
-          const titleRaw: Object = rec['title'];
-          item.title = titleRaw === undefined || titleRaw === null ? '' : cleanTitle(titleRaw as string);
-          item.cover = BiliService.normalizeCover(rec);
-          const lenRaw: Object = rec['length'];
-          item.duration = lenRaw === undefined || lenRaw === null ? 0 : parseDurationLen(lenRaw as string);
-          if (rec['created'] !== undefined && rec['created'] !== null) {
-            item.pubdate = rec['created'] as number;
-          }
-          if (rec['mid'] !== undefined && rec['mid'] !== null) {
-            item.ownerMid = rec['mid'] as number;
-          }
-          if (rec['author'] !== undefined && rec['author'] !== null) {
-            item.ownerName = rec['author'] as string;
-          }
-          items.push(item);
-        }
+        BiliService.parseVlistRecords(vlistRaw as Object[], items);
       }
     }
     return items;
+  }
+
+  // list.vlist 记录解析：Web arc/search 与 APP cursor 端点共用（同源 vlist 结构）；
+  // title 兼容 btitle、length 兼容秒数（APP 端点字段形态容错）
+  private static parseVlistRecords(arr: Object[], items: BiliVideo[]): void {
+    for (let i: number = 0; i < arr.length; i++) {
+      const rec: Record<string, Object> = arr[i] as Record<string, Object>;
+      const bvidRaw: Object = rec['bvid'];
+      const bvid: string = bvidRaw === undefined || bvidRaw === null ? '' : bvidRaw as string;
+      if (bvid === '') {
+        continue;
+      }
+      const item: BiliVideo = new BiliVideo();
+      item.bvid = bvid;
+      if (rec['aid'] !== undefined && rec['aid'] !== null) {
+        item.aid = Number(rec['aid']);
+      } else if (rec['param'] !== undefined && rec['param'] !== null) {
+        item.aid = Number(rec['param']);
+      }
+      let titleRaw: Object = rec['title'];
+      if (titleRaw === undefined || titleRaw === null) {
+        titleRaw = rec['btitle'];
+      }
+      item.title = titleRaw === undefined || titleRaw === null ? '' : cleanTitle(titleRaw as string);
+      item.cover = BiliService.normalizeCover(rec);
+      const lenRaw: Object = rec['length'];
+      if (lenRaw !== undefined && lenRaw !== null) {
+        if (typeof lenRaw === 'number') {
+          const dur: number = lenRaw as number;
+          item.duration = dur > 0 ? dur : 0;
+        } else {
+          item.duration = parseDurationLen(lenRaw as string);
+        }
+      }
+      if (rec['created'] !== undefined && rec['created'] !== null) {
+        item.pubdate = Number(rec['created']);
+      } else if (rec['ctime'] !== undefined && rec['ctime'] !== null) {
+        item.pubdate = Number(rec['ctime']);
+      }
+      if (rec['mid'] !== undefined && rec['mid'] !== null) {
+        item.ownerMid = Number(rec['mid']);
+      }
+      if (rec['author'] !== undefined && rec['author'] !== null) {
+        item.ownerName = rec['author'] as string;
+      }
+      items.push(item);
+    }
   }
 
   static async fetchUpInfo(mid: number): Promise<UpInfo> {

@@ -8,7 +8,8 @@
 /.qoder
 /.arts
 /.codegenie
-/.deveco
+/.deveco/*
+!/.deveco/skills/
 /.appanalyzer
 /.merkle-snapshot.json
 .cxx
