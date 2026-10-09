@@ -7,14 +7,16 @@ import { AppStore } from '../service/AppStore';
 import { Appearance } from '../service/Appearance';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { common, OpenLinkOptions } from '@kit.AbilityKit';
-import { componentSnapshot } from '@kit.ArkUI';
+import { componentSnapshot, promptAction } from '@kit.ArkUI';
 import { image } from '@kit.ImageKit';
 import { photoAccessHelper } from '@kit.MediaLibraryKit';
 import { fileIo as fs } from '@kit.CoreFileKit';
 import { CoverThumb } from '../component/CoverThumb';
+import { EdgeHint } from '../component/EdgeHint';
+import { SettingsGroup } from '../component/SettingsGroup';
+import { SettingsRow } from '../component/SettingsRow';
 import { Constants } from '../service/Constants';
 import { Logger } from '../service/Logger';
-import { LogSheet } from '../component/LogSheet';
 import { PlayHistoryItem } from '../model/PlayHistoryItem';
 import { BiliVideo } from '../model/BiliVideo';
 import { AudioQuality, QualityTier } from '../model/AudioQuality';
@@ -73,7 +75,8 @@ export function SettingsPageBuilder() {
   SettingsPage()
 }
 
-// 设置页（NavDestination）：登录 / 播放设置 / 外观（含主题色板）/ 历史记录 / 关于
+// 设置页（NavDestination，US8 HarmonyOS 系统风格重写）：大标题 + 分组卡片（SettingsGroup/SettingsRow），
+// 登录 / 播放设置 / 外观（含主题色板）/ 播放历史 / 日志 / 关于功能全保留；
 // pushPathByName('settingsPage', param) 可带 'playHistory' / 'about' 直开对应面板
 @Component
 struct SettingsPage {
@@ -87,14 +90,17 @@ struct SettingsPage {
   @State qrUrl: string = '';
   @State oneKeyLogging: boolean = false;
   @State showAbout: boolean = false;
+  @State debugModeOn: boolean = false;
 
   // —— 播放历史 ——
   @StorageLink('showPlayHistory') showPlayHistory: boolean = false; // key 与 Constants.AS_SHOW_PLAY_HISTORY 对应
   @State playHistoryItems: PlayHistoryItem[] = [];
   @State playHistoryVersion: number = -1;
+  // US6 历史面板顶/底过冲提示
+  @State historyTopHint: string = '';
+  @State historyBottomHint: string = '';
 
   // —— 应用内日志（US9） ——
-  @State showLogSheet: boolean = false;
   @State logCount: number = 0;
 
   @State autoPlayOnStart: boolean = false;
@@ -110,6 +116,10 @@ struct SettingsPage {
   // 外观三态选中态（0=跟随系统 1=浅色 2=深色）：由 Appearance 写入 AppStorage 驱动刷新
   @StorageProp('colorModeSetting') colorModeSetting: number = 0;
 
+  // US8 设置页滚动过冲提示（顶/底），空串不渲染
+  @State settingsTopHint: string = '';
+  @State settingsBottomHint: string = '';
+
   @StorageProp('accentColor') accentColor: string = Constants.ACCENT_DEFAULT;
   @StorageProp('miniPlayerVisible') miniPlayerVisible: boolean = false; // key 与 Constants.AS_MINI_PLAYER_VISIBLE 对应
   private qrCanvas: CanvasRenderingContext2D =
@@ -123,7 +133,7 @@ struct SettingsPage {
     return $r('app.color.text_secondary');
   }
 
-  // 强调色淡底（T016，对齐原 material_tint_primary 的 0x59≈0.349 alpha）：随主题色运行时衍生
+  // 强调色淡底（对齐原 material_tint_primary 的 0x59≈0.349 alpha）：随主题色运行时衍生
   private tintBg(): string {
     return Appearance.hexWithAlpha(this.accentColor, 0.349);
   }
@@ -136,9 +146,19 @@ struct SettingsPage {
   private pollGeneration: number = 0;
   private controller: PlayerController = PlayerController.getInstance();
   private playHistorySource: HistoryDataSource = new HistoryDataSource();
+  private historyScroller: Scroller = new Scroller();
+  // 触底时刻的列表偏移（历史面板底部过冲判定基准）；-1 = 未捕获，条目增删后失效须重捕
+  private historyEndY: number = -1;
+  // FR-013：历史面板拖拽中标志（onReachStart 初始化会误触发一次，仅拖拽期间允许置过冲提示）
+  private historyDragging: boolean = false;
+  // 设置页滚动容器（US8）：触底偏移捕获 + 过冲提示
+  private settingsScroller: Scroller = new Scroller();
+  private settingsEndY: number = -1;
   private navPathStack: NavPathStack = new NavPathStack();
   // 进度广播退订句柄（US2/KI-1）：aboutToDisappear 中调用，避免监听器累积
   private unsubscribePlayer: () => void = (): void => {};
+  private tapCount: number = 0;
+  private lastTapTs: number = 0;
 
   aboutToAppear(): void {
     this.refreshLoginState();
@@ -154,9 +174,14 @@ struct SettingsPage {
         this.playHistoryVersion = this.controller.playHistoryVersion;
         this.playHistoryItems = this.controller.playHistory.slice(0);
         this.playHistorySource.setItems(this.playHistoryItems);
+        this.historyEndY = -1;
       }
     }, 'SettingsPage');
     this.logCount = Logger.count();
+    // debugMode 恢复：经 AppStore 读（Logger.init 的 getPreferencesSync 在 onCreate 阶段不可靠，已移除）
+    const storedDebug: boolean = AppStore.getNumber(Constants.KEY_DEBUG_MODE, 0) === 1;
+    Logger.setDebugMode(storedDebug);
+    this.debugModeOn = storedDebug;
   }
 
   aboutToDisappear(): void {
@@ -220,13 +245,62 @@ struct SettingsPage {
     this.playHistoryVersion = this.controller.playHistoryVersion;
     this.playHistoryItems = this.controller.playHistory.slice(0);
     this.playHistorySource.setItems(this.playHistoryItems);
+    this.historyEndY = -1;
     this.showPlayHistory = true;
   }
 
-  // 打开日志面板（US9）：先刷新角标计数；面板数据由 LogSheet 自己在 aboutToAppear 读取
-  private openLogSheet(): void {
-    this.logCount = Logger.count();
-    this.showLogSheet = true;
+  private handleAboutIconTap(): void {
+    const now: number = Date.now();
+    if (this.lastTapTs > 0 && now - this.lastTapTs <= Constants.DEBUG_TAP_WINDOW_MS) {
+      this.tapCount++;
+    } else {
+      this.tapCount = 1;
+    }
+    this.lastTapTs = now;
+    if (this.tapCount < 3) {
+      return;
+    }
+    this.tapCount = 0;
+    if (Logger.debugEnabled) {
+      promptAction.showToast({ message: '调试模式已开启，可在下方开关关闭' });
+      return;
+    }
+    Logger.setDebugMode(true);
+    AppStore.putNumber(Constants.KEY_DEBUG_MODE, 1);
+    this.debugModeOn = true;
+    promptAction.showToast({ message: '已开启调试模式' });
+  }
+
+  private confirmExitDebug(): void {
+    AlertDialog.show({
+      title: '退出调试模式',
+      message: '确定退出调试模式吗？关闭后日志将不再写入系统日志。',
+      autoCancel: true,
+      alignment: DialogAlignment.Center,
+      primaryButton: {
+        value: '确认关闭',
+        action: (): void => {
+          Logger.setDebugMode(false);
+          AppStore.putNumber(Constants.KEY_DEBUG_MODE, 0);
+          this.debugModeOn = false;
+          promptAction.showToast({ message: '已退出调试模式' });
+        }
+      },
+      secondaryButton: {
+        value: '取消',
+        action: (): void => {
+          this.debugModeOn = true;
+        }
+      },
+      onWillDismiss: (dismiss: DismissDialogAction) => {
+        this.debugModeOn = true;
+        dismiss.dismiss();
+      }
+    });
+  }
+
+  private openLogPage(): void {
+    this.navPathStack.pushPathByName('logPage', '');
   }
 
   // viewAt 为秒级时间戳（play-history-progress 迁移后统一单位），内部转毫秒做相对时间计算
@@ -276,10 +350,15 @@ struct SettingsPage {
   }
 
   private async replayHistory(item: PlayHistoryItem): Promise<void> {
-    const v: BiliVideo = BiliVideo.create(item.bvid, 0, 0, item.title, item.cover, 0);
-    v.ownerName = item.ownerName;
-    await this.controller.playFromLibraryResult(v);
-    this.controller.goToPlayerTab?.();
+    try {
+      const v: BiliVideo = BiliVideo.create(item.bvid, 0, 0, item.title, item.cover, item.duration);
+      v.ownerName = item.ownerName;
+      await this.controller.playFromLibraryResult(v);
+      this.controller.goToPlayerTab?.();
+    } catch (err) {
+      const error = err as BusinessError;
+      promptAction.showToast({ message: `播放失败: ${error.message}` });
+    }
   }
 
   // 左滑单条删除（US3 FR-009）：点击时按 bvid 从当前 @State 数组实时解析下标，
@@ -304,6 +383,7 @@ struct SettingsPage {
     this.playHistoryVersion = this.controller.playHistoryVersion;
     this.playHistoryItems.splice(idx, 1);
     this.playHistorySource.notifyDataDelete(idx);
+    this.historyEndY = -1;
   }
 
   // 左滑露出的红色「删除」按钮（KI-3 交互约定：露出按钮、点击确认删除，不做滑过阈值直删）
@@ -339,6 +419,7 @@ struct SettingsPage {
           this.playHistoryVersion = this.controller.playHistoryVersion;
           this.playHistoryItems = [];
           this.playHistorySource.setItems(this.playHistoryItems);
+          this.historyEndY = -1;
         }
       }
     });
@@ -416,8 +497,8 @@ struct SettingsPage {
     const quiet: number = 4;
     const total: number = code.size + quiet * 2;
     const scale: number = QR_CANVAS_SIZE / total;
-    for (let y = 0; y < code.size; y++) {
-      for (let x = 0; x < code.size; x++) {
+    for (let y: number = 0; y < code.size; y++) {
+      for (let x: number = 0; x < code.size; x++) {
         if (code.getModule(x, y)) {
           ctx.fillRect((x + quiet) * scale, (y + quiet) * scale, scale, scale);
         }
@@ -581,6 +662,27 @@ struct SettingsPage {
     }
   }
 
+  // US7/FR-016：登出二次确认，取消不登出；确认后 logout 首行 stopPoll 停止轮询中的登录流程
+  private confirmLogout(): void {
+    AlertDialog.show({
+      title: '退出登录',
+      message: '确定退出当前 B 站账号吗？',
+      autoCancel: true,
+      alignment: DialogAlignment.Center,
+      primaryButton: {
+        value: '退出登录',
+        action: (): void => {
+          this.logout();
+        }
+      },
+      secondaryButton: {
+        value: '取消',
+        action: (): void => {
+        }
+      }
+    });
+  }
+
   private async logout(): Promise<void> {
     this.stopPoll();
     this.showQr = false;
@@ -599,7 +701,7 @@ struct SettingsPage {
     Appearance.setUserMode(mode, getContext());
   }
 
-  // 外观三选项分段按钮：当前生效项粉色高亮，其余为未选中态
+  // 外观三选项分段按钮：当前生效项强调色淡底高亮
   @Builder
   appearanceOption(label: string, mode: number) {
     Text(label)
@@ -611,7 +713,7 @@ struct SettingsPage {
       .height(34)
       .borderRadius(17)
       .backgroundColor(this.colorModeSetting === mode ?
-        this.tintBg() : $r('app.color.btn_glass'))
+        this.tintBg() : $r('app.color.page_background'))
       .onClick(() => {
         this.selectAppearance(mode);
       })
@@ -646,6 +748,164 @@ struct SettingsPage {
     .onClick(() => {
       this.selectAccent(color);
     })
+  }
+
+  // 未登录账号区：一键登录/扫码登录按钮 + 二维码块（US8 卡片内布局）
+  @Builder
+  private loginControls() {
+    Column() {
+      if (this.oneKeyLogging) {
+        Button('正在等待B站确认…（点击取消）')
+          .width('100%')
+          .height(40)
+          .backgroundColor(this.tintBg())
+          .fontColor($r('app.color.text_primary'))
+          .borderRadius(20)
+          .fontSize(14)
+          .onClick(() => {
+            this.cancelOneKeyLogin();
+          })
+
+        Text(this.qrStatus)
+          .fontSize(13)
+          .fontColor($r('app.color.text_secondary'))
+          .width('100%')
+          .margin({ top: 8 })
+      } else {
+        Row({ space: 12 }) {
+          Button('B站一键登录')
+            .layoutWeight(1)
+            .height(40)
+            .backgroundColor(this.accentColor)
+            .fontColor(Color.White)
+            .borderRadius(20)
+            .fontSize(14)
+            .onClick(() => {
+              this.startOneKeyLogin();
+            })
+
+          Button('扫码登录')
+            .layoutWeight(1)
+            .height(40)
+            .backgroundColor($r('app.color.page_background'))
+            .fontColor($r('app.color.text_primary'))
+            .borderRadius(20)
+            .fontSize(14)
+            .onClick(() => {
+              this.showQr = true;
+              this.startQrLogin();
+            })
+        }
+        .width('100%')
+
+        if (!this.showQr && this.qrStatus !== '') {
+          Text(this.qrStatus)
+            .fontSize(13)
+            .fontColor($r('app.color.text_secondary'))
+            .width('100%')
+            .margin({ top: 8 })
+        }
+      }
+
+      if (this.showQr) {
+        Column() {
+          Canvas(this.qrCanvas)
+            .id('bili_qr_canvas')
+            .width(QR_CANVAS_SIZE)
+            .height(QR_CANVAS_SIZE)
+            .backgroundColor(Constants.QR_BG_COLOR)
+            .borderRadius(12)
+            .onReady(() => {
+              this.drawQr();
+            })
+
+          Text(this.qrStatus)
+            .fontSize(13)
+            .fontColor($r('app.color.text_secondary'))
+            .margin({ top: 10 })
+
+          Row({ space: 12 }) {
+            SaveButton({ text: SaveDescription.SAVE, buttonType: ButtonType.Capsule })
+              .height(34)
+              .padding({ left: 14, right: 14 })
+              .fontSize(13)
+              .fontColor($r('app.color.text_primary'))
+              .backgroundColor($r('app.color.page_background'))
+              .onClick(async (event: ClickEvent, result: SaveButtonOnClickResult) => {
+                if (result === SaveButtonOnClickResult.SUCCESS) {
+                  await this.saveQrToAlbum();
+                } else {
+                  this.qrStatus = '未获得保存授权，请重试';
+                }
+              })
+
+            Button(this.qrExpired ? '刷新二维码' : '取消')
+              .height(34)
+              .padding({ left: 14, right: 14 })
+              .backgroundColor($r('app.color.page_background'))
+              .fontColor($r('app.color.text_primary'))
+              .borderRadius(17)
+              .fontSize(13)
+              .onClick(() => {
+                if (this.qrExpired) {
+                  this.startQrLogin();
+                } else {
+                  this.showQr = false;
+                  this.stopPoll();
+                }
+              })
+          }
+          .margin({ top: 10 })
+        }
+        .width('100%')
+        .alignItems(HorizontalAlign.Center)
+        .margin({ top: 12 })
+      }
+    }
+    .width('100%')
+    .padding({ left: 14, right: 14, top: 14, bottom: 14 })
+  }
+
+  // 手动粘贴 Cookie（US8 卡片内布局）
+  @Builder
+  private cookieBlock() {
+    Column() {
+      Text('手动粘贴Cookie（需包含 SESSDATA 和 bili_jct）')
+        .fontSize(13)
+        .fontColor($r('app.color.text_secondary'))
+        .width('100%')
+
+      Row() {
+        TextInput({ placeholder: '粘贴浏览器Cookie', text: this.cookieInput })
+          .layoutWeight(1)
+          .height(40)
+          .backgroundColor($r('app.color.page_background'))
+          .fontColor($r('app.color.text_primary'))
+          .placeholderColor($r('app.color.placeholder_color'))
+          .borderRadius(10)
+          .fontSize(13)
+          .onChange((value: string) => {
+            this.cookieInput = value;
+          })
+
+        Button('保存')
+          .height(40)
+          .margin({ left: 8 })
+          .padding({ left: 16, right: 16 })
+          .backgroundColor(this.tintBg())
+          .fontColor($r('app.color.text_primary'))
+          .borderRadius(10)
+          .fontSize(13)
+          .onClick(() => {
+            this.saveCookie(this.cookieInput);
+          })
+      }
+      .width('100%')
+      .margin({ top: 8 })
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Start)
+    .padding({ left: 14, right: 14, top: 14, bottom: 14 })
   }
 
   // 「关于」弹窗内的功能条目：圆点 + 说明文字，左侧对齐，支持多行
@@ -695,6 +955,22 @@ struct SettingsPage {
             .height(76)
             .borderRadius(18)
             .objectFit(ImageFit.Cover)
+            .onClick(() => {
+              this.handleAboutIconTap();
+            })
+
+          if (this.debugModeOn) {
+            SettingsRow({
+              title: '调试模式',
+              subtitle: '开启后日志同步写入系统 hilog',
+              showToggle: true,
+              toggleOn: this.debugModeOn,
+              toggleChange: (isOn: boolean): void => {
+                this.debugModeOn = isOn;
+                this.confirmExitDebug();
+              }
+            })
+          }
 
           Text('BiliRadio')
             .fontSize(20)
@@ -753,7 +1029,8 @@ struct SettingsPage {
     .backdropBlur(20)
   }
 
-  // 播放历史面板（bindSheet 呈现，与播放页详情 Sheet 同构）：最近播放倒序，点击回放，清空需二次确认
+  // 播放历史面板（bindSheet 呈现）：最近播放倒序，点击回放，清空需二次确认；
+  // US6：背景与设置页统一（page_background），下拉关闭已被 onWillDismiss 拦截
   @Builder
   playHistoryPanel() {
     Column() {
@@ -768,9 +1045,7 @@ struct SettingsPage {
           Button('清空')
             .height(32)
             .padding({ left: 12, right: 12 })
-            .backgroundColor($r('app.color.btn_glass'))
-            .backdropBlur(20)
-            .border({ width: 1, color: $r('app.color.btn_border') })
+            .backgroundColor($r('app.color.card_background'))
             .fontColor($r('app.color.danger_red'))
             .borderRadius(16)
             .fontSize(12)
@@ -793,8 +1068,11 @@ struct SettingsPage {
         .alignItems(HorizontalAlign.Center)
         .layoutWeight(1)
       } else {
-        List({ space: 0 }) {
-          LazyForEach(this.playHistorySource, (item: PlayHistoryItem) => {
+        Stack() {
+          EdgeHint({ text: this.historyTopHint, edge: 'top' })
+          EdgeHint({ text: this.historyBottomHint, edge: 'bottom' })
+          List({ space: 0, scroller: this.historyScroller }) {
+            LazyForEach(this.playHistorySource, (item: PlayHistoryItem) => {
             ListItem() {
               Row() {
                 CoverThumb({ cover: item.cover })
@@ -825,29 +1103,53 @@ struct SettingsPage {
               end: this.historyDeleteAction(item)
             })
           }, (item: PlayHistoryItem) => `${item.bvid}_${item.viewAt}_${item.progress}`)
+          }
+          .width('100%')
+          .height('100%')
+          .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
+          // FR-013：到边即置过冲提示——onWillScroll 在纯边界过冲（偏移量不再变化）时不回调，
+          // 改由 onReachStart/onReachEnd 驱动（onReachStart 初始化会误触发一次，故须拖拽中守卫）
+          .onWillStartDragging(() => {
+            this.historyDragging = true;
+          })
+          .onReachStart(() => {
+            if (this.historyDragging) {
+              this.historyTopHint = '已经到顶了';
+            }
+          })
+          .onReachEnd(() => {
+            this.historyEndY = this.historyScroller.currentOffset().yOffset;
+            if (this.historyDragging) {
+              this.historyBottomHint = '已经到底了';
+            }
+          })
+          .onWillScroll((yOffset: number): void => {
+            const y: number = this.historyScroller.currentOffset().yOffset;
+            if (yOffset < 0) {
+              this.historyBottomHint = '';
+              if (y <= 0) {
+                this.historyTopHint = '已经到顶了';
+              }
+            } else if (yOffset > 0) {
+              this.historyTopHint = '';
+              if (this.historyEndY >= 0 && y >= this.historyEndY) {
+                this.historyBottomHint = '已经到底了';
+              }
+            }
+          })
+          .onScrollStop(() => {
+            this.historyTopHint = '';
+            this.historyBottomHint = '';
+            this.historyDragging = false;
+          })
         }
         .width('100%')
         .layoutWeight(1)
       }
-
-      Text(this.controller.statusMsg)
-        .fontSize(12)
-        .fontColor($r('app.color.text_secondary'))
-        .width('100%')
-        .padding({ left: 16, right: 16, top: 6, bottom: 12 })
-        .maxLines(1)
-        .textOverflow({ overflow: TextOverflow.Ellipsis })
     }
     .width('100%')
     .height('100%')
-    .backgroundColor($r('app.color.sheet_background'))
-    .backdropBlur(20)
-  }
-
-  // 日志面板（US9）：bindSheet 承载 LogSheet 组件，数据读取与清空均在组件内完成
-  @Builder
-  logSheetPanel() {
-    LogSheet()
+    .backgroundColor($r('app.color.page_background'))
   }
 
   // 音质档位选择面板（audio-quality-settings）：单 sheet + qualityEditTarget 标记当前编辑项；
@@ -855,7 +1157,7 @@ struct SettingsPage {
   @Builder
   qualitySheetPanel() {
     Column() {
-      Text(this.qualityEditTarget === 'wifi' ? 'Wi-Fi 默认音质' : '蜂窝默认音质')
+      Text(this.qualityEditTarget === 'wifi' ? 'Wi-Fi 默认音质' : '移动网络默认音质')
         .fontSize(17)
         .fontWeight(FontWeight.Bold)
         .fontColor($r('app.color.text_primary'))
@@ -894,554 +1196,274 @@ struct SettingsPage {
     .backgroundColor($r('app.color.sheet_background'))
   }
 
-
   build() {
     NavDestination() {
-      Stack({ alignContent: Alignment.Top }) {
-        Scroll() {
-          Column() {
-            Row() {
-          Text('账号')
-            .fontSize(15)
-            .fontColor(this.textPrimary())
-          Blank()
-          Text(this.loginName)
-            .fontSize(14)
-            .fontColor(this.textSecondary())
-        }
-        .width('92%')
-        .padding(14)
-        .backgroundColor($r('app.color.btn_glass'))
-        .backdropBlur(20)
-        .border({ width: 1, color: $r('app.color.btn_border') })
-        .borderRadius(12)
-
-        if (!this.isLogged) {
-          if (this.oneKeyLogging) {
-            Button('正在等待B站确认…（点击取消）')
-              .width('92%')
-              .height(42)
-              .backgroundColor(this.tintBg())
-              .backdropBlur(20)
-              .fontColor($r('app.color.text_primary'))
-              .borderRadius(21)
-              .fontSize(15)
-              .margin({ top: 12 })
-              .onClick(() => {
-                this.cancelOneKeyLogin();
-              })
-
-            Text(this.qrStatus)
-              .fontSize(13)
-              .fontColor(this.textSecondary())
-              .width('92%')
-              .margin({ top: 8 })
-          } else {
-            Row({ space: 12 }) {
-              Button('B站一键登录')
-                .layoutWeight(1)
-                .height(42)
-                .backgroundColor(this.tintBg())
-                .backdropBlur(20)
-                .fontColor($r('app.color.text_primary'))
-                .borderRadius(21)
-                .fontSize(15)
-                .onClick(() => {
-                  this.startOneKeyLogin();
-                })
-
-              Button('扫码登录')
-                .layoutWeight(1)
-                .height(42)
-                .backgroundColor($r('app.color.btn_glass'))
-                .backdropBlur(20)
-                .border({ width: 1, color: $r('app.color.btn_border') })
-                .fontColor(this.textPrimary())
-                .borderRadius(21)
-                .fontSize(15)
-                .onClick(() => {
-                  this.showQr = true;
-                  this.startQrLogin();
-                })
-            }
-            .width('92%')
-            .margin({ top: 12 })
-
-            if (!this.showQr && this.qrStatus !== '') {
-              Text(this.qrStatus)
-                .fontSize(13)
-                .fontColor(this.textSecondary())
-                .width('92%')
-                .margin({ top: 8 })
-            }
+      Column() {
+        Row() {
+          Row() {
+            SymbolGlyph($r('sys.symbol.chevron_left'))
+              .fontSize(22)
+              .fontColor([$r('app.color.text_primary')])
           }
-        } else {
-          Button('退出登录')
-            .width('92%')
-            .height(42)
-            .backgroundColor($r('app.color.btn_glass'))
-            .backdropBlur(20)
-            .border({ width: 1, color: $r('app.color.btn_border') })
-            .fontColor(this.textPrimary())
-            .borderRadius(21)
-            .fontSize(15)
-            .margin({ top: 12 })
-            .onClick(() => {
-              this.logout();
-            })
-        }
+          .width(36)
+          .height(36)
+          .borderRadius(18)
+          .backgroundColor($r('app.color.card_background'))
+          .justifyContent(FlexAlign.Center)
+          .onClick(() => {
+            this.navPathStack.pop();
+          })
 
-        if (!this.isLogged) {
-          if (this.showQr) {
+          Text('设置')
+            .fontSize(24)
+            .fontWeight(FontWeight.Bold)
+            .fontColor($r('app.color.text_primary'))
+            .layoutWeight(1)
+            .margin({ left: 10 })
+        }
+        .width('100%')
+        .alignItems(VerticalAlign.Center)
+        .padding({ left: 16, right: 16, top: 6, bottom: 10 })
+
+        Stack() {
+          EdgeHint({ text: this.settingsTopHint, edge: 'top' })
+          EdgeHint({ text: this.settingsBottomHint, edge: 'bottom' })
+          Scroll(this.settingsScroller) {
             Column() {
-              Canvas(this.qrCanvas)
-                .id('bili_qr_canvas')
-                .width(QR_CANVAS_SIZE)
-                .height(QR_CANVAS_SIZE)
-                .backgroundColor(Constants.QR_BG_COLOR)
-                .borderRadius(12)
-                .margin({ top: 12 })
-                .onReady(() => {
-                  this.drawQr();
-                })
-
-              Text(this.qrStatus)
-                .fontSize(13)
-                .fontColor(this.textSecondary())
-                .margin({ top: 10 })
-
-              Row({ space: 12 }) {
-                SaveButton({ text: SaveDescription.SAVE, buttonType: ButtonType.Capsule })
-                  .height(34)
-                  .padding({ left: 14, right: 14 })
-                  .fontSize(13)
-                  .fontColor($r('app.color.text_primary'))
-                  .backgroundColor($r('app.color.page_background'))
-                  .onClick(async (event: ClickEvent, result: SaveButtonOnClickResult) => {
-                    if (result === SaveButtonOnClickResult.SUCCESS) {
-                      await this.saveQrToAlbum();
-                    } else {
-                      this.qrStatus = '未获得保存授权，请重试';
+              SettingsGroup({ title: '账号' }) {
+                if (this.isLogged) {
+                  SettingsRow({
+                    title: this.loginName,
+                    rowIcon: $r('sys.symbol.person'),
+                    showDivider: true
+                  })
+                  SettingsRow({
+                    title: '退出登录',
+                    danger: true,
+                    rowAction: (): void => {
+                      this.confirmLogout();
                     }
                   })
-
-                Button(this.qrExpired ? '刷新二维码' : '取消')
-                  .height(34)
-                  .padding({ left: 14, right: 14 })
-                  .backgroundColor($r('app.color.btn_glass'))
-                  .backdropBlur(20)
-                  .border({ width: 1, color: $r('app.color.btn_border') })
-                  .fontColor(this.textPrimary())
-                  .borderRadius(17)
-                  .fontSize(13)
-                  .onClick(() => {
-                    if (this.qrExpired) {
-                      this.startQrLogin();
-                    } else {
-                      this.showQr = false;
-                      this.stopPoll();
-                    }
-                  })
+                } else {
+                  this.loginControls()
+                  Divider()
+                    .color($r('app.color.track_color'))
+                    .margin({ left: 16, right: 16 })
+                  this.cookieBlock()
+                }
               }
-              .margin({ top: 10 })
+
+              SettingsGroup({ title: '播放设置' }) {
+                SettingsRow({
+                  title: '启动时自动播放',
+                  subtitle: '打开应用后自动继续上次进度',
+                  showToggle: true,
+                  toggleOn: this.autoPlayOnStart,
+                  showDivider: true,
+                  toggleChange: (isOn: boolean): void => {
+                    this.autoPlayOnStart = isOn;
+                    AppStore.putNumber(Constants.KEY_AUTO_PLAY_ON_START, isOn ? 1 : 0);
+                  }
+                })
+                SettingsRow({
+                  title: '后台打断续播',
+                  subtitle: '来电等打断结束后自动继续播放',
+                  showToggle: true,
+                  toggleOn: this.interruptResume,
+                  showDivider: true,
+                  toggleChange: (isOn: boolean): void => {
+                    this.interruptResume = isOn;
+                    AppStore.putNumber(Constants.KEY_INTERRUPT_RESUME, isOn ? 1 : 0);
+                  }
+                })
+                SettingsRow({
+                  title: 'Wi-Fi 默认音质',
+                  valueText: AudioQuality.label(this.wifiQuality),
+                  showArrow: true,
+                  showDivider: true,
+                  rowAction: (): void => {
+                    this.openQualitySheet('wifi');
+                  }
+                })
+                SettingsRow({
+                  title: '移动网络默认音质',
+                  valueText: AudioQuality.label(this.cellularQuality),
+                  showArrow: true,
+                  showDivider: true,
+                  rowAction: (): void => {
+                    this.openQualitySheet('cellular');
+                  }
+                })
+                if (!this.isLogged) {
+                  Text('未登录时最高 64K，登录后可用更高音质')
+                    .fontSize(12)
+                    .fontColor(this.accentColor)
+                    .width('100%')
+                    .textAlign(TextAlign.Start)
+                    .padding({ left: 16, right: 16, top: 4, bottom: 10 })
+                }
+                SettingsRow({
+                  title: '无图模式',
+                  subtitle: '播放页、播放列表与系统播控均不显示封面与头像',
+                  showToggle: true,
+                  toggleOn: this.dataSaver,
+                  showDivider: true,
+                  toggleChange: (isOn: boolean): void => {
+                    this.dataSaver = isOn;
+                    AppStore.putNumber(Constants.KEY_DATA_SAVER, isOn ? 1 : 0);
+                    this.controller.refreshUi();
+                    // US5：开关切换即时刷新——对当前播放曲目重发一次系统播控元数据
+                    this.controller.refreshMediaSessionMetadata();
+                  }
+                })
+                SettingsRow({
+                  title: '仅在 Wi-Fi 环境播放',
+                  subtitle: '非 Wi-Fi 网络播放需手动确认',
+                  showToggle: true,
+                  toggleOn: this.wifiOnlyDownload,
+                  toggleChange: (isOn: boolean): void => {
+                    this.wifiOnlyDownload = isOn;
+                    AppStore.putNumber(Constants.KEY_WIFI_ONLY_DOWNLOAD, isOn ? 1 : 0);
+                  }
+                })
+              }
+
+              SettingsGroup({ title: '外观' }) {
+                Row({ space: 8 }) {
+                  this.appearanceOption('跟随系统', Appearance.MODE_FOLLOW_SYSTEM)
+                  this.appearanceOption('浅色', Appearance.MODE_LIGHT)
+                  this.appearanceOption('深色', Appearance.MODE_DARK)
+                }
+                .width('100%')
+                .padding({ left: 14, right: 14, top: 14, bottom: 14 })
+
+                Divider()
+                  .color($r('app.color.track_color'))
+                  .margin({ left: 16, right: 16 })
+
+                Row({ space: 12 }) {
+                  ForEach(Constants.ACCENT_PRESETS, (color: string) => {
+                    this.accentSwatch(color)
+                  }, (color: string) => color)
+                }
+                .width('100%')
+                .padding({ left: 14, right: 14, top: 12, bottom: 14 })
+              }
+
+              SettingsGroup({ title: '通用' }) {
+                SettingsRow({
+                  title: '播放历史',
+                  rowIcon: $r('sys.symbol.clock'),
+                  valueText: this.controller.playHistory.length > 0
+                    ? `${this.controller.playHistory.length} 条` : '',
+                  showArrow: true,
+                  showDivider: true,
+                  rowAction: (): void => {
+                    this.openPlayHistory();
+                  }
+                })
+                SettingsRow({
+                  title: '日志查询',
+                  rowIcon: $r('sys.symbol.doc_text'),
+                  valueText: this.logCount > 0 ? `${this.logCount} 条` : '',
+                  showArrow: true,
+                  showDivider: true,
+                  rowAction: (): void => {
+                    this.openLogPage();
+                  }
+                })
+                SettingsRow({
+                  title: '关于',
+                  rowIcon: $r('sys.symbol.info_circle'),
+                  showArrow: true,
+                  rowAction: (): void => {
+                    this.showAbout = true;
+                  }
+                })
+              }
+
+              if (this.statusMsg !== '') {
+                Text(this.statusMsg)
+                  .fontSize(13)
+                  .fontColor($r('app.color.text_secondary'))
+                  .margin({ top: 16, bottom: 24 })
+                  .textAlign(TextAlign.Center)
+              }
             }
             .width('100%')
-            .alignItems(HorizontalAlign.Center)
+            .alignItems(HorizontalAlign.Start)
+            .padding({ left: 16, right: 16, top: 2,
+              bottom: this.miniPlayerVisible ? Constants.MINI_PLAYER_CLEARANCE : 24 })
+            // ponytail: about 的 bindSheet 挂外层根 Column 或内层链首位时在 API 24 平板打开即自动关闭；单挂内容容器（HEAD 版 logSheet 同款宿主）稳定
+            .bindSheet($$this.showAbout, this.aboutSheet(), {
+              height: '75%',
+              dragBar: true,
+              showClose: false,
+              backgroundColor: $r('app.color.page_background'),
+              preferType: SheetType.BOTTOM
+            })
           }
-
-          Column() {
-            Text('手动粘贴Cookie（需包含 SESSDATA 和 bili_jct）')
-              .fontSize(13)
-              .fontColor(this.textSecondary())
-              .width('100%')
-              .margin({ bottom: 8 })
-
-            Row() {
-              TextInput({ placeholder: '粘贴浏览器Cookie', text: this.cookieInput })
-                .layoutWeight(1)
-                .height(40)
-                .backgroundColor($r('app.color.btn_glass'))
-                .backdropBlur(20)
-                .border({ width: 1, color: $r('app.color.btn_border') })
-                .fontColor(this.textPrimary())
-                .placeholderColor($r('app.color.placeholder_color'))
-                .borderRadius(8)
-                .fontSize(13)
-                .onChange((value: string) => {
-                  this.cookieInput = value;
-                })
-
-              Button('保存')
-                .height(40)
-                .margin({ left: 8 })
-              .backgroundColor($r('app.color.btn_glass'))
-              .backdropBlur(20)
-              .border({ width: 1, color: $r('app.color.btn_border') })
-              .fontColor(this.accentColor)
-              .borderRadius(8)
-                .fontSize(13)
-                .onClick(() => {
-                  this.saveCookie(this.cookieInput);
-                })
+          .width('100%')
+          .height('100%')
+          .scrollBar(BarState.Off)
+          .edgeEffect(EdgeEffect.Spring)
+          .onScrollEdge((side: Edge): void => {
+            if (side === Edge.Bottom) {
+              this.settingsEndY = this.settingsScroller.currentOffset().yOffset;
+              this.settingsBottomHint = '已经到底了';
+            } else if (side === Edge.Top) {
+              // US8-AC4：onWillScroll 在纯边界过冲（偏移量不再变化）时不回调，到边提示改由本回调驱动
+              this.settingsTopHint = '已经到顶了';
             }
-            .width('100%')
-          }
-          .width('92%')
-          .padding(14)
-          .backgroundColor($r('app.color.btn_glass'))
-          .backdropBlur(20)
-          .border({ width: 1, color: $r('app.color.btn_border') })
-          .borderRadius(12)
-          .margin({ top: 12 })
+          })
+          .onWillScroll((yOffset: number): void => {
+            const y: number = this.settingsScroller.currentOffset().yOffset;
+            if (yOffset < 0) {
+              this.settingsBottomHint = '';
+              if (y <= 0) {
+                this.settingsTopHint = '已经到顶了';
+              }
+            } else if (yOffset > 0) {
+              this.settingsTopHint = '';
+              if (this.settingsEndY >= 0 && y >= this.settingsEndY) {
+                this.settingsBottomHint = '已经到底了';
+              }
+            }
+          })
+          .onScrollStop(() => {
+            this.settingsTopHint = '';
+            this.settingsBottomHint = '';
+          })
         }
-
-        Text('播放设置')
-          .fontSize(15)
-          .fontColor(this.textPrimary())
-          .width('92%')
-          .margin({ top: 14, bottom: 8 })
-
-        Row() {
-          Column() {
-            Text('启动时自动播放')
-              .fontSize(14)
-              .fontColor(this.textPrimary())
-            Text('打开应用后自动继续上次进度')
-              .fontSize(12)
-              .fontColor(this.textSecondary())
-              .margin({ top: 2 })
-          }
-          .alignItems(HorizontalAlign.Start)
-          .layoutWeight(1)
-
-          Toggle({ type: ToggleType.Switch, isOn: this.autoPlayOnStart })
-            .selectedColor(this.accentColor)
-
-            .onChange((isOn: boolean) => {
-              this.autoPlayOnStart = isOn;
-              AppStore.putNumber(Constants.KEY_AUTO_PLAY_ON_START, isOn ? 1 : 0);
-            })
-        }
-        .width('92%')
-        .padding(14)
-        .backgroundColor($r('app.color.btn_glass'))
-        .backdropBlur(20)
-        .border({ width: 1, color: $r('app.color.btn_border') })
-        .borderRadius(12)
-
-        Row() {
-          Column() {
-            Text('后台打断续播')
-              .fontSize(14)
-              .fontColor(this.textPrimary())
-            Text('来电等打断结束后自动继续播放')
-              .fontSize(12)
-              .fontColor(this.textSecondary())
-              .margin({ top: 2 })
-          }
-          .alignItems(HorizontalAlign.Start)
-          .layoutWeight(1)
-
-          Toggle({ type: ToggleType.Switch, isOn: this.interruptResume })
-            .selectedColor(this.accentColor)
-            .onChange((isOn: boolean) => {
-              this.interruptResume = isOn;
-              AppStore.putNumber(Constants.KEY_INTERRUPT_RESUME, isOn ? 1 : 0);
-            })
-        }
-        .width('92%')
-        .padding(14)
-        .backgroundColor($r('app.color.btn_glass'))
-        .backdropBlur(20)
-        .border({ width: 1, color: $r('app.color.btn_border') })
-        .borderRadius(12)
-        .margin({ top: 8 })
-
-        Text('音质')
-          .fontSize(15)
-          .fontColor(this.textPrimary())
-          .width('92%')
-          .margin({ top: 14, bottom: 8 })
-
-        Row() {
-          Text('Wi-Fi 默认音质')
-            .fontSize(14)
-            .fontColor(this.textPrimary())
-            .layoutWeight(1)
-          Text(AudioQuality.label(this.wifiQuality))
-            .fontSize(13)
-            .fontColor(this.accentColor)
-          Text('›')
-            .fontSize(16)
-            .fontColor(this.textSecondary())
-            .margin({ left: 4 })
-        }
-        .width('92%')
-        .padding(14)
-        .backgroundColor($r('app.color.btn_glass'))
-        .backdropBlur(20)
-        .border({ width: 1, color: $r('app.color.btn_border') })
-        .borderRadius(12)
-        .onClick(() => {
-          this.openQualitySheet('wifi');
-        })
-
-        Row() {
-          Text('蜂窝默认音质')
-            .fontSize(14)
-            .fontColor(this.textPrimary())
-            .layoutWeight(1)
-          Text(AudioQuality.label(this.cellularQuality))
-            .fontSize(13)
-            .fontColor(this.accentColor)
-          Text('›')
-            .fontSize(16)
-            .fontColor(this.textSecondary())
-            .margin({ left: 4 })
-        }
-        .width('92%')
-        .padding(14)
-        .backgroundColor($r('app.color.btn_glass'))
-        .backdropBlur(20)
-        .border({ width: 1, color: $r('app.color.btn_border') })
-        .borderRadius(12)
-        .margin({ top: 8 })
-        .onClick(() => {
-          this.openQualitySheet('cellular');
-        })
+        .width('100%')
+        .layoutWeight(1)
         .bindSheet($$this.showQualitySheet, this.qualitySheetPanel(), {
           height: '40%',
           dragBar: true,
           showClose: false,
-          backgroundColor: $r('app.color.sheet_background'),
+          backgroundColor: $r('app.color.page_background'),
           preferType: SheetType.BOTTOM
         })
-
-        if (!this.isLogged) {
-          Text('未登录时最高 64K，登录后可用更高音质')
-            .fontSize(12)
-            .fontColor(this.accentColor)
-            .width('92%')
-            .margin({ top: 6 })
-        }
-
-        Text('无图与网络设置')
-          .fontSize(15)
-          .fontColor(this.textPrimary())
-          .width('92%')
-          .margin({ top: 14, bottom: 8 })
-
-        Row() {
-          Column() {
-            Text('无图模式')
-              .fontSize(14)
-              .fontColor(this.textPrimary())
-            Text('播放页、播放列表与系统播控均不显示封面与头像')
-              .fontSize(12)
-              .fontColor(this.textSecondary())
-              .margin({ top: 2 })
-          }
-          .alignItems(HorizontalAlign.Start)
-          .layoutWeight(1)
-
-          Toggle({ type: ToggleType.Switch, isOn: this.dataSaver })
-            .selectedColor(this.accentColor)
-            .onChange((isOn: boolean) => {
-              this.dataSaver = isOn;
-              AppStore.putNumber(Constants.KEY_DATA_SAVER, isOn ? 1 : 0);
-              this.controller.refreshUi();
-              // US5：开关切换即时刷新——对当前播放曲目重发一次系统播控元数据
-              this.controller.refreshMediaSessionMetadata();
-            })
-        }
-        .width('92%')
-        .padding(14)
-        .backgroundColor($r('app.color.btn_glass'))
-        .backdropBlur(20)
-        .border({ width: 1, color: $r('app.color.btn_border') })
-        .borderRadius(12)
-
-        Row() {
-          Column() {
-            Text('仅在 Wi-Fi 环境播放')
-              .fontSize(14)
-              .fontColor(this.textPrimary())
-            Text('非 Wi-Fi 网络播放需手动确认')
-              .fontSize(12)
-              .fontColor(this.textSecondary())
-              .margin({ top: 2 })
-          }
-          .alignItems(HorizontalAlign.Start)
-          .layoutWeight(1)
-
-          Toggle({ type: ToggleType.Switch, isOn: this.wifiOnlyDownload })
-            .selectedColor(this.accentColor)
-            .onChange((isOn: boolean) => {
-              this.wifiOnlyDownload = isOn;
-              AppStore.putNumber(Constants.KEY_WIFI_ONLY_DOWNLOAD, isOn ? 1 : 0);
-            })
-        }
-        .width('92%')
-        .padding(14)
-        .backgroundColor($r('app.color.btn_glass'))
-        .backdropBlur(20)
-        .border({ width: 1, color: $r('app.color.btn_border') })
-        .borderRadius(12)
-        .margin({ top: 8 })
-
-        Text('外观')
-          .fontSize(15)
-          .fontColor(this.textPrimary())
-          .width('92%')
-          .margin({ top: 14, bottom: 8 })
-
-        Row({ space: 8 }) {
-          this.appearanceOption('跟随系统', Appearance.MODE_FOLLOW_SYSTEM)
-          this.appearanceOption('浅色', Appearance.MODE_LIGHT)
-          this.appearanceOption('深色', Appearance.MODE_DARK)
-        }
-        .width('92%')
-        .padding(14)
-        .backgroundColor($r('app.color.btn_glass'))
-        .backdropBlur(20)
-        .border({ width: 1, color: $r('app.color.btn_border') })
-        .borderRadius(12)
-
-        Row({ space: 12 }) {
-          ForEach(Constants.ACCENT_PRESETS, (color: string) => {
-            this.accentSwatch(color)
-          }, (color: string) => color)
-        }
-        .width('92%')
-        .padding(14)
-        .backgroundColor($r('app.color.btn_glass'))
-        .backdropBlur(20)
-        .border({ width: 1, color: $r('app.color.btn_border') })
-        .borderRadius(12)
-        .margin({ top: 8 })
-
-        Row() {
-          Text('播放历史')
-            .fontSize(15)
-            .fontColor(this.textPrimary())
-          Blank()
-          Text(this.controller.playHistory.length > 0
-            ? `${this.controller.playHistory.length} 条` : '')
-            .fontSize(13)
-            .fontColor(this.textSecondary())
-          Text('›')
-            .fontSize(16)
-            .fontColor(this.textSecondary())
-            .margin({ left: 4 })
-        }
-        .width('92%')
-        .padding(14)
-        .backgroundColor($r('app.color.btn_glass'))
-        .backdropBlur(20)
-        .border({ width: 1, color: $r('app.color.btn_border') })
-        .borderRadius(12)
-        .margin({ top: 12 })
-        .onClick(() => {
-          this.openPlayHistory();
-        })
-
-        Row() {
-          Text('日志查询')
-            .fontSize(15)
-            .fontColor(this.textPrimary())
-          Blank()
-          Text(this.logCount > 0 ? `${this.logCount} 条` : '')
-            .fontSize(13)
-            .fontColor(this.textSecondary())
-          Text('›')
-            .fontSize(16)
-            .fontColor(this.textSecondary())
-            .margin({ left: 4 })
-        }
-        .width('92%')
-        .padding(14)
-        .backgroundColor($r('app.color.btn_glass'))
-        .backdropBlur(20)
-        .border({ width: 1, color: $r('app.color.btn_border') })
-        .borderRadius(12)
-        .margin({ top: 12 })
-        .onClick(() => {
-          this.openLogSheet();
-        })
-
-        Row() {
-          Text('关于')
-            .fontSize(15)
-            .fontColor(this.textPrimary())
-          Blank()
-          Text('›')
-            .fontSize(16)
-            .fontColor(this.textSecondary())
-        }
-        .width('92%')
-        .padding(14)
-        .backgroundColor($r('app.color.btn_glass'))
-        .backdropBlur(20)
-        .border({ width: 1, color: $r('app.color.btn_border') })
-        .borderRadius(12)
-        .margin({ top: 12 })
-        .onClick(() => {
-          this.showAbout = true;
-        })
-
-        Text(this.statusMsg)
-          .fontSize(13)
-          .fontColor(this.textSecondary())
-          .margin({ top: 16, bottom: 24 })
-          .width('92%')
-          .textAlign(TextAlign.Center)
-      }
-      .width('100%')
-      .alignItems(HorizontalAlign.Center)
-      .padding({ top: 12, bottom: this.miniPlayerVisible ? Constants.MINI_PLAYER_CLEARANCE : 24 })
-      .bindSheet($$this.showLogSheet, this.logSheetPanel(), {
-        height: '62%',
-        dragBar: true,
-        showClose: false,
-        backgroundColor: $r('app.color.sheet_background'),
-        preferType: SheetType.BOTTOM,
-        onDisappear: (): void => {
-          // 面板内清空/新增日志后同步角标计数
-          this.logCount = Logger.count();
-        }
-      })
-    }
-    .width('100%')
-    .height('100%')
-    .bindSheet($$this.showAbout, this.aboutSheet(), {
-      height: '75%',
-      dragBar: true,
-      showClose: false,
-      backgroundColor: $r('app.color.sheet_background'),
-      preferType: SheetType.BOTTOM
-    })
-
       }
       .width('100%')
       .height('100%')
+      .backgroundColor($r('app.color.page_background'))
       .bindSheet($$this.showPlayHistory, this.playHistoryPanel(), {
         height: '62%',
         dragBar: true,
         showClose: false,
-        backgroundColor: $r('app.color.sheet_background'),
+        backgroundColor: $r('app.color.page_background'),
         preferType: SheetType.BOTTOM,
-        shouldDismiss: (sheetDismiss: SheetDismiss): void => {
-          // US4 返回层级拦截：播放浮层打开时拒绝本次关闭请求，转而关闭浮层并保持历史面板打开；
-          // 浮层未打开时放行关闭（下拉/遮罩/返回键等交互关闭均经此回调）
-          if (AppStorage.get<boolean>(Constants.AS_SHOW_PLAYER_OVERLAY) === true) {
-            AppStorage.setOrCreate<boolean>(Constants.AS_SHOW_PLAYER_OVERLAY, false);
+        onWillDismiss: (dismiss: DismissSheetAction) => {
+          // US6：面板内下拉不关闭（只留蒙层点击/系统返回/清空按钮等其余关闭路径）
+          if (dismiss.reason === DismissReason.SLIDE_DOWN) {
             return;
           }
-          sheetDismiss.dismiss();
+          dismiss.dismiss();
         }
       })
     }
-    .title('设置')
+    .hideTitleBar(true)
     .onWillAppear(() => {
       // US7/T021：设置页在台标志提前到转场开始时置位——驱动首页播放胶囊在本页隐藏
       AppStorage.setOrCreate<boolean>(Constants.AS_ON_SETTINGS_PAGE, true);
@@ -1449,6 +1471,11 @@ struct SettingsPage {
     .onWillDisappear(() => {
       // US7/T021：返回转场开始即复位，配合 Index 侧胶囊显隐动画随转场即时平滑出现
       AppStorage.setOrCreate<boolean>(Constants.AS_ON_SETTINGS_PAGE, false);
+    })
+    .onShown(() => {
+      // US5：日志页返回后刷新角标计数——pushPathByName 的 onPop 仅在 pop(result) 带 result 时触发，
+      // 日志页返回按钮为无参 pop()，onPop 永不回调，须在设置页重新可见时主动重读
+      this.logCount = Logger.count();
     })
     .onReady((ctx: NavDestinationContext) => {
       this.navPathStack = ctx.pathStack;
@@ -1467,8 +1494,14 @@ struct SettingsPage {
         this.showQualitySheet = false;
         return true;
       }
-      if (this.showLogSheet) {
-        this.showLogSheet = false;
+      // US4：与 Index.onBackPress 同构——浮层与历史面板同开时先关面板，再按才关浮层
+      const overlayOpen: boolean = AppStorage.get<boolean>(Constants.AS_SHOW_PLAYER_OVERLAY) === true;
+      if (overlayOpen && this.showPlayHistory) {
+        this.showPlayHistory = false;
+        return true;
+      }
+      if (overlayOpen) {
+        AppStorage.setOrCreate<boolean>(Constants.AS_SHOW_PLAYER_OVERLAY, false);
         return true;
       }
       if (this.showPlayHistory) {

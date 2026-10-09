@@ -16,7 +16,7 @@ export class LogEntry {
 }
 
 // 日志服务（US9）：全库单点，BiliService 记录网络请求/错误，PlayerController 记录播放链路诊断，
-// 设置页日志面板（LogSheet）查询内存缓冲。
+// 日志页（LogPage）查询内存缓冲。
 // 内存侧：环形缓冲超限按 Constants.LOG_BUFFER_MAX 淘汰最旧，占用有界；
 // 落盘侧（US9 新增）：每条日志以单行可读格式异步追加写入沙箱 filesDir 下日志文件，
 // 文件路径由 EntryAbility.onCreate 调用 init(context) 注入（getContext 在网络回调等非 UI 上下文失效），
@@ -31,10 +31,16 @@ export class Logger {
   private static filePathCache: string = '';
   // 落盘链路健康度：首次写入失败时打一条 hilog 告警，此后不再重复刷屏
   private static fileFailLogged: boolean = false;
+  static debugEnabled: boolean = false;
+
+  static setDebugMode(on: boolean): void {
+    Logger.debugEnabled = on;
+  }
 
   // 进程启动时由 EntryAbility.onCreate 注入 UIAbilityContext 并解析日志文件路径。
   // getContext() 是 UI 作用域函数（deprecated since 18）：网络回调等无组件上下文的调用点解析失败，
   // 且失败被静默吞掉——真机自安装起日志文件 0 字节（US9 落盘失效根因），故改为启动期注入进程级 context
+  // ponytail: debugMode 恢复不走此处 getPreferencesSync（onCreate 阶段读取失败被静默吞），由 SettingsPage 启动时经 AppStore 恢复
   static init(context: common.UIAbilityContext): void {
     try {
       Logger.filePathCache = `${context.filesDir}/${Constants.LOG_FILE_NAME}`;
@@ -55,7 +61,12 @@ export class Logger {
       if (Logger.entries.length > Constants.LOG_BUFFER_MAX) {
         Logger.entries.splice(0, Logger.entries.length - Constants.LOG_BUFFER_MAX);
       }
-      Logger.appendFile(Logger.buildFileLine(category, summary, result));
+      const line: string = Logger.buildFileLine(category, summary, result);
+      Logger.appendFile(line);
+      if (Logger.debugEnabled) {
+        // ponytail: hilog.debug 的 D 级在 API 24 设备被全局过滤不落缓冲，双写须用 info 才可见
+        hilog.info(Constants.LOG_DOMAIN, Constants.LOG_TAG, '%{public}s', line);
+      }
     } catch (e) {
       // 静默丢弃：日志写入失败不影响主流程（spec 边界场景）
     }

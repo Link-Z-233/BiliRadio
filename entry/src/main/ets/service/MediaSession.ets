@@ -4,6 +4,8 @@ import { wantAgent, WantAgent, common } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { Constants } from './Constants';
+import { CoverUrl } from './CoverUrl';
+import { NetUtil } from './NetUtil';
 
 export type MediaCommandCallback = () => void;
 
@@ -20,6 +22,7 @@ export class MediaSession {
   private session: avSession.AVSession | undefined = undefined;
   private bgRunning: boolean = false;
   private lastAssetId: string = '';
+  private lastDurationMs: number = 0;
 
   async init(onPlay: MediaCommandCallback, onPause: MediaCommandCallback,
     onNext: MediaCommandCallback, onPrev: MediaCommandCallback,
@@ -66,7 +69,10 @@ export class MediaSession {
       return;
     }
     this.lastAssetId = assetId;
+    this.lastDurationMs = durationMs;
     try {
+      // US6：系统播控封面按显示尺寸取图；网络态查询失败按省流档（isWifi 内部捕获异常回 false）
+      const wifi: boolean = await NetUtil.isWifi();
       const meta: avSession.AVMetadata = {
         assetId: assetId,
         title: title,
@@ -75,7 +81,9 @@ export class MediaSession {
       };
       // 空封面（无图模式）不设置 mediaImage 字段，而非传旧值
       if (coverUrl !== '') {
-        meta.mediaImage = coverUrl;
+        meta.mediaImage = CoverUrl.sized(coverUrl,
+          wifi ? Constants.COVER_BIG_W : Constants.COVER_SAVER_W,
+          wifi ? Constants.COVER_BIG_H : Constants.COVER_SAVER_H);
       }
       await this.session.setAVMetadata(meta);
     } catch (err) {
@@ -92,6 +100,7 @@ export class MediaSession {
       const state: avSession.AVPlaybackState = {
         state: playing ? avSession.PlaybackState.PLAYBACK_STATE_PLAY : avSession.PlaybackState.PLAYBACK_STATE_PAUSE,
         position: { elapsedTime: positionMs, updateTime: Date.now() },
+        duration: this.lastDurationMs,
       };
       await this.session.setAVPlaybackState(state);
     } catch (err) {

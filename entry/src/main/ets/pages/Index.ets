@@ -123,8 +123,18 @@ struct Index {
       }
       return true;
     }
+    // US4：浮层与历史面板同开时，第一次返回仅关面板（播放不中断），再按才收浮层；
+    // 禁止返回事件穿透弹回首页
     if (AppStorage.get<boolean>(Constants.AS_SHOW_PLAYER_OVERLAY) === true) {
+      if (AppStorage.get<boolean>(Constants.AS_SHOW_PLAY_HISTORY) === true) {
+        AppStorage.setOrCreate<boolean>(Constants.AS_SHOW_PLAY_HISTORY, false);
+        return true;
+      }
       AppStorage.setOrCreate<boolean>(Constants.AS_SHOW_PLAYER_OVERLAY, false);
+      return true;
+    }
+    if (AppStorage.get<boolean>(Constants.AS_SHOW_PLAY_HISTORY) === true) {
+      AppStorage.setOrCreate<boolean>(Constants.AS_SHOW_PLAY_HISTORY, false);
       return true;
     }
     if (AppStorage.get<boolean>(Constants.AS_SHOW_SPEED) === true) {

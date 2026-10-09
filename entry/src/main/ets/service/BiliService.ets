@@ -838,6 +838,11 @@ export class BiliService {
     return BiliService.fetchUpVideosViaWeb(mid, page);
   }
 
+  // US2 双链合并取稠：纯 Web 头页（不经 APP 链重试），失败抛错由调用方降级为 APP 结果
+  static fetchUpWebHead(mid: number): Promise<BiliVideo[]> {
+    return BiliService.fetchUpVideosViaWeb(mid, 1);
+  }
+
   // Web 三轮 buvid 退避（直连→WBI 签名）
   private static async fetchUpVideosViaWeb(mid: number, pn: number): Promise<BiliVideo[]> {
     const label: string = pn > 1 ? 'UP投稿翻页' : 'UP投稿列表';

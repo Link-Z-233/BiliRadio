@@ -10,9 +10,9 @@
 - **交互约定**：左滑露出「删除」按钮，**点击**执行删除（`ListItem.swipeAction({ end: { builder } })`），不做「滑过阈值直接删」。
 - **待实现清单**：
   1. **首页订阅列表** [HomePage.ets](entry/src/main/ets/pages/HomePage.ets)：`ListItem` 位于 `LazyForEach`（登记 L365-367 已漂移，2026-10-07 实测 L309-313）；删除复用既有 `removeSub(row)`（含清剧集缓存、持久化、刷新列表）。
-  2. **播放队列** [QueueSheet.ets](entry/src/main/ets/component/QueueSheet.ets)：`LazyForEach` + `ListItem`；删除可复用 `PlayerController.removeSelectedFromPlaylist([bvid])`（[PlayerController.ets](entry/src/main/ets/service/PlayerController.ets) L1028）；需处理与多选（长按 + 竖向滑动选择）手势的共存。
+  2. **播放队列** [QueueSheet.ets](entry/src/main/ets/component/QueueSheet.ets)：`LazyForEach` + `ListItem`；删除可复用 `PlayerController.removeSelectedFromPlaylist([bvid])`（[PlayerController.ets](entry/src/main/ets/service/PlayerController.ets) L1028）；需处理与多选（长按 + 竖向滑动选择）手势的共存。**暂缓（ux-feedback-round6 轮，2026-10-09）**：待队列整体大改时一并处理。
   3. ~~**播放历史** [SettingsPage.ets](entry/src/main/ets/pages/SettingsPage.ets) 的 `playHistoryPanel`~~ **已完成（play-history-progress 轮，2026-10-06）**：`playHistoryPanel` 已挂 `ListItem.swipeAction({ end: 删除按钮 builder })`，`HistoryDataSource.notifyDataDelete` 增量同步 LazyForEach；单条删除 API 为 `PlayerController.removePlayHistoryItem(bvid)`（splice + `playHistoryVersion++` + 异步写盘），`clearPlayHistory` 行为不变。
-- **状态**：部分实现——播放历史项已完成（见上），首页订阅列表/播放队列两项仍待实现（仅登记）。
+- **状态**：部分实现——播放历史项已完成（见上）；首页订阅列表待实现（仅登记）；播放队列左滑删除已暂缓（待队列整体大改）。
 
 ### KI-4 短链识别与解析（已修复：bili-link-recognize 轮，2026-10-07）
 
@@ -123,17 +123,26 @@
 
 ## 三、规划与预告
 
+> **⚠️ 强调（R8 规划，2026-10-09）：`Logger` 的 hilog 双写必须由 DEBUG 模式门控——默认关闭，绝不无条件向 hilog 总线写业务日志。** 原因：① 无条件双写会刷屏系统日志环形缓冲、挤掉系统/框架日志；② 日志内容含请求路径等信息，无条件进总线有隐私外溢之嫌。**开启入口 = 关于页图标三连击**（tap 3 次触发 debug 模式）；**debug 模式开启期间** `Logger.log()` 才同步向 hilog 输出（`Constants.LOG_DOMAIN`/`LOG_TAG`，`hilog.debug` 级），关闭或重启后恢复仅落盘+内存。任何后续改造不得绕过此门控。状态：待 R8 实现。
+
+- **下轮候选清单（appsign-up-fetch 收尾登记，2026-10-08，按优先序）**：
+  1. ~~**删除 endArmed**（spec FR-005，真机验证已通过解锁）~~ **已完成（ux-feedback-round6 轮，2026-10-09）**：endArmed 手势触发权与「失败不归还」惩罚已全部移除，回退 `loadingOlder` + `canLoadOlder` 两道门槛，另加 3 秒失败冷却（`Constants.LOAD_OLDER_FAIL_COOLDOWN_MS`）防止触底连发。
+  2. **KI-9 页界统一**——APP 签名链 20 条/页（服务端钳制）vs Web 退避链 30 条/页，降级/回切时页界不对齐可能漏条目（现有 bvid 去重兜底）；方案：Web 链 ps 降为 20，或翻页记账按链路分别校准；见 §一 KI-9。
+  3. **源页刷新反馈**（产品决策）——内容无变化时无可视指示、易误判失效（US2 首验 FAIL 即此假象）；方案：加载动画或轻提示；见下文「源页刷新无反馈假象」。
 - **列表添加逻辑重构预告（US6 后续）**：源详情页「点单集」已改为仅该集入队播放；队列输入框「添加并播放」（`addByBv`）的入队行为后续还会改——计划从「加载并立即播放」调整为「追加进队列不打断当前播放」，落地后与「点单集」路径统一收敛。
 - **403 首次添加根因修复（延后）**：首次添加订阅偶发 403/风控拦截，本轮仅做了日志观察（`BiliService` 全链路钩子 + 设置页日志面板，见 US9），待实机日志积累、锁定风控触发模式后针对性修复（候选方向：WBI 签名覆盖面 / buvid 预热策略）。
   - **实机风控结论补充（US1 触底翻页轮，2026-10-07）**：UP 投稿查询真机实测——APP 端点（spaceArchive BiliDroid 形态）裸 UA 恒 **-400**（PiliPlus 同端点实际经 AccountManager 拦截器携带登录 cookie，未登录裸调不可用）；Web 端点单发在风控期必 **-799**；本设备唯一被验证可靠的是 **Web 三轮 buvid 指数退避链**（直连→WBI 签名），UP 翻页链（`fetchUpVideosByPage`）已与刷新链共用该实现，不再单发直抛。
   - **配套防风暴**：SourcePage 触底加载挂 `endArmed` 手势触发权（`TouchType.Down` 武装、加载即没收、失败不归还）——ArkUI `onReachEnd` 按住底端时每帧重触发，且 `onScrollIndex` 布局回调与真实滚离无法区分，一次手势最多一页请求，物理上杜绝链式连发打爆风控。US1 触底「加载更早」本轮已扩展至全部四类订阅（UP/FAV 补翻页端点；FAV 失效视频过滤致短页属正常、不按短页终止，仅整页重复判到底；追加前按 bvid 去重防刷新链与翻页链排序漂移产生重复条目）。
   - **AppSign 接入结论（appsign-up-fetch 轮，2026-10-08）**：UP 投稿 APP 端点已接入 AppSign 游客签名（TV appkey `dfca71928277209b`，[AppSigner.ets](entry/src/main/ets/service/AppSigner.ets) MD5 键序签名、无 `!'()*` 过滤）——真机验证 **-400 消失**，签名链头页与 cursor 翻页均一页恰 1 请求（HTTP 200），81 条全集触底翻页无重复无跳空、到底正确停止，签名链故障时 Web 退避链无缝降级。实测要点（与 PiliPlus 模型差异）：响应为 `data.item[]`（非 `data.list.vlist`）、视频链 `data.next` 恒空（翻页语义=纯 aid 锚点，`fetchUpVideosOlder` 即此形态）、服务端将 ps 钳制为 20（请求 30）。
-  - **endArmed 后续安排（appsign-up-fetch 轮验证通过，2026-10-08）**：签名链真机验证可靠可用（见上条结论），**下一轮可删除 endArmed 手势触发权与「失败不归还」惩罚**（回退 loadingOlder + canLoadOlder 两道门槛，对应 spec FR-005）；删除后若降级链再遇 403 风暴按需恢复。
+  - **endArmed 后续安排（appsign-up-fetch 轮验证通过，2026-10-08）**：签名链真机验证可靠可用（见上条结论），**下一轮可删除 endArmed 手势触发权与「失败不归还」惩罚**（回退 loadingOlder + canLoadOlder 两道门槛，对应 spec FR-005）；删除后若降级链再遇 403 风暴按需恢复。**已执行（ux-feedback-round6 轮，2026-10-09）**：endArmed 已移除，防连发由两道门槛 + 3 秒失败冷却承担。
 - **源页刷新无反馈假象（产品决策待定）**：刷新前后内容相同时无可视指示，易误判按钮失效（appsign-up-fetch 轮 US2 首验 FAIL 即此假象——刷新实际成功、cursor 已重建，但列表无可视变化）；可考虑加载动画或轻提示，待产品定夺。
 - **点赞 / 投币 / 收藏**：依赖登录态与 csrf，交互形态待定，两轮内未排期。
 - **播放历史云端同步**：本地字段/单位对齐已完成（play-history-progress 轮：`PlayHistoryItem` 补齐 viewAt/progress/duration/cid，秒级单位对齐 B 站 `view_at`/`progress` 语义，-1=看完；`HistoryMapper` 预留 `toBiliHistory`/`fromBiliHistory` 映射边界，本轮零网络请求），云端同步（登录态下心跳上报/历史拉取合并）待后续。
 - **audio 三元组优先级限制**：播控中心/后台卡片展示元数据依赖 audio 三元组等系统侧信息优先级策略，B 站侧字段缺失时标题/作者/封面可能展示不全，属系统与上游数据限制，暂不做适配。
-- **无图模式覆盖面扩展（ux-feedback-round5 范围外）**：本轮（2026-10-07）已将无图模式（原「省流量模式」，设置页分组现名「无图与网络设置」）扩展至播放列表条目封面（QueueSheet）与系统播控（AVSession/MediaSession，开关翻转后经 `PlayerController.refreshMediaSessionMetadata()` 强制重发当前曲目元数据）；以下位置仍不判无图模式、保持现状，待后续轮次统一：① 首页订阅列表行封面（HomePage）；② 订阅源详情页头图与列表项（SourcePage）；③ 添加订阅面板 UP 头像/合集封面（AddSubscriptionSheet——该场景封面用于确认订阅目标，刻意不省图）。另：随「取消收藏历史」移除而遗留的 `unfavorite_history.json` 本轮不清理，应用不再读取即无功能影响。
+- **订阅源导出导入**（ux-feedback-round6 轮登记，2026-10-09）：本轮不实现；导出载体（本地 JSON 文件 / 分享文本）与去重合并策略待产品决策。
+- **关于页文案优化**（ux-feedback-round6 轮登记，2026-10-09）：本轮不实现，文案方向待定。
+- **版本号更新**（ux-feedback-round6 轮登记，2026-10-09）：应用版本号本轮保持 0.1.0/1000 不动，待播放列表重做完成后统一更新；README 中版本号信息（「版本」小节与起版说明行）已随本轮移除，后续不再回填。
+- **无图模式覆盖面扩展（ux-feedback-round5 范围外）**：本轮（2026-10-07）已将无图模式（原「省流量模式」，设置页分组 ux-feedback-round6 轮起更名为「省流」）扩展至播放列表条目封面（QueueSheet）与系统播控（AVSession/MediaSession，开关翻转后经 `PlayerController.refreshMediaSessionMetadata()` 强制重发当前曲目元数据）；以下位置仍不判无图模式、保持现状，待后续轮次统一：① 首页订阅列表行封面（HomePage）；② 订阅源详情页头图与列表项（SourcePage）；③ 添加订阅面板 UP 头像/合集封面（AddSubscriptionSheet——该场景封面用于确认订阅目标，刻意不省图）。另：随「取消收藏历史」移除而遗留的 `unfavorite_history.json` 本轮不清理，应用不再读取即无功能影响。
 
 ## 四、API 26 基线化
 

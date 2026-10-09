@@ -1,3 +1,6 @@
+import { CoverUrl } from '../service/CoverUrl';
+import { Constants } from '../service/Constants';
+
 // 封面缩略图：播放列表与播放历史共用的封面渲染（有封面显示图片，无封面显示 ♪ 占位——全类型唯一无图形态）。
 @Component
 export struct CoverThumb {
@@ -9,16 +12,12 @@ export struct CoverThumb {
   raw: boolean = false;
 
   // 缩略图只有 44vp，却直接解码 B 站原图（常见 1920×1080）会让位图内存相差 30 倍以上。
-  // 这里给 CDN 图片拼接尺寸后缀，让服务端下发小图：@宽w_高h_1c(居中裁切).webp
+  // 尺寸后缀逻辑收敛至 CoverUrl（US6），此处固定取缩略档 240×240
   private thumbUrl(): string {
-    const url: string = this.cover;
-    if (this.raw || url === '' || url.indexOf('hdslb.com') < 0 || url.indexOf('@') >= 0) {
-      return url;
+    if (this.raw) {
+      return this.cover;
     }
-    const q: number = url.indexOf('?');
-    const base: string = q >= 0 ? url.substring(0, q) : url;
-    const query: string = q >= 0 ? url.substring(q) : '';
-    return `${base}@240w_240h_1c.webp${query}`;
+    return CoverUrl.sized(this.cover, Constants.COVER_THUMB_W, Constants.COVER_THUMB_H);
   }
 
   build() {

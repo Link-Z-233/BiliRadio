@@ -3,6 +3,7 @@ import { BiliVideo } from '../model/BiliVideo';
 import { SubscriptionStore } from '../service/SubscriptionStore';
 import { Constants } from '../service/Constants';
 import { CoverThumb } from '../component/CoverThumb';
+import { EdgeHint } from '../component/EdgeHint';
 import { AddSubscriptionSheet, AddSheetBackHandler } from './AddSubscriptionSheet';
 import { promptAction } from '@kit.ArkUI';
 
@@ -54,15 +55,25 @@ class SubDataSource implements IDataSource {
 export struct HomePage {
   @StorageProp('accentColor') accentColor: string = Constants.ACCENT_DEFAULT;
   @StorageProp('miniPlayerVisible') miniPlayerVisible: boolean = false; // key 与 Constants.AS_MINI_PLAYER_VISIBLE 对应
+  // key 与 Constants.AS_HOME_REFRESH_TICK 对应：源页退出（onHidden）触发重算（US4 返回首页徽标清除）
+  @StorageProp('homeRefreshTick') @Watch('onHomeRefreshTick') homeRefreshTick: number = 0;
   // [DISABLED 2026-10] 首页下拉刷新暂时禁用，恢复方式见 PROJECT_NOTES.md「已移除与禁用功能」
   // @State refreshing: boolean = false;
   @State rowCount: number = 0;
   @State showAddSheet: boolean = false;
+  // US5 过冲提示（顶/底），空串不渲染
+  @State topHint: string = '';
+  @State bottomHint: string = '';
   // 添加订阅面板的系统返回拦截句柄（onWillDismiss PRESS_BACK 时经其询问面板是否消费）
   private addSheetBack: AddSheetBackHandler = new AddSheetBackHandler();
   private subs: Subscription[] = [];
   private provider: SubDataSource = new SubDataSource();
   private refreshingNow: boolean = false;
+  // US9：拖拽中标志（onReachStart 初始化会误触发一次，仅拖拽期间允许置过冲提示）
+  private dragging: boolean = false;
+  private scroller: Scroller = new Scroller();
+  // 触底时刻的列表偏移（US5 底部过冲判定基准）；-1 = 未捕获，列表重建后失效须重捕
+  private endOffsetY: number = -1;
   navPathStack: NavPathStack = new NavPathStack();
 
   aboutToAppear(): void {
@@ -72,7 +83,9 @@ export struct HomePage {
   }
 
   private rebuild(): void {
+    this.subs = SubscriptionStore.loadSubscriptions();
     this.subs.sort((a: Subscription, b: Subscription): number => a.sortOrder - b.sortOrder);
+    this.endOffsetY = -1;
     const rows: SubRow[] = [];
     for (let i = 0; i < this.subs.length; i++) {
       const sub: Subscription = this.subs[i];
@@ -87,14 +100,23 @@ export struct HomePage {
     this.provider.reload(rows);
   }
 
+  // US4：源页退出经 AppStorage tick 触发（onPop 对无参 pop() 永不回调，见 SourcePage.onHidden 注释）
+  private onHomeRefreshTick(): void {
+    this.rebuild();
+  }
+
+  private persistRefreshedSub(sub: Subscription, ok: boolean): void {
+    SubscriptionStore.persistRefreshedSub(sub, ok);
+    this.rebuild();
+  }
+
   private silentRefresh(): void {
     if (this.refreshingNow) {
       return;
     }
     this.refreshingNow = true;
     SubscriptionStore.refreshAll(this.subs, false, (sub: Subscription, ok: boolean): void => {
-      SubscriptionStore.saveSubscriptions(this.subs);
-      this.rebuild();
+      this.persistRefreshedSub(sub, ok);
     }).then((): void => {
       this.refreshingNow = false;
     }).catch((): void => {
@@ -146,6 +168,12 @@ export struct HomePage {
   }
 
   private addSubscription(sub: Subscription): void {
+    for (let i = 0; i < this.subs.length; i++) {
+      if (this.subs[i].id === sub.id) {
+        promptAction.showToast({ message: '已订阅该源' });
+        return;
+      }
+    }
     let max: number = 0;
     for (let i = 0; i < this.subs.length; i++) {
       if (this.subs[i].sortOrder > max) {
@@ -158,8 +186,7 @@ export struct HomePage {
     this.rebuild();
     // 新源立即刷一次，拿到封面/剧集后再刷新列表
     SubscriptionStore.refreshSubscription(sub).then((): void => {
-      SubscriptionStore.saveSubscriptions(this.subs);
-      this.rebuild();
+      this.persistRefreshedSub(sub, true);
     }).catch((err: Error): void => {
       promptAction.showToast({ message: `刷新节目失败: ${err.message}` });
     });
@@ -214,9 +241,7 @@ export struct HomePage {
     .borderRadius(14)
     .backgroundColor($r('app.color.card_background'))
     .onClick(() => {
-      this.navPathStack.pushPathByName('sourcePage', row.sub.id, (popInfo: PopInfo) => {
-        this.rebuild();
-      });
+      this.navPathStack.pushPathByName('sourcePage', row.sub.id);
     })
     .bindContextMenu((): void => {
       this.subRowMenu(row);
@@ -305,15 +330,56 @@ export struct HomePage {
         // 恢复步骤：①取消下方 refreshing 状态与 manualRefresh() 的注释；
         // ②取消 Refresh 包裹层注释并把 List 的 layoutWeight(1) 移回 Refresh 上。
         // Refresh({ refreshing: $$this.refreshing }) {
-        List({ space: 8 }) {
-          LazyForEach(this.provider, (row: SubRow) => {
-            ListItem() {
-              this.subRowItem(row)
+        Stack() {
+          EdgeHint({ text: this.topHint, edge: 'top' })
+          EdgeHint({ text: this.bottomHint, edge: 'bottom' })
+          List({ space: 8, scroller: this.scroller }) {
+            LazyForEach(this.provider, (row: SubRow) => {
+              ListItem() {
+                this.subRowItem(row)
+              }
+            }, (row: SubRow) => `${row.sub.id}_${row.latestTitle}_${row.newCount}_${row.sub.cover}`)
+          }
+          .width('100%')
+          .height('100%')
+          .padding({ left: 12, right: 12, top: 4, bottom: this.miniPlayerVisible ? Constants.MINI_PLAYER_CLEARANCE : 12 })
+          // US9：内容不足一屏时 List 默认不开启边缘效果，须显式 alwaysEnabled 才有过冲提示；
+          // onWillScroll 在纯边界过冲（偏移量不再变化）时不回调，到边提示改由 reach 回调驱动
+          .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
+          .onWillStartDragging(() => {
+            this.dragging = true;
+          })
+          .onReachStart(() => {
+            if (this.dragging) {
+              this.topHint = '已经到顶了';
             }
-          }, (row: SubRow) => `${row.sub.id}_${row.latestTitle}_${row.newCount}`)
+          })
+          .onReachEnd(() => {
+            this.endOffsetY = this.scroller.currentOffset().yOffset;
+            if (this.dragging) {
+              this.bottomHint = '已经到底了';
+            }
+          })
+          .onWillScroll((yOffset: number): void => {
+            const y: number = this.scroller.currentOffset().yOffset;
+            if (yOffset < 0) {
+              this.bottomHint = '';
+              if (y <= 0) {
+                this.topHint = '已经到顶了';
+              }
+            } else if (yOffset > 0) {
+              this.topHint = '';
+              if (this.endOffsetY >= 0 && y >= this.endOffsetY) {
+                this.bottomHint = '已经到底了';
+              }
+            }
+          })
+          .onScrollStop(() => {
+            this.topHint = '';
+            this.bottomHint = '';
+          })
         }
         .width('100%')
-        .padding({ left: 12, right: 12, top: 4, bottom: this.miniPlayerVisible ? Constants.MINI_PLAYER_CLEARANCE : 12 })
         .layoutWeight(1)
         // } // Refresh 包裹层结束
         // .onRefreshing(() => {

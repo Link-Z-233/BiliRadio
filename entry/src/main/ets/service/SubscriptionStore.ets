@@ -124,6 +124,42 @@ export class SubscriptionStore {
     return `${SUB_CACHE_PREFIX}${id.split(':').join('_')}.json`;
   }
 
+  static subExists(id: string): boolean {
+    const list: Subscription[] = SubscriptionStore.loadSubscriptions();
+    for (let i = 0; i < list.length; i++) {
+      if (list[i].id === id) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  static persistRefreshedSub(sub: Subscription, ok: boolean): void {
+    const disk: Subscription[] = SubscriptionStore.loadSubscriptions();
+    if (ok) {
+      for (let i = 0; i < disk.length; i++) {
+        if (disk[i].id === sub.id) {
+          disk[i].lastRefreshAt = sub.lastRefreshAt;
+          disk[i].latestPubAt = sub.latestPubAt;
+          if (sub.cover !== '') {
+            disk[i].cover = sub.cover;
+          }
+          if (sub.upperName !== '') {
+            disk[i].upperName = sub.upperName;
+          }
+          break;
+        }
+      }
+    }
+    const alive: Subscription[] = [];
+    for (let i = 0; i < disk.length; i++) {
+      if (SubscriptionStore.subExists(disk[i].id)) {
+        alive.push(disk[i]);
+      }
+    }
+    SubscriptionStore.saveSubscriptions(alive);
+  }
+
   // 刷新单个订阅：按类型分发拉取，统一存为新集在前，并更新刷新时间与最新发布时间
   // ponytail: 契约——四类源统一「近期一页」语义（up=30/fav=20/season=20/series=30），
   // saveEpisodes 整体覆盖写，sub_cache 只存近期条目；单集播放按需 fetchVideoInfo+取流；
@@ -132,6 +168,23 @@ export class SubscriptionStore {
     let items: BiliVideo[] = [];
     if (sub.type === Subscription.TYPE_UP) {
       items = await BiliService.fetchUpVideos(sub.sourceId);
+      // US2 双链合并取稠：APP 链结果可能稀疏（服务端钳 ps/条目缺失），Web 头页按 bvid 去重补齐；
+      // Web 失败仅记日志，退化为 APP 结果（下方统一 sort 保证时序）
+      try {
+        const webHead: BiliVideo[] = await BiliService.fetchUpWebHead(sub.sourceId);
+        const known: Set<string> = new Set<string>();
+        for (let i = 0; i < items.length; i++) {
+          known.add(items[i].bvid);
+        }
+        for (let i = 0; i < webHead.length; i++) {
+          if (!known.has(webHead[i].bvid)) {
+            items.push(webHead[i]);
+            known.add(webHead[i].bvid);
+          }
+        }
+      } catch (webErr) {
+        hilog.warn(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'UP Web补稠失败: %{public}s', sub.id);
+      }
     } else if (sub.type === Subscription.TYPE_FAV) {
       // 只取最新一页（20 条）：播客「近期节目」语义，超大收藏夹不做全量刷新
       const result: FolderFetchResult = await BiliService.fetchFolderVideos(sub.sourceId, 0, undefined, 1);
@@ -165,6 +218,9 @@ export class SubscriptionStore {
     onOneDone: SubRefreshCallback | undefined): Promise<void> {
     for (let i = 0; i < list.length; i++) {
       const sub: Subscription = list[i];
+      if (!SubscriptionStore.subExists(sub.id)) {
+        continue;
+      }
       if (!force && Subscription.isCacheFresh(sub.lastRefreshAt, Date.now())) {
         continue;
       }

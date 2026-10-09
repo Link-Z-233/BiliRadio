@@ -81,6 +81,12 @@ export class PlayerController {
   private currentCid: number = 0;          // 当前曲目 cid（切档零额外视频信息请求）
   // 最近一次取流请求档位：网络稳定切换目标档与之相同则跳过（避免无谓换流中断）
   private currentRequestedTier: QualityTier = QualityTier.MAX;
+  // 当前网络是否 Wi-Fi（US6）：由 watchStableNetworkType 回调与 init 一次性查询共同维护
+  private wifiNow: boolean = false;
+
+  isWifiNow(): boolean {
+    return this.wifiNow;
+  }
 
   static modeLabel(mode: PlayMode): string {
     if (mode === PlayMode.SEQUENTIAL) {
@@ -286,9 +292,16 @@ export class PlayerController {
       }
 
       // 网络稳定切换监听（audio-quality-settings FR-010）：进程生命周期内单例注册，
-      // 网络在 Wi-Fi/流量间稳定切换后按新网络默认档自动换流（失败由 setQualityTier 回滚不打断）
+      // 网络在 Wi-Fi/流量间稳定切换后按新网络默认档自动换流（失败由 setQualityTier 回滚不打断）；
+      // US6：回调同时维护 wifiNow 快照（isWifiNow 查询用），初值由一次性查询补齐
+      NetUtil.isWifi().then((wifi: boolean): void => {
+        this.wifiNow = wifi;
+      }).catch((): void => {});
       NetUtil.watchStableNetworkType((isWifi: boolean): void => {
+        this.wifiNow = isWifi;
         Logger.log('player', 'stable network change', `isWifi=${isWifi ? 1 : 0}`);
+        // US6：网络态翻转广播 UI（播放页大封面按新档取图）
+        this.emitUi();
         this.applyDefaultTierForNetwork().catch((): void => {});
       });
     } catch (e) {
@@ -305,6 +318,16 @@ export class PlayerController {
       this.isPrepared = true;
       this.isPreparing = false;
       this.duration = this.player.duration;
+      // US9：此前推送系统会话的时长为 0（条目未知时长）时，以真实时长 force 重推同曲目元数据，
+      // 绕过 lastAssetId 去重，修复锁屏/控制中心进度条为空
+      if (this.duration > 0 && this.currentIndex >= 0 && this.currentIndex < this.playlist.length) {
+        const item: BiliVideo = this.playlist[this.currentIndex];
+        if (item.duration <= 0) {
+          const dataSaver: boolean = AppStore.getNumber(Constants.KEY_DATA_SAVER, 0) === 1;
+          this.mediaSession.updateTrack(item.bvid, item.title, this.duration,
+            dataSaver ? '' : item.cover, item.ownerName, true);
+        }
+      }
       if (this.playWhenReady) {
         this.player.play();
       } else {

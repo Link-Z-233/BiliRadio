@@ -37,6 +37,7 @@ export class Constants {
   // 音质档位键（audio-quality-settings）：存 QualityTier 值；-1 = 未初始化（迁移哨兵）
   static readonly KEY_WIFI_AUDIO_QUALITY: string = 'wifiAudioQuality';
   static readonly KEY_CELLULAR_AUDIO_QUALITY: string = 'cellularAudioQuality';
+  static readonly KEY_DEBUG_MODE: string = 'debugMode';
   static readonly PLAY_HISTORY_FILE: string = 'play_history.json';
 
   // —— AppStorage 键 ——
@@ -59,6 +60,7 @@ export class Constants {
   static readonly AS_SHOW_QUEUE_SHEET: string = 'showQueueSheet';
   static readonly AS_MINI_PLAYER_VISIBLE: string = 'miniPlayerVisible';
   static readonly AS_ON_SETTINGS_PAGE: string = 'onSettingsPage';
+  static readonly AS_HOME_REFRESH_TICK: string = 'homeRefreshTick';
 
   // —— 受限色值（窗口层 API / Canvas 2D 不接受颜色资源引用，只能写字面量） ——
   // 仅能在此唯一定义，禁止其他文件重复声明
@@ -96,6 +98,7 @@ export class Constants {
   static readonly SLEEP_TIMER_TICK_MS: number = 1000;
   // 悬浮播放胶囊占位高度：胶囊高约 60 + 底部 8 偏移 + 余量，供各滚动页底部预留
   static readonly MINI_PLAYER_CLEARANCE: number = 88;
+  static readonly DEBUG_TAP_WINDOW_MS: number = 2000;
 
   // —— 播放微调与防抖（自 PlayerOverlay/PlayerController 迁入；播放页按钮与播控中心快进快退共用同一来源） ——
   // ±15s 进度微调步长（ms）：固定 15 秒，不可配置（spec FR-013）
@@ -122,6 +125,17 @@ export class Constants {
 
   // —— 播放按钮尺寸同源（US1/US4）：按钮直径为唯一尺寸源，缓冲加载指示尺寸由此派生，调整不再脱节 ——
   static readonly PLAY_BTN_DIAMETER: number = 72;   // 播放按钮直径
+
+  // —— 加载更多失败冷却（US2）：失败后冷却期内禁用重试，防止弱网下反复请求 ——
+  static readonly LOAD_OLDER_FAIL_COOLDOWN_MS: number = 3000;
+
+  // —— 封面尺寸档位（US6）：列表缩略图/播放页大封面/播控中心降档，尺寸只需在此调整 ——
+  static readonly COVER_THUMB_W: number = 240;
+  static readonly COVER_THUMB_H: number = 240;
+  static readonly COVER_BIG_W: number = 672;
+  static readonly COVER_BIG_H: number = 378;
+  static readonly COVER_SAVER_W: number = 480;
+  static readonly COVER_SAVER_H: number = 270;
 }
 
 // 延时工具：全库唯一实现，供各处「等待固定时长」复用。

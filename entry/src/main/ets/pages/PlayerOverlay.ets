@@ -6,6 +6,7 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { AppStore } from '../service/AppStore';
 import { BiliService } from '../service/BiliService';
 import { Constants } from '../service/Constants';
+import { CoverUrl } from '../service/CoverUrl';
 import { Appearance } from '../service/Appearance';
 import { SleepTimerController } from '../service/SleepTimerController';
 import { QueueDrawer } from '../component/QueueDrawer';
@@ -280,8 +281,12 @@ export struct PlayerOverlay {
     if (c.currentIndex >= 0 && c.currentIndex < c.playlist.length) {
       const item: BiliVideo = c.playlist[c.currentIndex];
       const dataSaver: boolean = AppStore.getNumber(Constants.KEY_DATA_SAVER, 0) === 1;
+      // US6：大封面按显示尺寸取图，非 Wi-Fi 降省流档（UP 头像保持原图，不参与取档）
+      const wifi: boolean = c.isWifiNow();
+      const coverW: number = wifi ? Constants.COVER_BIG_W : Constants.COVER_SAVER_W;
+      const coverH: number = wifi ? Constants.COVER_BIG_H : Constants.COVER_SAVER_H;
       this.trackTitle = item.title;
-      this.trackCover = dataSaver ? '' : item.cover;
+      this.trackCover = dataSaver ? '' : CoverUrl.sized(item.cover, coverW, coverH);
       this.ownerName = item.ownerName;
       this.ownerFace = dataSaver ? '' : item.ownerFace;
       this.trackBvid = item.bvid;
