@@ -6,7 +6,7 @@ import { SubscriptionStore } from '../service/SubscriptionStore';
 import { BiliService } from '../service/BiliService';
 import { AppStore } from '../service/AppStore';
 import { PlayHistoryItem } from '../model/PlayHistoryItem';
-import { PlayerController } from '../service/PlayerController';
+import { PlayerController, EnqueueResult } from '../service/PlayerController';
 import { Constants } from '../service/Constants';
 import { CoverThumb } from '../component/CoverThumb';
 import { EdgeHint } from '../component/EdgeHint';
@@ -53,6 +53,7 @@ export function SourcePageBuilder() {
 struct SourcePage {
   @StorageProp('accentColor') accentColor: string = Constants.ACCENT_DEFAULT;
   @StorageProp('miniPlayerVisible') miniPlayerVisible: boolean = false; // key 与 Constants.AS_MINI_PLAYER_VISIBLE 对应
+  @StorageProp('navBarHeight') navBarHeight: number = 0; // key 与 Constants.AS_NAV_BAR_HEIGHT 对应
   @State navTitle: string = '';
   @State episodes: BiliVideo[] = [];      // 展示序：倒序（新在上，与缓存一致）
   @State refreshing: boolean = false;
@@ -307,8 +308,14 @@ struct SourcePage {
   }
 
   private playEpisode(index: number): void {
-    // US6：点单集仅把该集作为队列播放（与「全部播放」整季连播区分），避免误触发整季连播
-    this.controller.loadPlaylistAndPlay([this.episodes[index]], 0);
+    // US6：点单集仅把该集作为队列播放（与「全部播放」整季连播区分），避免误触发整季连播；
+    // queue-redesign：入队结果 toast 分型反馈（已加入队列/开始播放/已在队列中）
+    this.controller.loadPlaylistAndPlay([this.episodes[index]], 0)
+      .then((result: EnqueueResult): void => {
+        promptAction.showToast({ message: PlayerController.enqueueToast(result) });
+      })
+      .catch((): void => {
+      });
   }
 
   private unsubscribe(): void {
@@ -488,7 +495,7 @@ struct SourcePage {
             }
             .width('100%')
             .height('100%')
-            .padding({ left: 12, right: 12, top: 4, bottom: this.miniPlayerVisible ? Constants.MINI_PLAYER_CLEARANCE : 12 })
+            .padding({ left: 12, right: 12, top: 4, bottom: (this.miniPlayerVisible ? Constants.MINI_PLAYER_CLEARANCE : 12) + this.navBarHeight })
             .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
             .onWillStartDragging(() => {
               this.dragging = true;

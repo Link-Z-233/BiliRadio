@@ -3,10 +3,19 @@ import { BusinessError } from '@kit.BasicServicesKit';
 import { Constants } from './Constants';
 import { PlayerController } from './PlayerController';
 
+export enum SleepTimerMode {
+  NONE = 0,
+  COUNTDOWN = 1,
+  PLAY_TO_EOF = 2
+}
+
 // 睡眠定时单例：持有倒计时状态、驱动秒级刷新，计时归零时暂停播放并触发提醒回调。
 // 倒计时以 Date.now() 墙钟为唯一基准（记录目标时间戳 + 周期刷新），后台/锁屏被节流时切回即可校准，零漂移。
 // 状态全部内存态、不持久化，进程重启自然回到默认不开启。
-// [UNVERIFIED 2026-10] 本功能实现完成但未经实机验证（入口：播放层 timer 按钮）；
+// 三态模式（queue-redesign 轮）：NONE / COUNTDOWN（倒计时，行为不变）/ PLAY_TO_EOF（播完暂停——
+// 无计时器无 tick，经 PlayerController.handleCompleted 完播钩子一次性消费，触发时不走 onTimerExpired 弹窗）。
+// [UNVERIFIED 2026-10] 本功能实现完成但未经实机验证（入口：播放层 timer 按钮，含「播完暂停」选项）；
+// 播完暂停模拟器验证随 queue-redesign 验证轮（T032）执行，真机验证欠账保持；
 // 实机验证通过后移除本标注与 PROJECT_NOTES.md KI-6 条目。
 export class SleepTimerController {
   private static instance: SleepTimerController | undefined = undefined;
@@ -19,6 +28,7 @@ export class SleepTimerController {
   }
 
   active: boolean = false;
+  mode: SleepTimerMode = SleepTimerMode.NONE;
   totalSeconds: number = 0;
   lastSelectedSeconds: number = 0;
   onTimerExpired: (() => void) | undefined = undefined;
@@ -82,15 +92,43 @@ export class SleepTimerController {
     this.lastSelectedSeconds = seconds;
     this.endTime = Date.now() + seconds * 1000;
     this.active = true;
+    this.mode = SleepTimerMode.COUNTDOWN;
     this.lastEmittedSec = -1;
     hilog.info(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'sleep timer start: %{public}d s', seconds);
     this.startTick();
     this.emitUi();
   }
 
+  // 播完暂停（queue-redesign US3）：武装后当前条目播完即停，与倒计时互斥（后选取代先选）
+  armPlayToEof(): void {
+    this.stopTick();
+    this.totalSeconds = 0;
+    this.endTime = 0;
+    this.lastEmittedSec = -1;
+    this.active = true;
+    this.mode = SleepTimerMode.PLAY_TO_EOF;
+    hilog.info(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'sleep timer arm play-to-eof');
+    this.emitUi();
+  }
+
+  disarmPlayToEof(): void {
+    if (this.mode !== SleepTimerMode.PLAY_TO_EOF) {
+      return;
+    }
+    this.active = false;
+    this.mode = SleepTimerMode.NONE;
+    hilog.info(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'sleep timer disarm play-to-eof');
+    this.emitUi();
+  }
+
+  isPlayToEofActive(): boolean {
+    return this.mode === SleepTimerMode.PLAY_TO_EOF;
+  }
+
   cancelTimer(): void {
     this.stopTick();
     this.active = false;
+    this.mode = SleepTimerMode.NONE;
     this.totalSeconds = 0;
     this.endTime = 0;
     this.lastEmittedSec = -1;
@@ -105,7 +143,7 @@ export class SleepTimerController {
   }
 
   getRemainingSeconds(): number {
-    if (!this.active) {
+    if (!this.active || this.mode !== SleepTimerMode.COUNTDOWN) {
       return 0;
     }
     const remain: number = Math.ceil((this.endTime - Date.now()) / 1000);
@@ -130,6 +168,7 @@ export class SleepTimerController {
     if (remaining <= 0) {
       this.stopTick();
       this.active = false;
+      this.mode = SleepTimerMode.NONE;
       this.totalSeconds = 0;
       this.endTime = 0;
       this.lastEmittedSec = -1;

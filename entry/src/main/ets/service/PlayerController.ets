@@ -4,6 +4,7 @@ import { BiliSession } from './BiliSession';
 import { SecureStore } from './SecureStore';
 import { AppStore, PlaylistSnapshot } from './AppStore';
 import { MediaSession } from './MediaSession';
+import { SleepTimerController } from './SleepTimerController';
 import { BiliVideo } from '../model/BiliVideo';
 import { PlayHistoryItem } from '../model/PlayHistoryItem';
 import { AudioTrack, AudioQuality, QualityTier, ResolvedAudio } from '../model/AudioQuality';
@@ -19,6 +20,13 @@ export enum PlayMode {
   RANDOM = 1,
   REPEAT_ONE = 2,
   REVERSE = 3
+}
+
+export enum EnqueueResult {
+  APPENDED = 0,
+  STARTED = 1,
+  DUPLICATE = 2,
+  FAILED = 3
 }
 
 export const PLAYBACK_RATES: number[] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
@@ -50,9 +58,10 @@ export class PlayerController {
   isPreparing: boolean = false;
   isPlaying: boolean = false;
   isPrepared: boolean = false;
+  currentItemEnded: boolean = false;
   currentTime: number = 0;
   duration: number = 0;
-  statusMsg: string = '在首页添加订阅，或在播放队列中粘贴BV号开始收听';
+  statusMsg: string = '在首页添加订阅，或到订阅源详情页播放节目';
   pendingSeekMs: number = 0;
   playWhenReady: boolean = true;
   private pausedByUser: boolean = false;
@@ -107,6 +116,20 @@ export class PlayerController {
       label = label.slice(0, -1);
     }
     return `${label}x`;
+  }
+
+  // 入队结果 → toast 文案（queue-redesign US6）：全库唯一映射点
+  static enqueueToast(result: EnqueueResult): string {
+    if (result === EnqueueResult.APPENDED) {
+      return Constants.TOAST_ENQUEUE_APPENDED;
+    }
+    if (result === EnqueueResult.STARTED) {
+      return Constants.TOAST_ENQUEUE_STARTED;
+    }
+    if (result === EnqueueResult.DUPLICATE) {
+      return Constants.TOAST_ENQUEUE_DUPLICATE;
+    }
+    return Constants.TOAST_ENQUEUE_FAILED;
   }
 
   // 订阅 UI 刷新（US2/KI-1）：返回退订句柄，调用方须在 aboutToDisappear 中调用，
@@ -379,8 +402,18 @@ export class PlayerController {
     if (this.isPreparing) {
       return;
     }
+    // 播完暂停（queue-redesign US3 FR-017）：自动切歌之前查询——命中则一次性解除（disarm）、
+    // 标记播完、停在原条目；手动切歌/点选条目经 playIndex 清除 currentItemEnded 自然解除
+    const st: SleepTimerController = SleepTimerController.getInstance();
+    if (st.isPlayToEofActive()) {
+      st.disarmPlayToEof();
+      this.currentItemEnded = true;
+      this.statusMsg = '本集播完已暂停';
+      return;
+    }
     if (this.pausedByUser) {
       this.statusMsg = '播放结束';
+      this.currentItemEnded = true;
       return;
     }
     if (this.playMode === PlayMode.REPEAT_ONE) {
@@ -393,6 +426,7 @@ export class PlayerController {
       ((this.playMode === PlayMode.SEQUENTIAL && this.currentIndex >= lastIndex) ||
         (this.playMode === PlayMode.REVERSE && this.currentIndex <= 0))) {
       this.statusMsg = '播放结束';
+      this.currentItemEnded = true;
       return;
     }
     this.next();
@@ -487,7 +521,7 @@ export class PlayerController {
     return AudioQuality.fromStored(AppStore.getNumber(key, -1));
   }
 
-  async loadPlaylistAndPlay(items: BiliVideo[], startIndex: number): Promise<void> {
+  async loadPlaylistAndPlay(items: BiliVideo[], startIndex: number): Promise<EnqueueResult> {
     // 追加去重：过滤掉 bvid 已在歌单中的项，避免重复
     const toAdd: BiliVideo[] = [];
     let skipped: number = 0;
@@ -515,11 +549,12 @@ export class PlayerController {
         this.statusMsg = `已添加 ${toAdd.length} 首，开始播放`;
         this.emitUi();
         await this.playIndex(startIndex, 0);
+        return EnqueueResult.STARTED;
       } else {
         this.statusMsg = '所选内容均已在歌单中';
         this.emitUi();
+        return EnqueueResult.DUPLICATE;
       }
-      return;
     }
 
     // 歌单非空：追加到末尾，不打断当前播放
@@ -534,6 +569,7 @@ export class PlayerController {
     }
     this.statusMsg = msg;
     this.emitUi();
+    return toAdd.length > 0 ? EnqueueResult.APPENDED : EnqueueResult.DUPLICATE;
   }
 
   // 续播起点查询（plan R4 契约）：条目存在且 progress>0 且 ≠-1 且（duration>0 时
@@ -602,6 +638,7 @@ export class PlayerController {
     this.isPlaying = false;
     this.playWhenReady = true;
     this.pausedByUser = false;
+    this.currentItemEnded = false;
     this.statusMsg = '正在解析...';
     this.emitUi();
     this.loadToken++;
@@ -826,6 +863,11 @@ export class PlayerController {
       return;
     }
     this.pausedByUser = false;
+    // 播完暂停后手动续播：AVPlayer completed 态 play() 从头重播，同步复位播完标记与乐观进度
+    if (this.currentItemEnded) {
+      this.currentItemEnded = false;
+      this.currentTime = 0;
+    }
     if (this.isPrepared) {
       await this.player.play();
     } else if (this.currentIndex >= 0) {
@@ -855,6 +897,7 @@ export class PlayerController {
   }
 
   seek(ms: number): void {
+    this.currentItemEnded = false;
     this.currentTime = ms;
     if (this.isPrepared) {
       this.player.seek(ms);
@@ -873,6 +916,7 @@ export class PlayerController {
     if (this.duration <= 0 || !this.isPrepared) {
       return;
     }
+    this.currentItemEnded = false;
     // 防抖期内以已累积的待提交目标为基数叠加（等价于最新乐观进度，且不受播放 tick 回写影响）
     const base: number = this.seekByTimerId >= 0 ? this.seekByTargetMs : this.currentTime;
     let target: number = base + offsetMs;
@@ -1058,46 +1102,6 @@ export class PlayerController {
     this.emitUi();
   }
 
-  async addToPlaylist(bvid: string): Promise<void> {
-    const trimmed: string = bvid.trim();
-    if (trimmed === '') {
-      this.statusMsg = '请输入BV号';
-      this.emitUi();
-      return;
-    }
-    if (this.isPreparing) {
-      this.statusMsg = '正在准备中，请稍候';
-      this.emitUi();
-      return;
-    }
-    for (let i = 0; i < this.playlist.length; i++) {
-      if (this.playlist[i].bvid === trimmed) {
-        this.statusMsg = '该歌曲已在歌单中';
-        this.emitUi();
-        await this.playIndex(i, 0);
-        return;
-      }
-    }
-    this.isPreparing = true;
-    this.statusMsg = '正在解析...';
-    this.emitUi();
-    try {
-      const video: BiliVideo = await BiliService.fetchVideoInfo(trimmed);
-      this.playlist.push(video);
-      this.playlistVersion++;
-      AppStore.savePlaylistFile(this.playlist, this.currentIndex, this.currentTime);
-      this.isPreparing = false;
-      this.statusMsg = `已添加「${video.title}」`;
-      this.emitUi();
-      await this.playIndex(this.playlist.length - 1, 0);
-    } catch (err) {
-      const error = err as BusinessError;
-      this.isPreparing = false;
-      this.statusMsg = `解析失败: ${error.message}`;
-      this.emitUi();
-    }
-  }
-
   // 按 bvid 加入歌单并立即播放（已在歌单则直接播放）
   async playDownloadedSong(video: BiliVideo): Promise<void> {
     if (this.isPreparing) {
@@ -1116,6 +1120,28 @@ export class PlayerController {
     this.statusMsg = `已添加「${video.title}」`;
     this.emitUi();
     await this.playIndex(this.playlist.length - 1, 0);
+  }
+
+  // 单视频入队统一入口（queue-redesign US6）：取详情后委托 loadPlaylistAndPlay——
+  // 队列空则起播（STARTED），非空则追加不打断（APPENDED），重复返回 DUPLICATE
+  async addSingleVideo(bvid: string): Promise<EnqueueResult> {
+    const trimmed: string = bvid.trim();
+    if (trimmed === '') {
+      this.statusMsg = '请输入BV号';
+      this.emitUi();
+      return EnqueueResult.FAILED;
+    }
+    this.statusMsg = '正在解析...';
+    this.emitUi();
+    try {
+      const video: BiliVideo = await BiliService.fetchVideoInfo(trimmed);
+      return await this.loadPlaylistAndPlay([video], 0);
+    } catch (err) {
+      const error = err as BusinessError;
+      this.statusMsg = `解析失败: ${error.message}`;
+      this.emitUi();
+      return EnqueueResult.FAILED;
+    }
   }
 
   async unfavoriteCurrent(): Promise<void> {
@@ -1138,16 +1164,17 @@ export class PlayerController {
     try {
       await BiliService.unfavorite(item.aid, item.folderIds);
       const folderCount: number = item.folderIds.length;
-      this.playlist.splice(this.currentIndex, 1);
-      this.playlistVersion++;
-      if (this.playlist.length === 0) {
-        this.currentIndex = -1;
-        this.isPrepared = false;
-        this.isPlaying = false;
-        this.currentTime = 0;
-        this.duration = 0;
-        await this.player.resetPlayer();
-        this.statusMsg = '已取消收藏，歌单已空';
+    this.playlist.splice(this.currentIndex, 1);
+    this.playlistVersion++;
+    if (this.playlist.length === 0) {
+      this.currentIndex = -1;
+      this.isPrepared = false;
+      this.isPlaying = false;
+      this.currentItemEnded = false;
+      this.currentTime = 0;
+      this.duration = 0;
+      await this.player.resetPlayer();
+      this.statusMsg = '已取消收藏，歌单已空';
         AppStore.savePlaylistFile(this.playlist, -1, 0);
       } else {
         let targetIndex: number = this.currentIndex;
@@ -1347,107 +1374,7 @@ export class PlayerController {
     this.savePlayHistoryFileAsync();
   }
 
-  searchLibrary(keyword: string): BiliVideo[] {
-    const trimmed: string = keyword.trim();
-    if (trimmed === '') {
-      return [];
-    }
-    const kw: string = trimmed.length > Constants.SEARCH_MAX_INPUT_LEN
-      ? trimmed.slice(0, Constants.SEARCH_MAX_INPUT_LEN) : trimmed;
-    const lowerKw: string = kw.toLowerCase();
-    const songs: BiliVideo[] = this.playlist.slice(0);
-
-    const seen: Set<string> = new Set<string>();
-    const results: BiliVideo[] = [];
-    for (let i = 0; i < songs.length; i++) {
-      const v: BiliVideo = songs[i];
-      if (v.bvid === '' || seen.has(v.bvid)) {
-        continue;
-      }
-      const titleHit: boolean = v.title.toLowerCase().indexOf(lowerKw) >= 0;
-      const ownerHit: boolean = v.ownerName.toLowerCase().indexOf(lowerKw) >= 0;
-      if (titleHit || ownerHit) {
-        seen.add(v.bvid);
-        results.push(v);
-      }
-    }
-    hilog.info(Constants.LOG_DOMAIN, Constants.LOG_TAG,
-      'searchLibrary keyword=%{public}s hits=%{public}d', kw, results.length);
-    return results;
-  }
-
-  // 播放搜索结果：已在歌单则直接播放，不在则追加到歌单末尾后播放
-  async playFromLibraryResult(video: BiliVideo): Promise<void> {
-    await this.playDownloadedSong(video);
-  }
-
-  async addManyToPlaylist(bvids: string[]): Promise<void> {
-    const unique: string[] = [];
-    for (let i = 0; i < bvids.length; i++) {
-      const bv: string = bvids[i].trim();
-      if (bv === '' || unique.indexOf(bv) >= 0) {
-        continue;
-      }
-      unique.push(bv);
-    }
-    if (unique.length === 0) {
-      this.statusMsg = '请输入BV号';
-      this.emitUi();
-      return;
-    }
-    if (this.isPreparing) {
-      this.statusMsg = '正在准备中，请稍候';
-      this.emitUi();
-      return;
-    }
-    let added: number = 0;
-    let skipped: number = 0;
-    let failed: number = 0;
-    const firstAddedIndex: number[] = [];
-    for (let i = 0; i < unique.length; i++) {
-      this.statusMsg = `正在解析 ${i + 1}/${unique.length}...`;
-      this.emitUi();
-      let exists: boolean = false;
-      for (let j = 0; j < this.playlist.length; j++) {
-        if (this.playlist[j].bvid === unique[i]) {
-          exists = true;
-          break;
-        }
-      }
-      if (exists) {
-        skipped++;
-        continue;
-      }
-      try {
-        const video: BiliVideo = await BiliService.fetchVideoInfo(unique[i]);
-        this.playlist.push(video);
-        firstAddedIndex.push(this.playlist.length - 1);
-        this.playlistVersion++;
-        added++;
-        AppStore.savePlaylistFile(this.playlist, this.currentIndex, this.currentTime);
-      } catch (err) {
-        failed++;
-      }
-      await new Promise<void>((resolve) => {
-        setTimeout(() => { resolve(); }, 300);
-      });
-    }
-    let summary: string = `添加完成：新增 ${added} 首`;
-    if (skipped > 0) {
-      summary += `，已在歌单 ${skipped}`;
-    }
-    if (failed > 0) {
-      summary += `，失败 ${failed}`;
-    }
-    this.statusMsg = summary;
-    this.emitUi();
-    if (firstAddedIndex.length > 0) {
-      await this.playIndex(firstAddedIndex[0], 0);
-    }
-  }
-
-  async removeSelectedFromPlaylist(bvids: string[]): Promise<void> {
-    if (bvids.length === 0) {
+  async removeSelectedFromPlaylist(bvids: string[]): Promise<void> {    if (bvids.length === 0) {
       return;
     }
     const removingCurrent: boolean = this.currentIndex >= 0 &&
@@ -1470,6 +1397,7 @@ export class PlayerController {
       this.currentIndex = -1;
       this.isPrepared = false;
       this.isPlaying = false;
+      this.currentItemEnded = false;
       this.currentTime = 0;
       this.duration = 0;
       await this.player.resetPlayer();
@@ -1489,6 +1417,40 @@ export class PlayerController {
       this.currentIndex -= removedBeforeCurrent;
       this.statusMsg = `已从歌单移除 ${removedCount} 首`;
       AppStore.savePlaylistFile(this.playlist, this.currentIndex, this.currentTime);
+    }
+    this.emitUi();
+  }
+
+  // 清除已播（queue-redesign US4 FR-009/FR-010）：移除 [0, currentIndex) 前缀；
+  // currentItemEnded 时连当前条目一并移除——播完态清除后无当前条目（currentIndex=-1、
+  // isPrepared/isPlaying=false、resetPlayer、持久化 (playlist, -1, 0)，队列空同此语义）；
+  // 播放中仅移前缀、索引前移到 0、不打断播放；无可清（无前缀且未播完）静默返回。
+  // UI 侧经 playlistVersion++ 触发 syncFrom 的 diff 增量刷新（notifyDataDelete 从高到低）
+  async clearPlayedItems(): Promise<void> {
+    const ci: number = this.currentIndex;
+    const ended: boolean = this.currentItemEnded && ci >= 0 && ci < this.playlist.length;
+    const prefix: number = ci > 0 ? ci : 0;
+    if (prefix === 0 && !ended) {
+      return;
+    }
+    const keepFrom: number = ended ? ci + 1 : ci;
+    const kept: BiliVideo[] = this.playlist.slice(keepFrom);
+    this.playlist = kept;
+    this.playlistVersion++;
+    this.currentItemEnded = false;
+    if (!ended) {
+      this.currentIndex = 0;
+      this.statusMsg = '已清除已播条目';
+      AppStore.savePlaylistFile(this.playlist, 0, this.currentTime);
+    } else {
+      this.currentIndex = -1;
+      this.isPrepared = false;
+      this.isPlaying = false;
+      this.currentTime = 0;
+      this.duration = 0;
+      await this.player.resetPlayer();
+      this.statusMsg = '已清除已播条目';
+      AppStore.savePlaylistFile(this.playlist, -1, 0);
     }
     this.emitUi();
   }

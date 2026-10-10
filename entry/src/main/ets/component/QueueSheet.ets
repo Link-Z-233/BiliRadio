@@ -3,17 +3,15 @@ import { BiliVideo } from '../model/BiliVideo';
 
 
 import { Constants } from '../service/Constants';
-import { Appearance } from '../service/Appearance';
 import { AppStore } from '../service/AppStore';
 import { CoverThumb } from './CoverThumb';
+import { EdgeHint } from './EdgeHint';
+import { promptAction } from '@kit.ArkUI';
 
 // 颜色全部使用 base/dark 双份颜色资源：浅色/深色外观下自动匹配（见 resources/base|dark/element/color.json）
 
-const FLASH_DURATION_MS: number = 1600;
-
 // 列表上下边缘渐变模糊半径；sheet 底部安全留白
 const EDGE_BLUR_RADIUS: number = 48;
-const HEADER_FADE_TAIL: number = 8;
 const LIST_BOTTOM_GAP: number = 12;
 // 列表项近似高度：长按滑动多选时把手指位移换算成经过的条目数（富列表：44 封面 + 上下各 12 内边距）
 const ITEM_HEIGHT: number = 68;
@@ -52,33 +50,54 @@ class PlaylistDataSource implements IDataSource {
       this.listeners[i].onDataReloaded();
     }
   }
+
+  // 单项增量删除通知（queue-redesign plan R7）：镜像 HistoryDataSource——先裁自身再广播，
+  // 供左滑删除/清除已播从高索引向低索引逐项刷新，避免整表 reload 造成的封面闪烁
+  notifyDataDelete(index: number): void {
+    if (index < 0 || index >= this.items.length) {
+      return;
+    }
+    this.items.splice(index, 1);
+    for (let i = 0; i < this.listeners.length; i++) {
+      this.listeners[i].onDataDelete(index);
+    }
+  }
 }
 
-// 播放队列半模态：计数/定位当前播放/清空/搜索/添加歌曲/多选删除与保存
+// 队列 diff（queue-redesign plan R7）：next 可由 old 纯删除得到时返回被删下标（升序），
+// 否则（增长/重排）返回 undefined，调用方走整表 reload；相等返回空数组（no-op，不触发刷新）
+function diffRemovedIndices(old: BiliVideo[], next: BiliVideo[]): number[] | undefined {
+  const removed: number[] = [];
+  let j: number = 0;
+  for (let i = 0; i < old.length; i++) {
+    if (j < next.length && old[i].bvid === next[j].bvid) {
+      j++;
+    } else {
+      removed.push(i);
+    }
+  }
+  if (j !== next.length) {
+    return undefined;
+  }
+  return removed;
+}
+
+// 播放队列抽屉：单行图标头部（清除已播/多选/清空）、左滑单条删除、多选批量移除
 @Component
 export struct QueueSheet {
   @State items: BiliVideo[] = [];
   @State currentIndex: number = -1;
-  @State isPlaying: boolean = false;
+  @State currentItemEnded: boolean = false;
   @State playlistVersion: number = -1;
-  @State bvInput: string = '';
-  @State addMsg: string = '';
   @StorageLink('playlistSelectMode') selectMode: boolean = false; // key 与 Constants.AS_PLAYLIST_SELECT_MODE 对应
   @State selectedBvids: string[] = [];
-
-  // —— 歌曲搜索浮层（本地检索播放列表，零网络请求） ——
-  @StorageLink('showSearch') showSearch: boolean = false; // key 与 Constants.AS_SHOW_SEARCH 对应
-  @State searchKeyword: string = '';
-  @State searchResults: BiliVideo[] = [];
-  @State searched: boolean = false;
-
-
-  @State pageWidth: number = 0;
-  @State pageHeight: number = 0;
-  @State headerHeight: number = 138;
-  @State flashIndex: number = -1;
   // US5：无图模式下条目封面置空（走 CoverThumb 占位），读取链路对齐 MiniPlayer
   @State dataSaverOn: boolean = false;
+
+  @State pageHeight: number = 0;
+  @State headerHeight: number = 72;
+  @State queueTopHint: string = '';
+  @State queueBottomHint: string = '';
 
   @StorageLink('showQueueSheet') showQueueSheet: boolean = false;
   @StorageProp('isWideScreen') isWideScreen: boolean = false;
@@ -98,27 +117,11 @@ export struct QueueSheet {
     return $r('app.color.text_disabled');
   }
 
-  // 强调色淡底（对齐原 material_tint_primary 的 0x59≈0.349 alpha）：随主题色运行时衍生
-  private tintBg(): string {
-    return Appearance.hexWithAlpha(this.accentColor, 0.349);
-  }
-
-  // 播放列表检索：纯内存遍历，不发起任何网络请求
-  private doSearch(): void {
-    this.searchResults = this.controller.searchLibrary(this.searchKeyword);
-    this.searched = true;
-  }
-
-  private async playSearchResult(video: BiliVideo): Promise<void> {
-    await this.controller.playFromLibraryResult(video);
-    this.controller.goToPlayerTab?.();
-  }
-
-
   private listSource: PlaylistDataSource = new PlaylistDataSource();
   private listScroller: Scroller = new Scroller();
-  private flashTimer: number = -1;
   private swipeStartIndex: number = -1;
+  private queueEndY: number = -1;
+  private queueDragging: boolean = false;
   // 进度广播退订句柄（US2/KI-1）：aboutToDisappear 中调用，避免监听器累积
   private unsubscribePlayer: () => void = (): void => {};
 
@@ -126,42 +129,29 @@ export struct QueueSheet {
     this.syncFrom(this.controller);
     this.unsubscribePlayer = this.controller.subscribe((): void => {
       this.syncFrom(this.controller);
-      this.addMsg = this.controller.statusMsg;
-
     }, 'QueueSheet');
   }
 
   aboutToDisappear(): void {
     this.unsubscribePlayer();
     this.unsubscribePlayer = (): void => {};
-    if (this.flashTimer >= 0) {
-      clearTimeout(this.flashTimer);
-      this.flashTimer = -1;
-    }
-  }
-
-  private locateCurrent(): void {
-    if (this.currentIndex < 0 || this.currentIndex >= this.items.length) {
-      return;
-    }
-    // 平滑滚动会逐项穿过中间所有条目（每项都要建组件、加载封面），长歌单上极易卡顿；
-    // 定位场景改为直接跳到目标位置，只构建目标附近的列表项
-    this.listScroller.scrollToIndex(this.currentIndex, false, ScrollAlign.CENTER);
-    this.flashIndex = this.currentIndex;
-    if (this.flashTimer >= 0) {
-      clearTimeout(this.flashTimer);
-    }
-    this.flashTimer = setTimeout((): void => {
-      this.flashIndex = -1;
-      this.flashTimer = -1;
-    }, FLASH_DURATION_MS);
   }
 
   private syncFrom(c: PlayerController): void {
     if (this.playlistVersion !== c.playlistVersion) {
       this.playlistVersion = c.playlistVersion;
-      this.items = c.playlist.slice(0);
-      this.listSource.setItems(this.items);
+      const next: BiliVideo[] = c.playlist.slice(0);
+      // 纯删除走增量 notifyDataDelete（从高到低），增长/重排走整表 reload，相等 no-op
+      const removed: number[] | undefined = diffRemovedIndices(this.items, next);
+      if (removed === undefined) {
+        this.items = next;
+        this.listSource.setItems(this.items);
+      } else {
+        for (let i = removed.length - 1; i >= 0; i--) {
+          this.listSource.notifyDataDelete(removed[i]);
+        }
+        this.items = next;
+      }
       if (this.selectMode) {
         const valid: string[] = [];
         for (let i = 0; i < this.selectedBvids.length; i++) {
@@ -170,44 +160,14 @@ export struct QueueSheet {
           }
         }
         this.selectedBvids = valid;
+        if (this.items.length === 0) {
+          this.selectMode = false;
+        }
       }
     }
     this.currentIndex = c.currentIndex;
-    this.isPlaying = c.isPlaying;
+    this.currentItemEnded = c.currentItemEnded;
     this.dataSaverOn = AppStore.getNumber(Constants.KEY_DATA_SAVER, 0) === 1;
-
-  }
-
-
-  private addByBv(): void {
-    const raw: string = this.bvInput.trim();
-    if (raw === '') {
-      this.addMsg = '请输入BV号';
-      return;
-    }
-    const parts: string[] = raw.split(/[\s,，;；\n]+/);
-    const bvs: string[] = [];
-    for (let i = 0; i < parts.length; i++) {
-      const p: string = parts[i].trim();
-      if (p !== '' && bvs.indexOf(p) < 0) {
-        bvs.push(p);
-      }
-    }
-    if (bvs.length === 0) {
-      this.addMsg = '请输入BV号';
-      return;
-    }
-    this.bvInput = '';
-    if (bvs.length === 1) {
-      this.addMsg = '正在解析...';
-      this.controller.addToPlaylist(bvs[0]);
-    } else {
-      if (bvs.length > 50) {
-        this.addMsg = '一次最多添加50个BV号';
-        return;
-      }
-      this.controller.addManyToPlaylist(bvs);
-    }
   }
 
   private toggleSelect(bvid: string): void {
@@ -272,6 +232,43 @@ export struct QueueSheet {
     this.controller.removeSelectedFromPlaylist(bvids);
   }
 
+  // 左滑单条删除（US2 FR-004/FR-005）：按 bvid 走既有批量移除链路
+  // （含当前条目自动切播语义，FR-010），UI 刷新交由 syncFrom 的 diff 增量通知
+  private removeQueueItem(item: BiliVideo): void {
+    if (item.bvid === '') {
+      return;
+    }
+    this.queueEndY = -1;
+    this.controller.removeSelectedFromPlaylist([item.bvid]);
+  }
+
+  // 清除已播（US4 FR-009）：无可清（无前缀且未播完）toast 不弹框，可清时二次确认
+  private confirmClearPlayed(): void {
+    const canClear: boolean = this.controller.currentIndex > 0 || this.controller.currentItemEnded;
+    if (!canClear) {
+      promptAction.showToast({ message: Constants.TOAST_QUEUE_NO_PLAYED });
+      return;
+    }
+    AlertDialog.show({
+      title: Constants.DIALOG_CLEAR_PLAYED_TITLE,
+      message: this.controller.currentItemEnded
+        ? Constants.DIALOG_CLEAR_PLAYED_ENDED_MSG : Constants.DIALOG_CLEAR_PLAYED_PLAYING_MSG,
+      autoCancel: true,
+      alignment: DialogAlignment.Center,
+      primaryButton: {
+        value: '清除',
+        action: (): void => {
+          this.controller.clearPlayedItems();
+        }
+      },
+      secondaryButton: {
+        value: '取消',
+        action: (): void => {
+        }
+      }
+    });
+  }
+
   // 清空队列：移除全部条目（含当前播放），二次确认防误触
   private clearQueue(): void {
     if (this.items.length === 0) {
@@ -309,7 +306,6 @@ export struct QueueSheet {
     return `${minStr}:${secStr}`;
   }
 
-
   private listBlurStops(): FractionStop[] {
     const listHeight: number = this.pageHeight > 0 ? this.pageHeight : 800;
     const topEdge: number = Math.max(0.03, Math.min(0.45,
@@ -322,192 +318,152 @@ export struct QueueSheet {
     ];
   }
 
+  // 左滑露出的红色「删除」按钮（US2，样式对齐 SettingsPage.historyDeleteAction：
+  // 露出按钮、点击执行删除，不做滑过阈值直删）
+  @Builder
+  queueDeleteAction(item: BiliVideo) {
+    Button('删除')
+      .height('100%')
+      .padding({ left: 18, right: 18 })
+      .backgroundColor($r('app.color.danger_red'))
+      .fontColor(Color.White)
+      .fontSize(13)
+      .borderRadius(0)
+      .onClick(() => {
+        this.removeQueueItem(item);
+      })
+  }
+
   build() {
     Stack({ alignContent: Alignment.Top }) {
+      // 单行头部（US1）：标题 + 清除已播/多选/清空三图标；多选态整行替换为多选操作行
       Column() {
-        // 两行头部容器（US5）：标题/操作两行包在子 Column 内沿用原头部内边距，输入行与多选行保持在容器外不受影响
-        Column() {
-        // 标题行（US5）：「播放队列」标题独占一行，右侧带计数
-        Row() {
-          Text('播放队列')
-            .fontSize(20)
-            .fontWeight(FontWeight.Bold)
-            .fontColor(this.textPrimary())
-            .layoutWeight(1)
-
-          if (this.items.length > 0) {
-            Text(`共 ${this.items.length} 首`)
-              .fontSize(13)
-              .fontColor(this.textSecondary())
-          }
-        }
-        .width('100%')
-
-        // 操作行（US5）：定位/搜索/多选/清空独占第二行；多选模式下整行隐藏（多选操作行独立如旧）
-        // US7/T025：按钮尺寸与多选态统一 36vp（高/圆角/字号/内边距对齐），切换多选模式无尺寸跳变
         if (!this.selectMode) {
-          Row({ space: 8 }) {
-            if (this.currentIndex >= 0) {
-              Button('定位')
-                .height(36)
-                .padding({ left: 14, right: 14 })
-                .backgroundColor($r('app.color.btn_glass'))
-                .backdropBlur(20)
-                .border({ width: 1, color: $r('app.color.btn_border') })
-                .fontColor(this.textPrimary())
-                .borderRadius(18)
-                .fontSize(13)
-                .onClick(() => {
-                  this.locateCurrent();
-                })
-            }
+          Row() {
+            Text(`播放队列 (${this.items.length})`)
+              .fontSize(17)
+              .fontWeight(FontWeight.Bold)
+              .fontColor(this.textPrimary())
+              .layoutWeight(1)
 
-            Button('搜索')
+            if (this.items.length > 0) {
+              Row() {
+                SymbolGlyph($r('sys.symbol.wand_and_stars'))
+                  .fontSize(18)
+                  .fontColor([$r('app.color.danger_red')])
+              }
+              .width(36)
               .height(36)
-              .padding({ left: 14, right: 14 })
+              .justifyContent(FlexAlign.Center)
               .backgroundColor($r('app.color.btn_glass'))
               .backdropBlur(20)
               .border({ width: 1, color: $r('app.color.btn_border') })
-              .fontColor(this.textPrimary())
               .borderRadius(18)
-              .fontSize(13)
               .onClick(() => {
-                this.showSearch = true;
+                this.confirmClearPlayed();
               })
 
-            if (this.items.length > 0) {
-              Button('多选')
-                .height(36)
-                .padding({ left: 14, right: 14 })
-                .backgroundColor($r('app.color.btn_glass'))
-                .backdropBlur(20)
-                .border({ width: 1, color: $r('app.color.btn_border') })
-                .fontColor(this.textPrimary())
-                .borderRadius(18)
-                .fontSize(13)
-                .onClick(() => {
-                  this.selectMode = true;
-                  this.selectedBvids = [];
-                })
+              Row() {
+                SymbolGlyph($r('sys.symbol.list_checkmark'))
+                  .fontSize(18)
+                  .fontColor([$r('app.color.text_primary')])
+              }
+              .width(36)
+              .height(36)
+              .justifyContent(FlexAlign.Center)
+              .backgroundColor($r('app.color.btn_glass'))
+              .backdropBlur(20)
+              .border({ width: 1, color: $r('app.color.btn_border') })
+              .borderRadius(18)
+              .margin({ left: 8 })
+              .onClick(() => {
+                this.selectMode = true;
+                this.selectedBvids = [];
+              })
 
-              Button('清空')
-                .height(36)
-                .padding({ left: 14, right: 14 })
-                .backgroundColor($r('app.color.btn_glass'))
-                .backdropBlur(20)
-                .border({ width: 1, color: $r('app.color.btn_border') })
-                .fontColor(this.textPrimary())
-                .borderRadius(18)
-                .fontSize(13)
-                .onClick(() => {
-                  this.clearQueue();
-                })
+              Row() {
+                SymbolGlyph($r('sys.symbol.trash'))
+                  .fontSize(18)
+                  .fontColor([$r('app.color.danger_red')])
+              }
+              .width(36)
+              .height(36)
+              .justifyContent(FlexAlign.Center)
+              .backgroundColor($r('app.color.btn_glass'))
+              .backdropBlur(20)
+              .border({ width: 1, color: $r('app.color.btn_border') })
+              .borderRadius(18)
+              .margin({ left: 8 })
+              .onClick(() => {
+                this.clearQueue();
+              })
             }
           }
           .width('100%')
-          .margin({ top: 10 })
+        } else {
+          // 多选操作行（US1 FR-006/FR-011/FR-012）：全选/移除所选(计数)/返回全部图标化
+          Row() {
+            Row() {
+              SymbolGlyph($r('sys.symbol.checkmark_circle_on_circle'))
+                .fontSize(18)
+                .fontColor([this.isAllSelected() ? this.accentColor : $r('app.color.text_primary')])
+            }
+            .width(36)
+            .height(36)
+            .justifyContent(FlexAlign.Center)
+            .backgroundColor($r('app.color.btn_glass'))
+            .backdropBlur(20)
+            .border({ width: 1, color: $r('app.color.btn_border') })
+            .borderRadius(18)
+            .onClick(() => {
+              this.toggleSelectAll();
+            })
+
+            Blank()
+
+            Row({ space: 4 }) {
+              SymbolGlyph($r('sys.symbol.trash_fill'))
+                .fontSize(18)
+                .fontColor([$r('app.color.danger_red')])
+              Text(`${this.selectedBvids.length}`)
+                .fontSize(12)
+                .fontColor($r('app.color.danger_red'))
+            }
+            .height(36)
+            .padding({ left: 10, right: 10 })
+            .justifyContent(FlexAlign.Center)
+            .alignItems(VerticalAlign.Center)
+            .backgroundColor($r('app.color.btn_glass'))
+            .backdropBlur(20)
+            .border({ width: 1, color: $r('app.color.btn_border') })
+            .borderRadius(18)
+            .opacity(this.selectedBvids.length > 0 ? 1 : 0.4)
+            .onClick(() => {
+              this.removeSelected();
+            })
+
+            Row() {
+              SymbolGlyph($r('sys.symbol.chevron_left'))
+                .fontSize(18)
+                .fontColor([$r('app.color.text_primary')])
+            }
+            .width(36)
+            .height(36)
+            .justifyContent(FlexAlign.Center)
+            .backgroundColor($r('app.color.btn_glass'))
+            .backdropBlur(20)
+            .border({ width: 1, color: $r('app.color.btn_border') })
+            .borderRadius(18)
+            .margin({ left: 8 })
+            .onClick(() => {
+              this.exitSelectMode();
+            })
+          }
+          .width('100%')
         }
       }
       .width('100%')
       .padding({ left: 16, right: 16, top: 20, bottom: 8 })
-
-        if (!this.selectMode) {
-          Row() {
-            TextInput({ placeholder: 'BV号，多个用空格/逗号/换行分隔', text: this.bvInput })
-              .layoutWeight(1)
-              .height(40)
-              .backgroundColor($r('app.color.btn_glass'))
-              .backdropBlur(20)
-              .border({ width: 1, color: $r('app.color.btn_border') })
-              .fontColor(this.textPrimary())
-              .placeholderColor(this.textSecondary())
-              .borderRadius(8)
-              .fontSize(13)
-              .type(InputType.Normal)
-              .onChange((value: string) => {
-                this.bvInput = value;
-              })
-              .onSubmit(() => {
-                this.addByBv();
-              })
-
-            Button('添加并播放')
-              .height(40)
-              .margin({ left: 8 })
-              .backgroundColor(this.tintBg())
-              .backdropBlur(20)
-              .fontColor($r('app.color.text_primary'))
-              .borderRadius(8)
-              .fontSize(13)
-              .padding({ left: 12, right: 12 })
-              .onClick(() => {
-                this.addByBv();
-              })
-          }
-          .width('92%')
-          .margin({ bottom: 4 })
-
-          if (this.addMsg !== '') {
-            Text(this.addMsg)
-              .fontSize(12)
-              .fontColor(this.textSecondary())
-              .width('92%')
-              .maxLines(1)
-              .textOverflow({ overflow: TextOverflow.Ellipsis })
-              .margin({ bottom: 4 })
-          }
-        } else {
-          Row() {
-            Button(this.isAllSelected() ? '取消全选' : '全选')
-              .height(36)
-              .padding({ left: 14, right: 14 })
-              .backgroundColor($r('app.color.btn_glass'))
-              .backdropBlur(20)
-              .border({ width: 1, color: $r('app.color.btn_border') })
-              .fontColor(this.textPrimary())
-              .borderRadius(18)
-              .fontSize(13)
-              .onClick(() => {
-                this.toggleSelectAll();
-              })
-
-            Blank()
-
-            Button(`移除所选(${this.selectedBvids.length})`)
-              .height(36)
-              .padding({ left: 14, right: 14 })
-              .backgroundColor(this.selectedBvids.length > 0 ? this.tintBg() : $r('app.color.btn_glass'))
-              .backdropBlur(20)
-              .border({ width: 1, color: $r('app.color.btn_border') })
-              .fontColor($r('app.color.text_primary'))
-              .borderRadius(18)
-              .fontSize(13)
-              .margin({ left: 8 })
-              .onClick(() => {
-                this.removeSelected();
-              })
-
-            Button('返回')
-              .height(36)
-              .padding({ left: 14, right: 14 })
-              .backgroundColor($r('app.color.btn_glass'))
-              .backdropBlur(20)
-              .border({ width: 1, color: $r('app.color.btn_border') })
-              .fontColor(this.textPrimary())
-              .borderRadius(18)
-              .fontSize(13)
-              .margin({ left: 8 })
-              .onClick(() => {
-                this.exitSelectMode();
-              })
-          }
-          .width('92%')
-          .margin({ bottom: 4 })
-        }
-
-      }
-      .width('100%')
-      .padding({ bottom: HEADER_FADE_TAIL })
       .zIndex(1)
       .onAreaChange((oldArea: Area, newArea: Area) => {
         this.headerHeight = newArea.height as number;
@@ -519,7 +475,7 @@ export struct QueueSheet {
             .fontSize(16)
             .fontColor(this.textSecondary())
             .margin({ top: 60 })
-          Text('输入BV号添加歌曲，或到订阅源详情页播放节目')
+          Text(Constants.QUEUE_EMPTY_HINT)
             .fontSize(13)
             .fontColor(this.textDisabled())
             .margin({ top: 8 })
@@ -530,6 +486,9 @@ export struct QueueSheet {
         .hitTestBehavior(HitTestMode.None)
         .padding({ top: this.headerHeight })
       } else {
+        Stack() {
+          EdgeHint({ text: this.queueTopHint, edge: 'top' })
+          EdgeHint({ text: this.queueBottomHint, edge: 'bottom' })
           List({ space: 0, scroller: this.listScroller }) {
             LazyForEach(this.listSource, (item: BiliVideo, index: number) => {
               ListItem() {
@@ -562,7 +521,8 @@ export struct QueueSheet {
                     }
                     .width('100%')
 
-                    Text(`${item.ownerName} · ${this.formatTime(item.duration > 0 ? item.duration * 1000 : 0)}`)
+                    // FR-104：duration 未知（0）不渲染 00:00 占位，只显示 UP 主名
+                    Text(item.duration > 0 ? `${item.ownerName} · ${this.formatTime(item.duration * 1000)}` : item.ownerName)
                       .fontSize(11)
                       .fontColor(this.textSecondary())
                       .maxLines(1)
@@ -576,13 +536,8 @@ export struct QueueSheet {
                 }
                 .width('100%')
                 .padding({ left: 16, right: 16, top: 12, bottom: 12 })
-                .backgroundColor(this.flashIndex === index ? $r('app.color.flash_highlight') : Color.Transparent)
+                .backgroundColor(Color.Transparent)
                 .borderRadius(12)
-                .margin({
-                  left: this.flashIndex === index ? 8 : 0,
-                  right: this.flashIndex === index ? 8 : 0
-                })
-                .animation({ duration: 300, curve: Curve.FastOutSlowIn })
                 .onClick(() => {
                   if (this.selectMode) {
                     this.toggleSelect(item.bvid);
@@ -613,170 +568,66 @@ export struct QueueSheet {
                   )
                 )
               }
-            }, (item: BiliVideo) => item.bvid)
+              .swipeAction({
+                end: this.queueDeleteAction(item)
+              })
+            }, (item: BiliVideo) => `${item.bvid}_${item.ownerName}`)
           }
           .width('100%')
           .height('100%')
+          // FR-103：alwaysEnabled 使未铺满面板的短队列仍可拖动过冲（写法对齐 SettingsPage 历史面板）
+          .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
           .contentStartOffset(this.headerHeight)
           .contentEndOffset(LIST_BOTTOM_GAP)
           .linearGradientBlur(EDGE_BLUR_RADIUS, {
             fractionStops: this.listBlurStops(),
             direction: GradientDirection.Bottom
           })
-
+          // FR-103（修订 US5/FR-008）：双向过冲提示——拖拽中拉过顶/底露出「已经到顶了/已经到底了」，回弹消失
+          // （模式对齐设置页历史面板；onReachStart 初始化误触发一次，故须拖拽中守卫）
+          .onWillStartDragging(() => {
+            this.queueDragging = true;
+          })
+          .onReachStart(() => {
+            if (this.queueDragging) {
+              this.queueTopHint = '已经到顶了';
+            }
+          })
+          .onReachEnd(() => {
+            this.queueEndY = this.listScroller.currentOffset().yOffset;
+            if (this.queueDragging) {
+              this.queueBottomHint = '已经到底了';
+            }
+          })
+          .onWillScroll((yOffset: number): void => {
+            const y: number = this.listScroller.currentOffset().yOffset;
+            if (yOffset < 0) {
+              this.queueBottomHint = '';
+              if (y <= 0) {
+                this.queueTopHint = '已经到顶了';
+              }
+            } else if (yOffset > 0) {
+              this.queueTopHint = '';
+              if (this.queueEndY >= 0 && y >= this.queueEndY) {
+                this.queueBottomHint = '已经到底了';
+              }
+            }
+          })
+          .onScrollStop(() => {
+            this.queueTopHint = '';
+            this.queueBottomHint = '';
+            this.queueDragging = false;
+          })
         }
-
-      if (this.showSearch) {
-        this.searchPanel()
+        .width('100%')
+        .height('100%')
       }
 
     }
     .width('100%')
     .height('100%')
     .onAreaChange((oldArea: Area, newArea: Area) => {
-      this.pageWidth = newArea.width as number;
       this.pageHeight = newArea.height as number;
     })
-  }
-
-  // 歌曲搜索浮层：半透明毛玻璃覆盖层，本地检索播放列表（零网络请求）
-  @Builder
-  searchPanel() {
-    Column() {
-      Row() {
-        Text('搜索歌曲')
-          .fontSize(17)
-          .fontWeight(FontWeight.Bold)
-          .fontColor($r('app.color.text_primary'))
-          .layoutWeight(1)
-
-        Button('关闭')
-          .height(32)
-          .padding({ left: 12, right: 12 })
-          .backgroundColor($r('app.color.btn_glass'))
-          .backdropBlur(20)
-          .border({ width: 1, color: $r('app.color.btn_border') })
-          .fontColor(this.textPrimary())
-          .borderRadius(16)
-          .fontSize(12)
-          .onClick(() => {
-            this.showSearch = false;
-          })
-      }
-      .width('100%')
-      .padding({ left: 16, right: 16, top: 16, bottom: 8 })
-
-      Row() {
-        TextInput({ placeholder: '搜索歌名或UP主', text: this.searchKeyword })
-          .id('search_input')
-          .layoutWeight(1)
-          .height(40)
-          .enterKeyType(EnterKeyType.Search)
-          .backgroundColor($r('app.color.btn_glass'))
-          .backdropBlur(20)
-          .border({ width: 1, color: $r('app.color.btn_border') })
-          .fontColor(this.textPrimary())
-          .placeholderColor($r('app.color.placeholder_color'))
-          .borderRadius(8)
-          .fontSize(13)
-          .maxLength(Constants.SEARCH_MAX_INPUT_LEN)
-          .onChange((value: string) => {
-            this.searchKeyword = value;
-          })
-          .onSubmit(() => {
-            this.doSearch();
-          })
-
-        Button('搜索')
-          .height(40)
-          .margin({ left: 8 })
-          .backgroundColor($r('app.color.btn_glass'))
-          .backdropBlur(20)
-          .border({ width: 1, color: $r('app.color.btn_border') })
-          .fontColor(this.accentColor)
-          .borderRadius(8)
-          .fontSize(13)
-          .onClick(() => {
-            this.doSearch();
-          })
-      }
-      .width('100%')
-      .padding({ left: 16, right: 16, bottom: 8 })
-
-      if (this.searched && this.searchResults.length === 0) {
-        Column() {
-          Text('未找到相关歌曲')
-            .fontSize(14)
-            .fontColor($r('app.color.text_secondary'))
-            .margin({ top: 80 })
-        }
-        .width('100%')
-        .alignItems(HorizontalAlign.Center)
-        .layoutWeight(1)
-      } else if (this.searched) {
-        Column() {
-          Text(`共命中 ${this.searchResults.length} 首`)
-            .fontSize(12)
-            .fontColor($r('app.color.text_secondary'))
-            .width('100%')
-            .padding({ left: 16, bottom: 4 })
-
-          List({ space: 0 }) {
-            ForEach(this.searchResults, (video: BiliVideo) => {
-              ListItem() {
-                Row() {
-                  Column() {
-                    Text(video.title)
-                      .fontSize(14)
-                      .fontColor($r('app.color.text_primary'))
-                      .maxLines(1)
-                      .textOverflow({ overflow: TextOverflow.Ellipsis })
-                    Text(video.ownerName)
-                      .fontSize(11)
-                      .fontColor($r('app.color.text_secondary'))
-                      .margin({ top: 3 })
-                  }
-                  .alignItems(HorizontalAlign.Start)
-                  .layoutWeight(1)
-                }
-                .width('100%')
-                .padding({ left: 16, right: 16, top: 12, bottom: 12 })
-                .onClick(() => {
-                  this.playSearchResult(video);
-                })
-              }
-            }, (video: BiliVideo) => video.bvid)
-          }
-          .width('100%')
-          .layoutWeight(1)
-        }
-        .width('100%')
-        .layoutWeight(1)
-      } else {
-        Column() {
-          Text('输入关键词，搜索播放列表中的歌曲')
-            .fontSize(13)
-            .fontColor($r('app.color.text_secondary'))
-            .textAlign(TextAlign.Center)
-            .margin({ top: 80 })
-        }
-        .width('100%')
-        .alignItems(HorizontalAlign.Center)
-        .layoutWeight(1)
-      }
-
-      Text(this.controller.statusMsg)
-        .fontSize(12)
-        .fontColor($r('app.color.text_secondary'))
-        .width('100%')
-        .padding({ left: 16, right: 16, top: 6, bottom: 12 })
-        .maxLines(1)
-        .textOverflow({ overflow: TextOverflow.Ellipsis })
-    }
-    .width('100%')
-    .height('100%')
-    .backgroundColor($r('app.color.sheet_background'))
-    .backdropBlur(20)
-    .zIndex(3)
   }
 }

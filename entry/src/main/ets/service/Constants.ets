@@ -54,7 +54,6 @@ export class Constants {
   static readonly AS_PLAYLIST_SELECT_MODE: string = 'playlistSelectMode';
   static readonly AS_SHOW_SLEEP_TIMER: string = 'showSleepTimer';
   static readonly AS_SHOW_SLEEP_TIMER_PICKER: string = 'showSleepTimerPicker';
-  static readonly AS_SHOW_SEARCH: string = 'showSearch';
   static readonly AS_SHOW_PLAY_HISTORY: string = 'showPlayHistory';
   static readonly AS_SHOW_PLAYER_OVERLAY: string = 'showPlayerOverlay';
   static readonly AS_SHOW_QUEUE_SHEET: string = 'showQueueSheet';
@@ -81,7 +80,6 @@ export class Constants {
 
   // —— 魔法数字 ——
   static readonly HISTORY_MAX: number = 200;
-  static readonly SEARCH_MAX_INPUT_LEN: number = 50;
   static readonly PROGRESS_SAVE_INTERVAL_MS: number = 5000;
   // 完播阈值（play-history-progress FR-003/FR-004）：进度 ≥ 时长×该比例视为已听完（progress=-1），不暴露为设置
   static readonly PLAY_COMPLETE_RATIO: number = 0.95;
@@ -128,6 +126,19 @@ export class Constants {
 
   // —— 加载更多失败冷却（US2）：失败后冷却期内禁用重试，防止弱网下反复请求 ——
   static readonly LOAD_OLDER_FAIL_COOLDOWN_MS: number = 3000;
+
+  // —— 队列入队反馈（queue-redesign US6）：三分型 toast 文案 ——
+  static readonly TOAST_ENQUEUE_APPENDED: string = '已加入队列';
+  static readonly TOAST_ENQUEUE_STARTED: string = '开始播放';
+  static readonly TOAST_ENQUEUE_DUPLICATE: string = '已在队列中';
+  static readonly TOAST_ENQUEUE_FAILED: string = '添加失败';
+  // —— 清除已播（queue-redesign US4）：无可清 toast 与二次确认框文案 ——
+  static readonly TOAST_QUEUE_NO_PLAYED: string = '没有可清除的已播内容';
+  static readonly DIALOG_CLEAR_PLAYED_TITLE: string = '清除已播';
+  static readonly DIALOG_CLEAR_PLAYED_PLAYING_MSG: string = '将移除当前条目之前的已播条目';
+  static readonly DIALOG_CLEAR_PLAYED_ENDED_MSG: string = '将移除已播条目及已播完的当前条目';
+  // —— 队列空态引导（queue-redesign US1） ——
+  static readonly QUEUE_EMPTY_HINT: string = '到订阅源详情页播放节目，或在首页点「＋」添加订阅';
 
   // —— 封面尺寸档位（US6）：列表缩略图/播放页大封面/播控中心降档，尺寸只需在此调整 ——
   static readonly COVER_THUMB_W: number = 240;

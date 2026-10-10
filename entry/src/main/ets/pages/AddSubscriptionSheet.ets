@@ -8,7 +8,7 @@ import { BiliVideo } from '../model/BiliVideo';
 import { SubscriptionStore } from '../service/SubscriptionStore';
 import { Season } from '../model/Season';
 import { FavFolder } from '../model/FavFolder';
-import { PlayerController } from '../service/PlayerController';
+import { PlayerController, EnqueueResult } from '../service/PlayerController';
 import { Constants } from '../service/Constants';
 import { CoverThumb } from '../component/CoverThumb';
 import {
@@ -184,12 +184,10 @@ export struct AddSubscriptionSheet {
       return;
     }
     this.mainBusy = true;
-    this.controller.addToPlaylist(bvid).then((): void => {
+    this.controller.addSingleVideo(bvid).then((result: EnqueueResult): void => {
       this.mainBusy = false;
       this.onDismiss();
-      if (this.controller.goToPlayerTab !== undefined) {
-        this.controller.goToPlayerTab();
-      }
+      promptAction.showToast({ message: PlayerController.enqueueToast(result) });
     }).catch((): void => {
       this.mainBusy = false;
     });
@@ -524,6 +522,11 @@ export struct AddSubscriptionSheet {
       .fontSize(12)
       .fontColor($r('app.color.text_secondary'))
       .margin({ top: 6 })
+
+    Text('单视频将加入播放列表，不打断当前播放')
+      .fontSize(12)
+      .fontColor($r('app.color.text_secondary'))
+      .margin({ top: 4 })
 
     if (this.upInfo !== null) {
       // 查询结果区域整体挂出现/消失过渡（透明度+位移入位），配合 lookupUid 内 animateTo

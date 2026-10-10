@@ -67,6 +67,8 @@ export struct PlayerOverlay {
   // 详情箭头指向（T011）：独立于 showDetail，sheet 任何关闭路径即时翻转
   @State detailArrowUp: boolean = false;
   @State sleepTimerActive: boolean = false;
+  // 播完暂停模式（queue-redesign US3）：激活时 timer 入口仅图标高亮，不显示剩余数字
+  @State sleepTimerPlayToEof: boolean = false;
   @State sleepTimerRemaining: number = 0;
   @State pickerHour: number = 0;
   @State pickerMinute: number = 0;
@@ -179,6 +181,7 @@ export struct PlayerOverlay {
   private syncSleepTimer(): void {
     const st: SleepTimerController = SleepTimerController.getInstance();
     this.sleepTimerActive = st.active;
+    this.sleepTimerPlayToEof = st.isPlayToEofActive();
     this.sleepTimerRemaining = st.getRemainingSeconds();
   }
 
@@ -546,6 +549,25 @@ export struct PlayerOverlay {
               this.pickerHour = 0;
               this.pickerMinute = 0;
               this.showSleepTimerPicker = true;
+            })
+
+          Button('播完暂停')
+            .width('30%')
+            .height(40)
+            .backgroundColor(this.sleepTimerPlayToEof ? this.tintBg() : $r('app.color.btn_glass'))
+            .backdropBlur(20)
+            .fontColor($r('app.color.text_primary'))
+            .borderRadius(20)
+            .fontSize(14)
+            .margin(4)
+            .onClick(() => {
+              const st: SleepTimerController = SleepTimerController.getInstance();
+              if (st.isPlayToEofActive()) {
+                st.disarmPlayToEof();
+              } else {
+                st.armPlayToEof();
+              }
+              this.showSleepTimer = false;
             })
         }
         .width('100%')
@@ -1213,7 +1235,7 @@ export struct PlayerOverlay {
                 SymbolGlyph($r('sys.symbol.timer'))
                   .fontSize(16)
                   .fontColor([this.sleepTimerActive ? this.accentColor : this.textPrimary()])
-                if (this.sleepTimerActive) {
+                if (this.sleepTimerActive && !this.sleepTimerPlayToEof) {
                   Text(this.formatRemaining(this.sleepTimerRemaining))
                     .fontSize(13)
                     .fontColor(this.accentColor)

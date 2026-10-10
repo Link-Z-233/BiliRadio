@@ -122,6 +122,7 @@ struct SettingsPage {
 
   @StorageProp('accentColor') accentColor: string = Constants.ACCENT_DEFAULT;
   @StorageProp('miniPlayerVisible') miniPlayerVisible: boolean = false; // key 与 Constants.AS_MINI_PLAYER_VISIBLE 对应
+  @StorageProp('navBarHeight') navBarHeight: number = 0; // key 与 Constants.AS_NAV_BAR_HEIGHT 对应
   private qrCanvas: CanvasRenderingContext2D =
     new CanvasRenderingContext2D(new RenderingContextSettings(true));
 
@@ -353,7 +354,7 @@ struct SettingsPage {
     try {
       const v: BiliVideo = BiliVideo.create(item.bvid, 0, 0, item.title, item.cover, item.duration);
       v.ownerName = item.ownerName;
-      await this.controller.playFromLibraryResult(v);
+      await this.controller.playDownloadedSong(v);
       this.controller.goToPlayerTab?.();
     } catch (err) {
       const error = err as BusinessError;
@@ -1393,7 +1394,7 @@ struct SettingsPage {
             .width('100%')
             .alignItems(HorizontalAlign.Start)
             .padding({ left: 16, right: 16, top: 2,
-              bottom: this.miniPlayerVisible ? Constants.MINI_PLAYER_CLEARANCE : 24 })
+              bottom: (this.miniPlayerVisible ? Constants.MINI_PLAYER_CLEARANCE : 24) + this.navBarHeight })
             // ponytail: about 的 bindSheet 挂外层根 Column 或内层链首位时在 API 24 平板打开即自动关闭；单挂内容容器（HEAD 版 logSheet 同款宿主）稳定
             .bindSheet($$this.showAbout, this.aboutSheet(), {
               height: '75%',

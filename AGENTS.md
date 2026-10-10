@@ -31,7 +31,7 @@
 - **唯一 `@Entry`**：`Index`（`main_pages.json` 注册）
 - 其余页面走 `Navigation` + `NavPathStack`；路由在 `router_map.json`（`sourcePage`、`settingsPage`）
 - 播放层是 **Stack 条件渲染**（非 `bindContentCover`——KI-5：ModalPage 渲染管线在 API 24 平板断裂）
-- 队列是右侧抽屉，非 sheet
+- 队列是底部弹出面板（Stack 条件渲染，非系统 sheet）
 
 ### 状态管理
 

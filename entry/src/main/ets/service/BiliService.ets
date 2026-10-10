@@ -1554,7 +1554,7 @@ export class BiliService {
   }
 
   // 按 aid 查询视频信息（av 号归一化入口）：与 fetchVideoInfo 同一 view 接口，仅查询参数不同；
-  // 返回的 BiliVideo 含 bvid，供下游复用既有 playBv/addToPlaylist 链路
+  // 返回的 BiliVideo 含 bvid，供下游复用既有 playBv 链路
   static async fetchVideoInfoByAid(aid: number): Promise<BiliVideo> {
     const resultStr: string = await httpGet(`${BILI_VIDEO_INFO_URL}?aid=${aid}`);
     return BiliService.parseVideoInfoResult(resultStr);

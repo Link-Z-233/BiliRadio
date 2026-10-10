@@ -4,16 +4,15 @@ import { QueueSheet } from './QueueSheet';
 const DRAWER_SLIDE_MS: number = 250;
 const DRAWER_CLOSE_DELAY_MS: number = 260;
 
-// 右侧滑出播放队列抽屉：点击遮罩关闭；面板从右侧平移进出场（退出时反向滑出）。
+// 底部弹出播放队列面板（FR-101/plan D1）：点击遮罩关闭；面板从底部平移进出场（退出时反向滑出）。
 // 进出场由挂载时 animateTo 驱动的显式位移状态实现（US1：TransitionEffect.translate
 // 在 API 24 平板 zIndex 失效场景下表现不可靠，改为状态驱动保证全平台一致）；遮罩保留 OPACITY 过渡。
 // 仅负责“打开态”绘制，挂载到哪一图层（Index 内容层 / PlayerOverlay 播放层）由调用方决定。
 @Component
 export struct QueueDrawer {
   @StorageLink('showQueueSheet') showQueueSheet: boolean = false; // key 与 Constants.AS_SHOW_QUEUE_SHEET 对应
-  @StorageProp('statusBarHeight') statusBarHeight: number = 38; // key 与 Constants.AS_STATUS_BAR_HEIGHT 对应
-  // 面板水平位移：进场 '100%'（屏幕右侧外）动画至 '0%'，退出反向；translate 百分比相对面板自身宽度
-  @State panelOffsetX: string = '100%';
+  // 面板垂直位移：进场 '100%'（屏幕底部外）动画至 '0%'，退出反向；translate 百分比相对面板自身高度
+  @State panelOffsetY: string = '100%';
   // US7/T023：关闭句柄注册回调——aboutToAppear 时向宿主上报 closeWithSlide（返回键路径复用滑出动画），
   // aboutToDisappear 时上报 undefined 注销；未注册的宿主（PlayerOverlay 内实例）保持既有行为
   onRegisterClose: (close: (() => void) | undefined) => void = (close: (() => void) | undefined): void => {
@@ -26,7 +25,7 @@ export struct QueueDrawer {
       this.closeWithSlide();
     });
     this.getUIContext().animateTo({ duration: DRAWER_SLIDE_MS, curve: Curve.EaseOut }, (): void => {
-      this.panelOffsetX = '0%';
+      this.panelOffsetY = '0%';
     });
   }
 
@@ -46,7 +45,7 @@ export struct QueueDrawer {
     }
     this.closing = true;
     this.getUIContext().animateTo({ duration: DRAWER_SLIDE_MS, curve: Curve.EaseOut }, (): void => {
-      this.panelOffsetX = '100%';
+      this.panelOffsetY = '100%';
     });
     if (this.closeTimer >= 0) {
       clearTimeout(this.closeTimer);
@@ -58,7 +57,7 @@ export struct QueueDrawer {
   }
 
   build() {
-    Stack({ alignContent: Alignment.End }) {
+    Stack({ alignContent: Alignment.Bottom }) {
       // 全屏遮罩：点击关闭（面板声明在后、位于上层，点击面板区域不会触发关闭）
       Column()
         .width('100%')
@@ -69,19 +68,18 @@ export struct QueueDrawer {
           this.closeWithSlide();
         })
 
-      // 队列面板：右对齐，位移由 panelOffsetX 状态驱动；顶部留出状态栏高度，内容不压状态栏
+      // 队列面板：底部对齐，位移由 panelOffsetY 状态驱动；全宽 65% 屏高，顶部圆角
       Column() {
         QueueSheet()
       }
-      .width('40%')
+      .width('100%')
       .constraintSize({ minWidth: 320 })
-      .height('100%')
-      .padding({ top: this.statusBarHeight })
+      .height('65%')
       .backgroundColor($r('app.color.queue_panel_background'))
       .backdropBlur(20)
-      .borderRadius({ topLeft: 16, bottomLeft: 16 })
+      .borderRadius({ topLeft: 16, topRight: 16 })
       .clip(true)
-      .translate({ x: this.panelOffsetX })
+      .translate({ y: this.panelOffsetY })
     }
     .width('100%')
     .height('100%')

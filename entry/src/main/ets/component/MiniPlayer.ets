@@ -28,7 +28,6 @@ export struct MiniPlayer {
   aboutToDisappear(): void {
     this.unsubscribePlayer();
     this.unsubscribePlayer = (): void => {};
-    AppStorage.setOrCreate<boolean>(Constants.AS_MINI_PLAYER_VISIBLE, false);
   }
 
   private syncFromPlayer(): void {
@@ -36,12 +35,6 @@ export struct MiniPlayer {
     const idxOk: boolean = c.currentIndex >= 0 && c.currentIndex < c.playlist.length;
     const dataSaver: boolean = AppStore.getNumber(Constants.KEY_DATA_SAVER, 0) === 1;
     const has: boolean = c.playlist.length > 0;
-    // 悬浮胶囊可见性上报（US2）：空态渲染占位条，与内容条占据相同底部空间，
-    // 列表避让高度一致，故恒上报可见（值变化时才写，避免秒级 tick 抖动）
-    const prevVisible: boolean = AppStorage.get<boolean>(Constants.AS_MINI_PLAYER_VISIBLE) === true;
-    if (!prevVisible) {
-      AppStorage.setOrCreate<boolean>(Constants.AS_MINI_PLAYER_VISIBLE, true);
-    }
     const cover: string = idxOk && !dataSaver ? c.playlist[c.currentIndex].cover : '';
     const title: string = idxOk ? c.playlist[c.currentIndex].title : '';
     const owner: string = idxOk ? c.playlist[c.currentIndex].ownerName : '';

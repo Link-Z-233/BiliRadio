@@ -55,6 +55,7 @@ class SubDataSource implements IDataSource {
 export struct HomePage {
   @StorageProp('accentColor') accentColor: string = Constants.ACCENT_DEFAULT;
   @StorageProp('miniPlayerVisible') miniPlayerVisible: boolean = false; // key 与 Constants.AS_MINI_PLAYER_VISIBLE 对应
+  @StorageProp('navBarHeight') navBarHeight: number = 0; // key 与 Constants.AS_NAV_BAR_HEIGHT 对应
   // key 与 Constants.AS_HOME_REFRESH_TICK 对应：源页退出（onHidden）触发重算（US4 返回首页徽标清除）
   @StorageProp('homeRefreshTick') @Watch('onHomeRefreshTick') homeRefreshTick: number = 0;
   // [DISABLED 2026-10] 首页下拉刷新暂时禁用，恢复方式见 PROJECT_NOTES.md「已移除与禁用功能」
@@ -342,7 +343,7 @@ export struct HomePage {
           }
           .width('100%')
           .height('100%')
-          .padding({ left: 12, right: 12, top: 4, bottom: this.miniPlayerVisible ? Constants.MINI_PLAYER_CLEARANCE : 12 })
+          .padding({ left: 12, right: 12, top: 4, bottom: (this.miniPlayerVisible ? Constants.MINI_PLAYER_CLEARANCE : 12) + this.navBarHeight })
           // US9：内容不足一屏时 List 默认不开启边缘效果，须显式 alwaysEnabled 才有过冲提示；
           // onWillScroll 在纯边界过冲（偏移量不再变化）时不回调，到边提示改由 reach 回调驱动
           .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })

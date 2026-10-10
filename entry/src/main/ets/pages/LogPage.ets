@@ -51,6 +51,7 @@ struct LogPage {
   @State entries: LogEntry[] = [];
   @StorageProp('accentColor') accentColor: string = Constants.ACCENT_DEFAULT;
   @StorageProp('miniPlayerVisible') miniPlayerVisible: boolean = false; // key 与 Constants.AS_MINI_PLAYER_VISIBLE 对应
+  @StorageProp('navBarHeight') navBarHeight: number = 0; // key 与 Constants.AS_NAV_BAR_HEIGHT 对应
   private source: LogDataSource = new LogDataSource();
   private navPathStack: NavPathStack = new NavPathStack();
 
@@ -233,7 +234,7 @@ struct LogPage {
       .width('100%')
       .height('100%')
       .backgroundColor($r('app.color.page_background'))
-      .padding({ bottom: this.miniPlayerVisible ? Constants.MINI_PLAYER_CLEARANCE : 0 })
+      .padding({ bottom: this.navBarHeight })
     }
     .hideTitleBar(true)
     .onReady((ctx: NavDestinationContext) => {

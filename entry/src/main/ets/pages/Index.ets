@@ -30,13 +30,13 @@ struct Index {
     AppStorage.setOrCreate<boolean>(Constants.AS_SHOW_MODE, false);
     AppStorage.setOrCreate<boolean>(Constants.AS_SHOW_SLEEP_TIMER, false);
     AppStorage.setOrCreate<boolean>(Constants.AS_SHOW_SLEEP_TIMER_PICKER, false);
-    AppStorage.setOrCreate<boolean>(Constants.AS_SHOW_SEARCH, false);
     AppStorage.setOrCreate<boolean>(Constants.AS_SHOW_PLAY_HISTORY, false);
     AppStorage.setOrCreate<boolean>(Constants.AS_PLAYLIST_SELECT_MODE, false);
     AppStorage.setOrCreate<boolean>(Constants.AS_SHOW_PLAYER_OVERLAY, false);
     AppStorage.setOrCreate<boolean>(Constants.AS_SHOW_QUEUE_SHEET, false);
     // US7：设置页在台标志初始化（SettingsPage aboutToAppear/Disappear 维护）
     AppStorage.setOrCreate<boolean>(Constants.AS_ON_SETTINGS_PAGE, false);
+    AppStorage.setOrCreate<boolean>(Constants.AS_MINI_PLAYER_VISIBLE, true);
     this.wideListener = mediaquery.matchMediaSync('(min-width: 600vp)');
     AppStorage.setOrCreate<boolean>(Constants.AS_IS_WIDE_SCREEN, false);
     this.wideListener.on('change', (result: mediaquery.MediaQueryResult): void => {
@@ -106,6 +106,7 @@ struct Index {
   // T021 已把 onSettingsPage 置位提前到导航转场开始，胶囊随之即时平滑出现/隐藏
   private onMiniVisibilityChanged(): void {
     const hidden: boolean = this.showPlayerOverlay || this.onSettingsPage;
+    AppStorage.setOrCreate<boolean>(Constants.AS_MINI_PLAYER_VISIBLE, !hidden);
     this.getUIContext().animateTo({ duration: 250, curve: Curve.EaseOut }, (): void => {
       this.miniHidden = hidden;
     });
@@ -153,10 +154,6 @@ struct Index {
       AppStorage.setOrCreate<boolean>(Constants.AS_SHOW_SLEEP_TIMER, false);
       return true;
     }
-    if (AppStorage.get<boolean>(Constants.AS_SHOW_SEARCH) === true) {
-      AppStorage.setOrCreate<boolean>(Constants.AS_SHOW_SEARCH, false);
-      return true;
-    }
     if (AppStorage.get<boolean>(Constants.AS_PLAYLIST_SELECT_MODE) === true) {
       AppStorage.setOrCreate<boolean>(Constants.AS_PLAYLIST_SELECT_MODE, false);
       return true;
@@ -183,12 +180,12 @@ struct Index {
       }
       .width('100%')
       .height('100%')
-      .padding({ top: this.statusBarHeight, bottom: this.navBarHeight })
+      .padding({ top: this.statusBarHeight })
 
       // 悬浮播放胶囊：底部对齐覆盖在内容之上，内容可从其后方滚过；
       // 恒挂载不卸载（避免 MiniPlayer 反复 mount 造成 PlayerController 订阅累积），
       // 播放浮层展开或设置页在台时以 opacity/translateY 属性动画淡出（US6/T022），
-      // 透明时不响应点击；AS_MINI_PLAYER_VISIBLE 上报与 MINI_PLAYER_CLEARANCE 避让不变
+      // BLOCK_DESCENDANTS：自身+全部子孙退出命中测试，触摸落回下层
       Column() {
         MiniPlayer()
       }
@@ -196,7 +193,7 @@ struct Index {
       .padding({ left: 16, right: 16 })
       .opacity(this.miniHidden ? 0 : 1)
       .translate({ y: this.miniHidden ? 24 : 0 })
-      .hitTestBehavior(this.miniHidden ? HitTestMode.None : HitTestMode.Default)
+      .hitTestBehavior(this.miniHidden ? HitTestMode.BLOCK_DESCENDANTS : HitTestMode.Default)
 
       // 队列抽屉：仅内容层渲染；播放页展开时改由 PlayerOverlay 层渲染，避免被封面图层遮挡
       if (this.showQueueSheet && !this.showPlayerOverlay) {
