@@ -42,9 +42,6 @@ export class MediaSession {
       this.session.on('fastForward', onFastForward);
       this.session.on('rewind', onRewind);
       await this.session.activate();
-      // [API24-COMPAT] setMediaCenterControlType 为 API 26 新增接口，API<26 设备运行时抛 TypeError：
-      // 此处独立 try/catch 静默降级（仅媒体控制中心少显示微调按钮，不影响会话本身，避免波及外层 init）；
-      // 未来 API 26 基线化后按 PROJECT_NOTES.md 登记统一移除该守卫。
       try {
         const controls: avSession.AVMediaCenterControlType[] =
           ['playPrevious', 'playNext', 'fastForward', 'rewind'];
@@ -79,7 +76,7 @@ export class MediaSession {
         artist: artist,
         duration: durationMs,
       };
-      // 空封面（无图模式）不设置 mediaImage 字段，而非传旧值
+      // 空封面（无封面条目）不设置 mediaImage 字段，而非传旧值
       if (coverUrl !== '') {
         meta.mediaImage = CoverUrl.sized(coverUrl,
           wifi ? Constants.COVER_BIG_W : Constants.COVER_SAVER_W,

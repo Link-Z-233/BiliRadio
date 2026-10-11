@@ -20,6 +20,7 @@ import { BusinessError } from '@kit.BasicServicesKit';
 import { Appearance } from '../service/Appearance';
 import { Constants } from '../service/Constants';
 import { Logger } from '../service/Logger';
+import { connectNum } from '../service/V2State';
 
 export default class EntryAbility extends UIAbility {
   private mainWindow: window.Window | undefined = undefined;
@@ -62,8 +63,8 @@ export default class EntryAbility extends UIAbility {
         hilog.error(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'Failed to setup immersive window. Code: %{public}d, message: %{public}s',
           err.code, err.message);
         // 沉浸式失败时回退为非全屏布局：页面内容交由系统避让，不再手动留白
-        AppStorage.setOrCreate<number>(Constants.AS_STATUS_BAR_HEIGHT, 0);
-        AppStorage.setOrCreate<number>(Constants.AS_NAV_BAR_HEIGHT, 0);
+        connectNum(Constants.AS_STATUS_BAR_HEIGHT, 0).value = 0;
+        connectNum(Constants.AS_NAV_BAR_HEIGHT, 0).value = 0;
       });
 
     // 3. 加载沉浸式窗口的具体内容
@@ -126,9 +127,9 @@ export default class EntryAbility extends UIAbility {
       const bottomPx: number = indicatorArea.bottomRect.height > 0 ?
         indicatorArea.bottomRect.height : systemArea.bottomRect.height;
       if (topPx > 0) {
-        AppStorage.setOrCreate<number>(Constants.AS_STATUS_BAR_HEIGHT, topPx / density);
+        connectNum(Constants.AS_STATUS_BAR_HEIGHT, 38).value = topPx / density;
       }
-      AppStorage.setOrCreate<number>(Constants.AS_NAV_BAR_HEIGHT, bottomPx > 0 ? bottomPx / density : 0);
+      connectNum(Constants.AS_NAV_BAR_HEIGHT, 0).value = bottomPx > 0 ? bottomPx / density : 0;
       hilog.info(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'AvoidArea synced: topPx=%{public}d, bottomPx=%{public}d, density=%{public}s',
         topPx, bottomPx, `${density}`);
     } catch (err) {

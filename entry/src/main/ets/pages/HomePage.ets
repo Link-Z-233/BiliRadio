@@ -2,6 +2,7 @@ import { Subscription } from '../model/Subscription';
 import { BiliVideo } from '../model/BiliVideo';
 import { SubscriptionStore } from '../service/SubscriptionStore';
 import { Constants } from '../service/Constants';
+import { connectBool, connectNum, connectStr, BoolState, NumState, StrState } from '../service/V2State';
 import { CoverThumb } from '../component/CoverThumb';
 import { EdgeHint } from '../component/EdgeHint';
 import { AddSubscriptionSheet, AddSheetBackHandler } from './AddSubscriptionSheet';
@@ -51,20 +52,22 @@ class SubDataSource implements IDataSource {
 }
 
 // 主页：订阅源列表（新集徽标 / 长按置顶删除 / 空态）；下拉刷新已注释禁用（[DISABLED 2026-10]，见 PROJECT_NOTES.md）
-@Component
+@ComponentV2
 export struct HomePage {
-  @StorageProp('accentColor') accentColor: string = Constants.ACCENT_DEFAULT;
-  @StorageProp('miniPlayerVisible') miniPlayerVisible: boolean = false; // key 与 Constants.AS_MINI_PLAYER_VISIBLE 对应
-  @StorageProp('navBarHeight') navBarHeight: number = 0; // key 与 Constants.AS_NAV_BAR_HEIGHT 对应
-  // key 与 Constants.AS_HOME_REFRESH_TICK 对应：源页退出（onHidden）触发重算（US4 返回首页徽标清除）
-  @StorageProp('homeRefreshTick') @Watch('onHomeRefreshTick') homeRefreshTick: number = 0;
+  @Local accentColor: StrState =
+    connectStr(Constants.AS_ACCENT_COLOR, Constants.ACCENT_DEFAULT);
+  @Local miniPlayerVisible: BoolState =
+    connectBool(Constants.AS_MINI_PLAYER_VISIBLE, true);
+  @Local navBarHeight: NumState = connectNum(Constants.AS_NAV_BAR_HEIGHT, 0);
+  // 源页退出（onHidden）经全局键触发重算（US4 返回首页徽标清除）
+  @Local homeRefreshTick: NumState = connectNum(Constants.AS_HOME_REFRESH_TICK, 0);
   // [DISABLED 2026-10] 首页下拉刷新暂时禁用，恢复方式见 PROJECT_NOTES.md「已移除与禁用功能」
-  // @State refreshing: boolean = false;
-  @State rowCount: number = 0;
-  @State showAddSheet: boolean = false;
+  // @Local refreshing: boolean = false;
+  @Local rowCount: number = 0;
+  @Local showAddSheet: boolean = false;
   // US5 过冲提示（顶/底），空串不渲染
-  @State topHint: string = '';
-  @State bottomHint: string = '';
+  @Local topHint: string = '';
+  @Local bottomHint: string = '';
   // 添加订阅面板的系统返回拦截句柄（onWillDismiss PRESS_BACK 时经其询问面板是否消费）
   private addSheetBack: AddSheetBackHandler = new AddSheetBackHandler();
   private subs: Subscription[] = [];
@@ -75,7 +78,7 @@ export struct HomePage {
   private scroller: Scroller = new Scroller();
   // 触底时刻的列表偏移（US5 底部过冲判定基准）；-1 = 未捕获，列表重建后失效须重捕
   private endOffsetY: number = -1;
-  navPathStack: NavPathStack = new NavPathStack();
+  @Param navPathStack: NavPathStack = new NavPathStack();
 
   aboutToAppear(): void {
     this.subs = SubscriptionStore.loadSubscriptions();
@@ -101,8 +104,9 @@ export struct HomePage {
     this.provider.reload(rows);
   }
 
-  // US4：源页退出经 AppStorage tick 触发（onPop 对无参 pop() 永不回调，见 SourcePage.onHidden 注释）
-  private onHomeRefreshTick(): void {
+  // US4：源页退出经全局键触发（onPop 对无参 pop() 永不回调，见 SourcePage.onHidden 注释）
+  @Monitor('homeRefreshTick.value')
+  onHomeRefreshTick(): void {
     this.rebuild();
   }
 
@@ -212,13 +216,13 @@ export struct HomePage {
       CoverThumb({ cover: row.sub.cover, thumbSize: 52, radius: 12 })
       Column() {
         Text(row.sub.title)
-          .fontSize(16)
+          .fontSize(Constants.TOKEN_FONT_TITLE)
           .fontWeight(FontWeight.Medium)
           .fontColor($r('app.color.text_primary'))
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
         Text(row.latestTitle)
-          .fontSize(13)
+          .fontSize(Constants.TOKEN_FONT_BODY)
           .fontColor($r('app.color.text_secondary'))
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
@@ -226,20 +230,20 @@ export struct HomePage {
       }
       .alignItems(HorizontalAlign.Start)
       .layoutWeight(1)
-      .margin({ left: 12, right: 8 })
+      .margin({ left: Constants.TOKEN_SPACE_M, right: Constants.TOKEN_SPACE_S })
       if (row.newCount > 0) {
         Text(row.newCount > 99 ? '99+' : `${row.newCount}`)
-          .fontSize(12)
-          .fontColor(Color.White)
-          .backgroundColor(this.accentColor)
-          .borderRadius(10)
+          .fontSize(Constants.TOKEN_FONT_BODY_S)
+          .fontColor($r('app.color.fg_on_dark'))
+          .backgroundColor(this.accentColor.value)
+          .borderRadius(Constants.TOKEN_RADIUS_10)
           .constraintSize({ minWidth: 20 })
-          .padding({ left: 6, right: 6, top: 2, bottom: 2 })
+          .padding({ left: Constants.TOKEN_SPACE_6, right: Constants.TOKEN_SPACE_6, top: Constants.TOKEN_SPACE_XXS, bottom: Constants.TOKEN_SPACE_XXS })
       }
     }
     .width('100%')
-    .padding({ left: 12, right: 12, top: 10, bottom: 10 })
-    .borderRadius(14)
+    .padding({ left: Constants.TOKEN_SPACE_M, right: Constants.TOKEN_SPACE_M, top: Constants.TOKEN_SPACE_10, bottom: Constants.TOKEN_SPACE_10 })
+    .borderRadius(Constants.TOKEN_RADIUS_14)
     .backgroundColor($r('app.color.card_background'))
     .onClick(() => {
       this.navPathStack.pushPathByName('sourcePage', row.sub.id);
@@ -264,20 +268,34 @@ export struct HomePage {
   }
 
   @Builder
+  private subDeleteAction(row: SubRow) {
+    Button('删除')
+      .height('100%')
+      .padding({ left: 18, right: 18 })
+      .backgroundColor($r('app.color.danger_red'))
+      .fontColor($r('app.color.fg_on_dark'))
+      .fontSize(Constants.TOKEN_FONT_BODY)
+      .borderRadius(0)
+      .onClick(() => {
+        this.removeSub(row);
+      })
+  }
+
+  @Builder
   private emptyView() {
     Column() {
       Text('♪')
         .fontSize(42)
         .fontColor($r('app.color.placeholder_color'))
       Text('还没有订阅')
-        .fontSize(16)
+        .fontSize(Constants.TOKEN_FONT_TITLE)
         .fontWeight(FontWeight.Medium)
         .fontColor($r('app.color.text_primary'))
-        .margin({ top: 12 })
+        .margin({ top: Constants.TOKEN_SPACE_M })
       Text('点击右上角「＋」添加 UP 主、收藏夹或合集')
-        .fontSize(13)
+        .fontSize(Constants.TOKEN_FONT_BODY)
         .fontColor($r('app.color.text_secondary'))
-        .margin({ top: 6 })
+        .margin({ top: Constants.TOKEN_SPACE_6 })
     }
     .width('100%')
     .layoutWeight(1)
@@ -288,18 +306,18 @@ export struct HomePage {
     Column() {
       Row() {
         Text('BiliRadio')
-          .fontSize(22)
+          .fontSize(Constants.TOKEN_FONT_TITLE_L)
           .fontWeight(FontWeight.Bold)
           .fontColor($r('app.color.text_primary'))
         Blank()
         Row() {
           SymbolGlyph($r('sys.symbol.plus'))
-            .fontSize(22)
+            .fontSize(Constants.TOKEN_FONT_TITLE_L)
             .fontColor([$r('app.color.text_primary')])
         }
         .width(40)
         .height(40)
-        .borderRadius(20)
+        .borderRadius(Constants.TOKEN_RADIUS_XL)
         .backgroundColor($r('app.color.card_background'))
         .justifyContent(FlexAlign.Center)
         .onClick(() => {
@@ -307,22 +325,22 @@ export struct HomePage {
         })
         Row() {
           SymbolGlyph($r('sys.symbol.ellipsis_circle'))
-            .fontSize(22)
+            .fontSize(Constants.TOKEN_FONT_TITLE_L)
             .fontColor([$r('app.color.text_primary')])
         }
         .width(40)
         .height(40)
-        .borderRadius(20)
+        .borderRadius(Constants.TOKEN_RADIUS_XL)
         .backgroundColor($r('app.color.card_background'))
         .justifyContent(FlexAlign.Center)
-        .margin({ left: 8 })
+        .margin({ left: Constants.TOKEN_SPACE_S })
         .onClick(() => {
           // 更多按钮直达设置页（US4）：播放历史/关于本就是设置页内入口，独立更多页已删除
           this.navPathStack.pushPathByName('settingsPage', '');
         })
       }
       .width('100%')
-      .padding({ left: 16, right: 12, top: 6, bottom: 10 })
+      .padding({ left: Constants.TOKEN_SPACE_L, right: Constants.TOKEN_SPACE_M, top: Constants.TOKEN_SPACE_6, bottom: Constants.TOKEN_SPACE_10 })
 
       if (this.rowCount === 0) {
         this.emptyView()
@@ -334,16 +352,17 @@ export struct HomePage {
         Stack() {
           EdgeHint({ text: this.topHint, edge: 'top' })
           EdgeHint({ text: this.bottomHint, edge: 'bottom' })
-          List({ space: 8, scroller: this.scroller }) {
+          List({ space: Constants.TOKEN_SPACE_S, scroller: this.scroller }) {
             LazyForEach(this.provider, (row: SubRow) => {
               ListItem() {
                 this.subRowItem(row)
               }
+              .swipeAction({ end: this.subDeleteAction(row) })
             }, (row: SubRow) => `${row.sub.id}_${row.latestTitle}_${row.newCount}_${row.sub.cover}`)
           }
           .width('100%')
           .height('100%')
-          .padding({ left: 12, right: 12, top: 4, bottom: (this.miniPlayerVisible ? Constants.MINI_PLAYER_CLEARANCE : 12) + this.navBarHeight })
+          .padding({ left: Constants.TOKEN_SPACE_M, right: Constants.TOKEN_SPACE_M, top: Constants.TOKEN_SPACE_XS, bottom: (this.miniPlayerVisible.value ? Constants.MINI_PLAYER_CLEARANCE : 12) + this.navBarHeight.value })
           // US9：内容不足一屏时 List 默认不开启边缘效果，须显式 alwaysEnabled 才有过冲提示；
           // onWillScroll 在纯边界过冲（偏移量不再变化）时不回调，到边提示改由 reach 回调驱动
           .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
@@ -390,10 +409,13 @@ export struct HomePage {
     }
     .width('100%')
     .height('100%')
-    .bindSheet($$this.showAddSheet, this.addSheetBuilder(), {
+    .bindSheet(this.showAddSheet, this.addSheetBuilder(), {
       detents: [SheetSize.MEDIUM, SheetSize.LARGE],
       showClose: true,
       preferType: SheetType.BOTTOM,
+      onDisappear: (): void => {
+        this.showAddSheet = false;
+      },
       onWillDismiss: (dismiss: DismissSheetAction) => {
         // 系统返回时若面板处于二级视图（收藏夹/合集与系列），拦截关闭并退回一级视图；
         // 下滑关闭、右上角关闭按钮、点遮罩等其余关闭路径正常放行

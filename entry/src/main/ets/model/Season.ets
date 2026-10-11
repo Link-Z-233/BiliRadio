@@ -1,8 +1,9 @@
+@ObservedV2
 export class Season {
-  seasonId: number = 0;
-  title: string = '';
-  count: number = 0;
-  cover: string = '';
+  @Trace seasonId: number = 0;
+  @Trace title: string = '';
+  @Trace count: number = 0;
+  @Trace cover: string = '';
 
   constructor(seasonId: number, title: string, count: number, cover: string = '') {
     this.seasonId = seasonId;

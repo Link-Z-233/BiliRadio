@@ -30,7 +30,6 @@ export class Constants {
   static readonly KEY_AUTO_PLAY_ON_START: string = 'autoPlayOnStart';
   static readonly KEY_COLOR_MODE: string = 'colorMode';
   static readonly KEY_INTERRUPT_RESUME: string = 'interruptResume';
-  static readonly KEY_DATA_SAVER: string = 'dataSaver';
   // 仅供存量迁移读取，链路已退役（audio-quality-settings）
   static readonly KEY_PREFER_LOW_BITRATE: string = 'preferLowBitrate';
   static readonly KEY_WIFI_ONLY_DOWNLOAD: string = 'wifiOnlyDownload';
@@ -127,6 +126,11 @@ export class Constants {
   // —— 加载更多失败冷却（US2）：失败后冷却期内禁用重试，防止弱网下反复请求 ——
   static readonly LOAD_OLDER_FAIL_COOLDOWN_MS: number = 3000;
 
+  // —— 订阅翻页页大小（KI-9 页界统一）：APP 签名链服务端钳 20，Web 链与记账统一对齐 ——
+  static readonly UP_PAGE_SIZE: number = 20;
+  static readonly SEASON_PAGE_SIZE: number = 20;
+  static readonly FAV_PAGE_SIZE: number = 20;
+
   // —— 队列入队反馈（queue-redesign US6）：三分型 toast 文案 ——
   static readonly TOAST_ENQUEUE_APPENDED: string = '已加入队列';
   static readonly TOAST_ENQUEUE_STARTED: string = '开始播放';
@@ -147,6 +151,41 @@ export class Constants {
   static readonly COVER_BIG_H: number = 378;
   static readonly COVER_SAVER_W: number = 480;
   static readonly COVER_SAVER_H: number = 270;
+
+  // —— UI 令牌档位（US2，plan.md R2）：数值不变仅统一来源，观感收敛列远期 ——
+  // 字号：基础档（plan）+ 实测扩展档（数值后缀命名）
+  static readonly TOKEN_FONT_CAPTION: number = 10;
+  static readonly TOKEN_FONT_AUX: number = 11;
+  static readonly TOKEN_FONT_BODY_S: number = 12;
+  static readonly TOKEN_FONT_BODY: number = 13;
+  static readonly TOKEN_FONT_BODY_M: number = 14;
+  static readonly TOKEN_FONT_BODY_L: number = 15;
+  static readonly TOKEN_FONT_TITLE: number = 16;
+  static readonly TOKEN_FONT_18: number = 18;
+  static readonly TOKEN_FONT_20: number = 20;
+  static readonly TOKEN_FONT_TITLE_L: number = 22;
+  static readonly TOKEN_FONT_24: number = 24;
+  // 圆角：基础档（plan）+ 实测扩展档
+  static readonly TOKEN_RADIUS_S: number = 8;
+  static readonly TOKEN_RADIUS_M: number = 12;
+  static readonly TOKEN_RADIUS_L: number = 16;
+  static readonly TOKEN_RADIUS_XL: number = 20;
+  static readonly TOKEN_RADIUS_XXL: number = 24;
+  static readonly TOKEN_RADIUS_10: number = 10;
+  static readonly TOKEN_RADIUS_14: number = 14;
+  static readonly TOKEN_RADIUS_18: number = 18;
+  static readonly TOKEN_RADIUS_22: number = 22;
+  // 间距：基础档（plan）+ 实测扩展档
+  static readonly TOKEN_SPACE_XXS: number = 2;
+  static readonly TOKEN_SPACE_XS: number = 4;
+  static readonly TOKEN_SPACE_S: number = 8;
+  static readonly TOKEN_SPACE_M: number = 12;
+  static readonly TOKEN_SPACE_L: number = 16;
+  static readonly TOKEN_SPACE_XL: number = 24;
+  static readonly TOKEN_SPACE_6: number = 6;
+  static readonly TOKEN_SPACE_10: number = 10;
+  static readonly TOKEN_SPACE_14: number = 14;
+  static readonly TOKEN_SPACE_20: number = 20;
 }
 
 // 延时工具：全库唯一实现，供各处「等待固定时长」复用。

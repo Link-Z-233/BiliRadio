@@ -1,6 +1,7 @@
 import { BiliVideo } from './BiliVideo';
 
 // 订阅源模型：四类源统一为「定期拉取剧集列表」的播客频道
+@ObservedV2
 export class Subscription {
   static readonly TYPE_UP: string = 'up';
   static readonly TYPE_FAV: string = 'fav';
@@ -10,17 +11,17 @@ export class Subscription {
   // ponytail: 全源统一 15min TTL（天花板；升级路径——按源类型/失败次数动态调整）
   static readonly CACHE_TTL_MS: number = 15 * 60 * 1000;
 
-  id: string = '';            // `${type}:${sourceId}` 复合键
-  type: string = '';          // TYPE_* 之一
-  sourceId: number = 0;       // up:mid / fav:mediaId / season:seasonId / series:seriesId
-  ownerMid: number = 0;       // season/series 拉取所需的所属 UP mid
-  title: string = '';
-  cover: string = '';
-  upperName: string = '';
-  lastSeenAt: number = 0;     // 秒；上次进入源详情时间，新集计数基准
-  lastRefreshAt: number = 0;  // 毫秒；上次成功刷新时间，TTL 基准
-  latestPubAt: number = 0;    // 秒；最新一集发布时间
-  sortOrder: number = 0;
+  @Trace id: string = '';            // `${type}:${sourceId}` 复合键
+  @Trace type: string = '';          // TYPE_* 之一
+  @Trace sourceId: number = 0;       // up:mid / fav:mediaId / season:seasonId / series:seriesId
+  @Trace ownerMid: number = 0;       // season/series 拉取所需的所属 UP mid
+  @Trace title: string = '';
+  @Trace cover: string = '';
+  @Trace upperName: string = '';
+  @Trace lastSeenAt: number = 0;     // 秒；上次进入源详情时间，新集计数基准
+  @Trace lastRefreshAt: number = 0;  // 毫秒；上次成功刷新时间，TTL 基准
+  @Trace latestPubAt: number = 0;    // 秒；最新一集发布时间
+  @Trace sortOrder: number = 0;
 
   static makeId(type: string, sourceId: number): string {
     return `${type}:${sourceId}`;

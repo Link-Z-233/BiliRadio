@@ -73,14 +73,8 @@ export function recognizeInput(input: string): RecognizeResult {
   if (trimmed === '') {
     return r;
   }
-  let m: RegExpExecArray | null = new RegExp('BV[0-9A-Za-z]{10}').exec(trimmed);
-  if (m !== null) {
-    r.type = 'bv';
-    r.id = m[0];
-    return r;
-  }
-  // av 号（忽略大小写，如 av170001 / AV170001），置于 BV 分支之后
-  m = new RegExp('^av(\\d+)$', 'i').exec(trimmed);
+  // av 号（忽略大小写，如 av170001 / AV170001）
+  let m: RegExpExecArray | null = new RegExp('^av(\\d+)$', 'i').exec(trimmed);
   if (m !== null) {
     r.type = 'av';
     r.id = m[1];
@@ -124,8 +118,11 @@ export function recognizeInput(input: string): RecognizeResult {
     }
     return r;
   }
+  // fav 收紧（KI-7 B5）：URL path 须含 favlist/medialist 结构性特征（对齐真实收藏夹 URL 形态：
+  // space.bilibili.com/{mid}/favlist?fid= / m.bilibili.com/space/{mid}/favlist / medialist/play），
+  // 且带 fid=/media_id= 参数；文本任意位置含 fav 字样不再作为判定依据
   m = new RegExp('(?:fid|media_id)=(\\d+)').exec(trimmed);
-  if (m !== null && (trimmed.indexOf('fav') >= 0 || trimmed.indexOf('collection') >= 0 || trimmed.indexOf('favlist') >= 0)) {
+  if (m !== null && new RegExp('bilibili\\.com[^?#]*(?:favlist|medialist)', 'i').test(trimmed)) {
     r.type = 'fav';
     r.id = m[1];
     return r;
@@ -142,6 +139,14 @@ export function recognizeInput(input: string): RecognizeResult {
   if (m !== null) {
     r.type = 'up';
     r.id = m[1];
+    return r;
+  }
+  // 全文 BV 扫描（KI-7 B4 修复）：无锚定扫描须置于全部 URL 形态规则之后——
+  // 首位时会遮蔽含 BV 参数的合集/收藏夹复合 URL；纯 BV 文本不命中任何 URL 规则，落到此处行为不变
+  m = new RegExp('BV[0-9A-Za-z]{10}').exec(trimmed);
+  if (m !== null) {
+    r.type = 'bv';
+    r.id = m[0];
     return r;
   }
   m = new RegExp('^(\\d+)$').exec(trimmed);

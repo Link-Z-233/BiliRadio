@@ -32,7 +32,7 @@ export struct CoverThumb {
     } else {
       Column() {
         Text('♪')
-          .fontSize(16)
+          .fontSize(Constants.TOKEN_FONT_TITLE)
           .fontColor($r('app.color.text_secondary'))
       }
       .width(this.thumbSize)

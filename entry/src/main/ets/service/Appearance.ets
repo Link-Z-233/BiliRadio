@@ -4,6 +4,7 @@ import { window } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { Constants } from './Constants';
+import { connectNum, connectStr } from './V2State';
 
 // 窗口层 API（setWindowBackgroundColor / SystemBarProperties）仅接受字符串色值，
 // 无法借 base/dark 资源目录自动匹配，需按当前生效外观手动映射，并在模式变化时重新设置。
@@ -76,7 +77,8 @@ export class Appearance {
       // 跟随系统：NOT_SET 下资源按系统当前模式解析，探测准确
       Appearance.refreshResolved(context, true);
     }
-    AppStorage.setOrCreate<string>(Constants.AS_ACCENT_COLOR, Appearance.readAccentColor(context));
+    connectStr(Constants.AS_ACCENT_COLOR, Constants.ACCENT_DEFAULT).value =
+      Appearance.readAccentColor(context);
     Appearance.syncAppStorage();
   }
 
@@ -171,7 +173,7 @@ export class Appearance {
     } catch (err) {
       hilog.warn(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'persist accentColor failed');
     }
-    AppStorage.setOrCreate<string>(Constants.AS_ACCENT_COLOR, color);
+    connectStr(Constants.AS_ACCENT_COLOR, Constants.ACCENT_DEFAULT).value = color;
   }
 
   private static readAccentColor(context: common.Context): string {
@@ -243,8 +245,9 @@ export class Appearance {
 
   // 同步到 AppStorage：设置页选中态等 UI 由此驱动
   private static syncAppStorage(): void {
-    AppStorage.setOrCreate<number>(Constants.AS_COLOR_MODE_SETTING, Appearance.userMode);
-    AppStorage.setOrCreate<number>(Constants.AS_COLOR_MODE_RESOLVED,
-      Appearance.isDark ? Appearance.MODE_DARK : Appearance.MODE_LIGHT);
+    connectNum(Constants.AS_COLOR_MODE_SETTING, Appearance.MODE_FOLLOW_SYSTEM).value =
+      Appearance.userMode;
+    connectNum(Constants.AS_COLOR_MODE_RESOLVED, Appearance.MODE_LIGHT).value =
+      Appearance.isDark ? Appearance.MODE_DARK : Appearance.MODE_LIGHT;
   }
 }

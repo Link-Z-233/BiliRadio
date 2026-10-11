@@ -183,17 +183,6 @@ export class PlayerController {
     this.emitUi();
   }
 
-  // US5：无图模式开关切换后对当前曲目重发系统播控元数据（force 绕过同曲目去重守卫），使封面显示即时更新
-  refreshMediaSessionMetadata(): void {
-    if (this.currentIndex < 0 || this.currentIndex >= this.playlist.length) {
-      return;
-    }
-    const item: BiliVideo = this.playlist[this.currentIndex];
-    const dataSaver: boolean = AppStore.getNumber(Constants.KEY_DATA_SAVER, 0) === 1;
-    this.mediaSession.updateTrack(item.bvid, item.title,
-      item.duration > 0 ? item.duration * 1000 : 0, dataSaver ? '' : item.cover, item.ownerName, true);
-  }
-
   async init(): Promise<void> {
     if (this.inited) {
       return;
@@ -346,9 +335,8 @@ export class PlayerController {
       if (this.duration > 0 && this.currentIndex >= 0 && this.currentIndex < this.playlist.length) {
         const item: BiliVideo = this.playlist[this.currentIndex];
         if (item.duration <= 0) {
-          const dataSaver: boolean = AppStore.getNumber(Constants.KEY_DATA_SAVER, 0) === 1;
           this.mediaSession.updateTrack(item.bvid, item.title, this.duration,
-            dataSaver ? '' : item.cover, item.ownerName, true);
+            item.cover, item.ownerName, true);
         }
       }
       if (this.playWhenReady) {
@@ -691,10 +679,8 @@ export class PlayerController {
       if (token !== this.loadToken) {
         return;
       }
-      // US5：无图模式下系统播控不携带封面（空封面由 MediaSession 略过 mediaImage 字段，不传旧值）
-      const dataSaver: boolean = AppStore.getNumber(Constants.KEY_DATA_SAVER, 0) === 1;
       this.mediaSession.updateTrack(item.bvid, item.title,
-        item.duration > 0 ? item.duration * 1000 : 0, dataSaver ? '' : item.cover, item.ownerName);
+        item.duration > 0 ? item.duration * 1000 : 0, item.cover, item.ownerName);
       AppStore.savePlaylistFile(this.playlist, this.currentIndex, 0);
     } catch (err) {
       if (token !== this.loadToken) {

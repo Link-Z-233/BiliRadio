@@ -50,7 +50,7 @@
 要编译、运行这个项目，你需要：
 
 - 一台电脑，装好 **DevEco Studio**（HarmonyOS NEXT 版本）
-- 一台 **HarmonyOS NEXT（最低兼容 6.1.1 / API 24）** 的手机，或 DevEco Studio 自带的模拟器
+- 一台 **HarmonyOS NEXT（最低要求 7.0 / API 26，不再支持更低版本）** 的手机，或 DevEco Studio 自带的模拟器
 - 手机和电脑连接（用数据线或无线调试）
 
 ## 怎么运行

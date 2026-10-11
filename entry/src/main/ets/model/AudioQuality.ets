@@ -11,10 +11,11 @@ export enum QualityTier {
 }
 
 // playurl DASH 响应中的单条音轨：id 为 B 站档位码（flac/dolby 解析时补 30251/30250，durl 兜底为 0）
+@ObservedV2
 export class AudioTrack {
-  id: number;
-  bandwidth: number;
-  urls: string[];
+  @Trace id: number;
+  @Trace bandwidth: number;
+  @Trace urls: string[];
 
   constructor(id: number, bandwidth: number, urls: string[]) {
     this.id = id;

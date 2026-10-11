@@ -1,5 +1,6 @@
 import { Logger, LogEntry } from '../service/Logger';
 import { Constants } from '../service/Constants';
+import { connectNum, connectStr, NumState, StrState } from '../service/V2State';
 import { picker, fileIo as fs } from '@kit.CoreFileKit';
 import { promptAction } from '@kit.ArkUI';
 
@@ -46,12 +47,12 @@ export function LogPageBuilder() {
 // US5 日志独立整页（FR-015）：大标题 + 操作按钮 + 满页列表，只读展示内存环形日志（最新在前）。
 // 纯文本条目：时间 / 类别标签（网络/错误）/ 摘要（host+path 或事件名）/ 结果码或错误摘要；
 // 页内清空仅清内存缓冲，不影响任何业务数据；底部为 miniPlayer 避让。
-@Component
+@ComponentV2
 struct LogPage {
-  @State entries: LogEntry[] = [];
-  @StorageProp('accentColor') accentColor: string = Constants.ACCENT_DEFAULT;
-  @StorageProp('miniPlayerVisible') miniPlayerVisible: boolean = false; // key 与 Constants.AS_MINI_PLAYER_VISIBLE 对应
-  @StorageProp('navBarHeight') navBarHeight: number = 0; // key 与 Constants.AS_NAV_BAR_HEIGHT 对应
+  @Local entries: LogEntry[] = [];
+  @Local accentColor: StrState =
+    connectStr(Constants.AS_ACCENT_COLOR, Constants.ACCENT_DEFAULT);
+  @Local navBarHeight: NumState = connectNum(Constants.AS_NAV_BAR_HEIGHT, 0);
   private source: LogDataSource = new LogDataSource();
   private navPathStack: NavPathStack = new NavPathStack();
 
@@ -127,12 +128,12 @@ struct LogPage {
         Row() {
           Row() {
             SymbolGlyph($r('sys.symbol.chevron_left'))
-              .fontSize(22)
+              .fontSize(Constants.TOKEN_FONT_TITLE_L)
               .fontColor([$r('app.color.text_primary')])
           }
           .width(36)
           .height(36)
-          .borderRadius(18)
+          .borderRadius(Constants.TOKEN_RADIUS_18)
           .backgroundColor($r('app.color.card_background'))
           .justifyContent(FlexAlign.Center)
           .onClick(() => {
@@ -140,19 +141,19 @@ struct LogPage {
           })
 
           Text('日志查询')
-            .fontSize(24)
+            .fontSize(Constants.TOKEN_FONT_24)
             .fontWeight(FontWeight.Bold)
             .fontColor($r('app.color.text_primary'))
             .layoutWeight(1)
-            .margin({ left: 10 })
+            .margin({ left: Constants.TOKEN_SPACE_10 })
 
           Button('导出')
             .height(32)
-            .padding({ left: 12, right: 12 })
+            .padding({ left: Constants.TOKEN_SPACE_M, right: Constants.TOKEN_SPACE_M })
             .backgroundColor($r('app.color.card_background'))
-            .fontColor(this.accentColor)
-            .borderRadius(16)
-            .fontSize(13)
+            .fontColor(this.accentColor.value)
+            .borderRadius(Constants.TOKEN_RADIUS_L)
+            .fontSize(Constants.TOKEN_FONT_BODY)
             .onClick(() => {
               this.exportLogs();
             })
@@ -160,12 +161,12 @@ struct LogPage {
           if (this.entries.length > 0) {
             Button('清空')
               .height(32)
-              .padding({ left: 12, right: 12 })
+              .padding({ left: Constants.TOKEN_SPACE_M, right: Constants.TOKEN_SPACE_M })
               .backgroundColor($r('app.color.card_background'))
               .fontColor($r('app.color.danger_red'))
-              .borderRadius(16)
-              .fontSize(13)
-              .margin({ left: 8 })
+              .borderRadius(Constants.TOKEN_RADIUS_L)
+              .fontSize(Constants.TOKEN_FONT_BODY)
+              .margin({ left: Constants.TOKEN_SPACE_S })
               .onClick(() => {
                 this.clearLogs();
               })
@@ -173,12 +174,12 @@ struct LogPage {
         }
         .width('100%')
         .alignItems(VerticalAlign.Center)
-        .padding({ left: 16, right: 16, top: 6, bottom: 10 })
+        .padding({ left: Constants.TOKEN_SPACE_L, right: Constants.TOKEN_SPACE_L, top: Constants.TOKEN_SPACE_6, bottom: Constants.TOKEN_SPACE_10 })
 
         if (this.entries.length === 0) {
           Column() {
             Text('暂无日志，播放或刷新订阅后会记录网络请求')
-              .fontSize(14)
+              .fontSize(Constants.TOKEN_FONT_BODY_M)
               .fontColor($r('app.color.text_secondary'))
               .margin({ top: 80 })
           }
@@ -192,38 +193,38 @@ struct LogPage {
                 Column() {
                   Row() {
                     Text(this.formatTime(item.time))
-                      .fontSize(11)
+                      .fontSize(Constants.TOKEN_FONT_AUX)
                       .fontColor($r('app.color.text_secondary'))
                     Text(this.categoryLabel(item.category))
-                      .fontSize(10)
+                      .fontSize(Constants.TOKEN_FONT_CAPTION)
                       .fontColor(item.category === 'error'
                         ? $r('app.color.danger_red') : $r('app.color.text_secondary'))
-                      .padding({ left: 6, right: 6 })
+                      .padding({ left: Constants.TOKEN_SPACE_6, right: Constants.TOKEN_SPACE_6 })
                       .borderRadius(4)
                       .backgroundColor($r('app.color.btn_glass'))
-                      .margin({ left: 8 })
+                      .margin({ left: Constants.TOKEN_SPACE_S })
                     Blank()
                   }
                   .width('100%')
 
                   Text(item.summary)
-                    .fontSize(13)
+                    .fontSize(Constants.TOKEN_FONT_BODY)
                     .fontColor($r('app.color.text_primary'))
                     .maxLines(1)
                     .textOverflow({ overflow: TextOverflow.Ellipsis })
                     .margin({ top: 3 })
 
                   Text(item.result)
-                    .fontSize(11)
+                    .fontSize(Constants.TOKEN_FONT_AUX)
                     .fontColor(item.category === 'error'
                       ? $r('app.color.danger_red') : $r('app.color.text_secondary'))
                     .maxLines(2)
                     .textOverflow({ overflow: TextOverflow.Ellipsis })
-                    .margin({ top: 2 })
+                    .margin({ top: Constants.TOKEN_SPACE_XXS })
                 }
                 .alignItems(HorizontalAlign.Start)
                 .width('100%')
-                .padding({ left: 16, right: 16, top: 8, bottom: 8 })
+                .padding({ left: Constants.TOKEN_SPACE_L, right: Constants.TOKEN_SPACE_L, top: Constants.TOKEN_SPACE_S, bottom: Constants.TOKEN_SPACE_S })
               }
             }, (item: LogEntry) => `${item.time}_${item.summary}`)
           }
@@ -234,7 +235,7 @@ struct LogPage {
       .width('100%')
       .height('100%')
       .backgroundColor($r('app.color.page_background'))
-      .padding({ bottom: this.navBarHeight })
+      .padding({ bottom: this.navBarHeight.value })
     }
     .hideTitleBar(true)
     .onReady((ctx: NavDestinationContext) => {

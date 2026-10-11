@@ -3,7 +3,7 @@ import { BiliVideo } from '../model/BiliVideo';
 
 
 import { Constants } from '../service/Constants';
-import { AppStore } from '../service/AppStore';
+import { connectBool, connectStr, BoolState, StrState } from '../service/V2State';
 import { CoverThumb } from './CoverThumb';
 import { EdgeHint } from './EdgeHint';
 import { promptAction } from '@kit.ArkUI';
@@ -83,26 +83,24 @@ function diffRemovedIndices(old: BiliVideo[], next: BiliVideo[]): number[] | und
 }
 
 // 播放队列抽屉：单行图标头部（清除已播/多选/清空）、左滑单条删除、多选批量移除
-@Component
+@ComponentV2
 export struct QueueSheet {
-  @State items: BiliVideo[] = [];
-  @State currentIndex: number = -1;
-  @State currentItemEnded: boolean = false;
-  @State playlistVersion: number = -1;
-  @StorageLink('playlistSelectMode') selectMode: boolean = false; // key 与 Constants.AS_PLAYLIST_SELECT_MODE 对应
-  @State selectedBvids: string[] = [];
-  // US5：无图模式下条目封面置空（走 CoverThumb 占位），读取链路对齐 MiniPlayer
-  @State dataSaverOn: boolean = false;
+  @Local items: BiliVideo[] = [];
+  @Local currentIndex: number = -1;
+  @Local currentItemEnded: boolean = false;
+  @Local playlistVersion: number = -1;
+  @Local selectMode: BoolState = connectBool(Constants.AS_PLAYLIST_SELECT_MODE, false);
+  @Local selectedBvids: string[] = [];
 
-  @State pageHeight: number = 0;
-  @State headerHeight: number = 72;
-  @State queueTopHint: string = '';
-  @State queueBottomHint: string = '';
+  @Local pageHeight: number = 0;
+  @Local headerHeight: number = 72;
+  @Local queueTopHint: string = '';
+  @Local queueBottomHint: string = '';
 
-  @StorageLink('showQueueSheet') showQueueSheet: boolean = false;
-  @StorageProp('isWideScreen') isWideScreen: boolean = false;
   // 主题色（T016）：强调色运行时跟随外观设置（Appearance 写入 AppStorage），衍生色一律经 hexWithAlpha
-  @StorageProp('accentColor') accentColor: string = Constants.ACCENT_DEFAULT;
+  @Local accentColor: StrState =
+    connectStr(Constants.AS_ACCENT_COLOR, Constants.ACCENT_DEFAULT);
+  @Local isWideScreen: BoolState = connectBool(Constants.AS_IS_WIDE_SCREEN, false);
   private controller: PlayerController = PlayerController.getInstance();
 
   private textPrimary(): Resource {
@@ -152,7 +150,7 @@ export struct QueueSheet {
         }
         this.items = next;
       }
-      if (this.selectMode) {
+      if (this.selectMode.value) {
         const valid: string[] = [];
         for (let i = 0; i < this.selectedBvids.length; i++) {
           if (this.items.findIndex((v: BiliVideo): boolean => v.bvid === this.selectedBvids[i]) >= 0) {
@@ -161,13 +159,12 @@ export struct QueueSheet {
         }
         this.selectedBvids = valid;
         if (this.items.length === 0) {
-          this.selectMode = false;
+          this.selectMode.value = false;
         }
       }
     }
     this.currentIndex = c.currentIndex;
     this.currentItemEnded = c.currentItemEnded;
-    this.dataSaverOn = AppStore.getNumber(Constants.KEY_DATA_SAVER, 0) === 1;
   }
 
   private toggleSelect(bvid: string): void {
@@ -218,7 +215,7 @@ export struct QueueSheet {
   }
 
   private exitSelectMode(): void {
-    this.selectMode = false;
+    this.selectMode.value = false;
     this.selectedBvids = [];
   }
 
@@ -326,8 +323,8 @@ export struct QueueSheet {
       .height('100%')
       .padding({ left: 18, right: 18 })
       .backgroundColor($r('app.color.danger_red'))
-      .fontColor(Color.White)
-      .fontSize(13)
+      .fontColor($r('app.color.fg_on_dark'))
+      .fontSize(Constants.TOKEN_FONT_BODY)
       .borderRadius(0)
       .onClick(() => {
         this.removeQueueItem(item);
@@ -338,7 +335,7 @@ export struct QueueSheet {
     Stack({ alignContent: Alignment.Top }) {
       // 单行头部（US1）：标题 + 清除已播/多选/清空三图标；多选态整行替换为多选操作行
       Column() {
-        if (!this.selectMode) {
+        if (!this.selectMode.value) {
           Row() {
             Text(`播放队列 (${this.items.length})`)
               .fontSize(17)
@@ -349,7 +346,7 @@ export struct QueueSheet {
             if (this.items.length > 0) {
               Row() {
                 SymbolGlyph($r('sys.symbol.wand_and_stars'))
-                  .fontSize(18)
+                  .fontSize(Constants.TOKEN_FONT_18)
                   .fontColor([$r('app.color.danger_red')])
               }
               .width(36)
@@ -358,14 +355,14 @@ export struct QueueSheet {
               .backgroundColor($r('app.color.btn_glass'))
               .backdropBlur(20)
               .border({ width: 1, color: $r('app.color.btn_border') })
-              .borderRadius(18)
+              .borderRadius(Constants.TOKEN_RADIUS_18)
               .onClick(() => {
                 this.confirmClearPlayed();
               })
 
               Row() {
                 SymbolGlyph($r('sys.symbol.list_checkmark'))
-                  .fontSize(18)
+                  .fontSize(Constants.TOKEN_FONT_18)
                   .fontColor([$r('app.color.text_primary')])
               }
               .width(36)
@@ -374,16 +371,16 @@ export struct QueueSheet {
               .backgroundColor($r('app.color.btn_glass'))
               .backdropBlur(20)
               .border({ width: 1, color: $r('app.color.btn_border') })
-              .borderRadius(18)
-              .margin({ left: 8 })
+              .borderRadius(Constants.TOKEN_RADIUS_18)
+              .margin({ left: Constants.TOKEN_SPACE_S })
               .onClick(() => {
-                this.selectMode = true;
+                this.selectMode.value = true;
                 this.selectedBvids = [];
               })
 
               Row() {
                 SymbolGlyph($r('sys.symbol.trash'))
-                  .fontSize(18)
+                  .fontSize(Constants.TOKEN_FONT_18)
                   .fontColor([$r('app.color.danger_red')])
               }
               .width(36)
@@ -392,8 +389,8 @@ export struct QueueSheet {
               .backgroundColor($r('app.color.btn_glass'))
               .backdropBlur(20)
               .border({ width: 1, color: $r('app.color.btn_border') })
-              .borderRadius(18)
-              .margin({ left: 8 })
+              .borderRadius(Constants.TOKEN_RADIUS_18)
+              .margin({ left: Constants.TOKEN_SPACE_S })
               .onClick(() => {
                 this.clearQueue();
               })
@@ -405,8 +402,8 @@ export struct QueueSheet {
           Row() {
             Row() {
               SymbolGlyph($r('sys.symbol.checkmark_circle_on_circle'))
-                .fontSize(18)
-                .fontColor([this.isAllSelected() ? this.accentColor : $r('app.color.text_primary')])
+                .fontSize(Constants.TOKEN_FONT_18)
+                .fontColor([this.isAllSelected() ? this.accentColor.value : $r('app.color.text_primary')])
             }
             .width(36)
             .height(36)
@@ -414,29 +411,29 @@ export struct QueueSheet {
             .backgroundColor($r('app.color.btn_glass'))
             .backdropBlur(20)
             .border({ width: 1, color: $r('app.color.btn_border') })
-            .borderRadius(18)
+            .borderRadius(Constants.TOKEN_RADIUS_18)
             .onClick(() => {
               this.toggleSelectAll();
             })
 
             Blank()
 
-            Row({ space: 4 }) {
+            Row({ space: Constants.TOKEN_SPACE_XS }) {
               SymbolGlyph($r('sys.symbol.trash_fill'))
-                .fontSize(18)
+                .fontSize(Constants.TOKEN_FONT_18)
                 .fontColor([$r('app.color.danger_red')])
               Text(`${this.selectedBvids.length}`)
-                .fontSize(12)
+                .fontSize(Constants.TOKEN_FONT_BODY_S)
                 .fontColor($r('app.color.danger_red'))
             }
             .height(36)
-            .padding({ left: 10, right: 10 })
+            .padding({ left: Constants.TOKEN_SPACE_10, right: Constants.TOKEN_SPACE_10 })
             .justifyContent(FlexAlign.Center)
             .alignItems(VerticalAlign.Center)
             .backgroundColor($r('app.color.btn_glass'))
             .backdropBlur(20)
             .border({ width: 1, color: $r('app.color.btn_border') })
-            .borderRadius(18)
+            .borderRadius(Constants.TOKEN_RADIUS_18)
             .opacity(this.selectedBvids.length > 0 ? 1 : 0.4)
             .onClick(() => {
               this.removeSelected();
@@ -444,7 +441,7 @@ export struct QueueSheet {
 
             Row() {
               SymbolGlyph($r('sys.symbol.chevron_left'))
-                .fontSize(18)
+                .fontSize(Constants.TOKEN_FONT_18)
                 .fontColor([$r('app.color.text_primary')])
             }
             .width(36)
@@ -453,8 +450,8 @@ export struct QueueSheet {
             .backgroundColor($r('app.color.btn_glass'))
             .backdropBlur(20)
             .border({ width: 1, color: $r('app.color.btn_border') })
-            .borderRadius(18)
-            .margin({ left: 8 })
+            .borderRadius(Constants.TOKEN_RADIUS_18)
+            .margin({ left: Constants.TOKEN_SPACE_S })
             .onClick(() => {
               this.exitSelectMode();
             })
@@ -463,7 +460,7 @@ export struct QueueSheet {
         }
       }
       .width('100%')
-      .padding({ left: 16, right: 16, top: 20, bottom: 8 })
+      .padding({ left: Constants.TOKEN_SPACE_L, right: Constants.TOKEN_SPACE_L, top: Constants.TOKEN_SPACE_20, bottom: Constants.TOKEN_SPACE_S })
       .zIndex(1)
       .onAreaChange((oldArea: Area, newArea: Area) => {
         this.headerHeight = newArea.height as number;
@@ -472,13 +469,13 @@ export struct QueueSheet {
       if (this.items.length === 0) {
         Column() {
           Text('队列为空')
-            .fontSize(16)
+            .fontSize(Constants.TOKEN_FONT_TITLE)
             .fontColor(this.textSecondary())
             .margin({ top: 60 })
           Text(Constants.QUEUE_EMPTY_HINT)
-            .fontSize(13)
+            .fontSize(Constants.TOKEN_FONT_BODY)
             .fontColor(this.textDisabled())
-            .margin({ top: 8 })
+            .margin({ top: Constants.TOKEN_SPACE_S })
         }
         .width('100%')
         .height('100%')
@@ -493,13 +490,13 @@ export struct QueueSheet {
             LazyForEach(this.listSource, (item: BiliVideo, index: number) => {
               ListItem() {
                 Row() {
-                  if (this.selectMode) {
+                  if (this.selectMode.value) {
                     Checkbox()
                       .select(this.selectedBvids.indexOf(item.bvid) >= 0)
-                      .selectedColor(this.accentColor)
+                      .selectedColor(this.accentColor.value)
                       .width(20)
                       .height(20)
-                      .margin({ right: 8 })
+                      .margin({ right: Constants.TOKEN_SPACE_S })
                       .onChange((value: boolean) => {
                         const inList: boolean = this.selectedBvids.indexOf(item.bvid) >= 0;
                         if (value !== inList) {
@@ -508,13 +505,13 @@ export struct QueueSheet {
                       })
                   }
 
-                  CoverThumb({ cover: this.dataSaverOn ? '' : item.cover, highlight: index === this.currentIndex })
+                  CoverThumb({ cover: item.cover, highlight: index === this.currentIndex })
 
                   Column() {
                     Row() {
                       Text(item.title)
-                        .fontSize(14)
-                        .fontColor(index === this.currentIndex ? this.accentColor : this.textPrimary())
+                        .fontSize(Constants.TOKEN_FONT_BODY_M)
+                        .fontColor(index === this.currentIndex ? this.accentColor.value : this.textPrimary())
                         .maxLines(1)
                         .textOverflow({ overflow: TextOverflow.Ellipsis })
                         .layoutWeight(1)
@@ -523,23 +520,23 @@ export struct QueueSheet {
 
                     // FR-104：duration 未知（0）不渲染 00:00 占位，只显示 UP 主名
                     Text(item.duration > 0 ? `${item.ownerName} · ${this.formatTime(item.duration * 1000)}` : item.ownerName)
-                      .fontSize(11)
+                      .fontSize(Constants.TOKEN_FONT_AUX)
                       .fontColor(this.textSecondary())
                       .maxLines(1)
                       .textOverflow({ overflow: TextOverflow.Ellipsis })
                       .width('100%')
-                      .margin({ top: 4 })
+                      .margin({ top: Constants.TOKEN_SPACE_XS })
                   }
                   .alignItems(HorizontalAlign.Start)
                   .layoutWeight(1)
-                  .margin({ left: 10 })
+                  .margin({ left: Constants.TOKEN_SPACE_10 })
                 }
                 .width('100%')
-                .padding({ left: 16, right: 16, top: 12, bottom: 12 })
+                .padding({ left: Constants.TOKEN_SPACE_L, right: Constants.TOKEN_SPACE_L, top: Constants.TOKEN_SPACE_M, bottom: Constants.TOKEN_SPACE_M })
                 .backgroundColor(Color.Transparent)
-                .borderRadius(12)
+                .borderRadius(Constants.TOKEN_RADIUS_M)
                 .onClick(() => {
-                  if (this.selectMode) {
+                  if (this.selectMode.value) {
                     this.toggleSelect(item.bvid);
                   } else {
                     // 仅切换歌曲，不跳转播放页
@@ -550,15 +547,15 @@ export struct QueueSheet {
                   GestureGroup(GestureMode.Sequence,
                     LongPressGesture()
                       .onAction(() => {
-                        if (!this.selectMode) {
-                          this.selectMode = true;
+                        if (!this.selectMode.value) {
+                          this.selectMode.value = true;
                           this.selectedBvids = [item.bvid];
                           this.swipeStartIndex = index;
                         }
                       }),
                     PanGesture({ fingers: 1, direction: PanDirection.Vertical })
                       .onActionUpdate((event: GestureEvent) => {
-                        if (!this.selectMode || this.isWideScreen) {
+                        if (!this.selectMode.value || this.isWideScreen.value) {
                           return;
                         }
                         const target: number = this.swipeStartIndex +

@@ -10,6 +10,7 @@ import { Season } from '../model/Season';
 import { FavFolder } from '../model/FavFolder';
 import { PlayerController, EnqueueResult } from '../service/PlayerController';
 import { Constants } from '../service/Constants';
+import { connectStr, StrState } from '../service/V2State';
 import { CoverThumb } from '../component/CoverThumb';
 import {
   RecognizeResult,
@@ -28,34 +29,35 @@ export class AddSheetBackHandler {
   requestBack: () => boolean = (): boolean => false;
 }
 
-@Component
+@ComponentV2
 export struct AddSubscriptionSheet {
-  @StorageProp('accentColor') accentColor: string = Constants.ACCENT_DEFAULT;
-  @State mainInput: string = '';
-  @State mainBusy: boolean = false;
-  @State mainMsg: string = '';
-  @State uidInput: string = '';
-  @State uidBusy: boolean = false;
-  @State upInfo: UpInfo | null = null;
-  @State upName: string = '';
-  @State upFace: string = '';
-  @State seasons: Season[] = [];
-  @State series: Season[] = [];
-  @State isLogged: boolean = false;
-  @State folders: FavFolder[] = [];
-  @State foldersBusy: boolean = false;
-  @State folderView: boolean = false;
+  @Local accentColor: StrState =
+    connectStr(Constants.AS_ACCENT_COLOR, Constants.ACCENT_DEFAULT);
+  @Local mainInput: string = '';
+  @Local mainBusy: boolean = false;
+  @Local mainMsg: string = '';
+  @Local uidInput: string = '';
+  @Local uidBusy: boolean = false;
+  @Local upInfo: UpInfo | null = null;
+  @Local upName: string = '';
+  @Local upFace: string = '';
+  @Local seasons: Season[] = [];
+  @Local series: Season[] = [];
+  @Local isLogged: boolean = false;
+  @Local folders: FavFolder[] = [];
+  @Local foldersBusy: boolean = false;
+  @Local folderView: boolean = false;
   // UP 合集/系列二级视图（对齐 folderView 模式；builder 方法名为 upDetailListView，避免与同名状态冲突）
-  @State upDetailView: boolean = false;
+  @Local upDetailView: boolean = false;
   // seasons/series 两个请求是否已 settle（then/catch 均置 true），用于二级视图区分加载态与空态
-  @State seasonsLoaded: boolean = false;
-  @State seriesLoaded: boolean = false;
-  onSubscribed: (sub: Subscription) => void = (sub: Subscription) => {
+  @Local seasonsLoaded: boolean = false;
+  @Local seriesLoaded: boolean = false;
+  @Param onSubscribed: (sub: Subscription) => void = (sub: Subscription) => {
   };
-  onDismiss: () => void = () => {
+  @Param onDismiss: () => void = () => {
   };
   // 系统返回拦截句柄（由宿主 HomePage 持有并传入，onWillDismiss PRESS_BACK 时调用）
-  backHandler: AddSheetBackHandler = new AddSheetBackHandler();
+  @Param backHandler: AddSheetBackHandler = new AddSheetBackHandler();
   private controller: PlayerController = PlayerController.getInstance();
 
   aboutToAppear(): void {
@@ -422,31 +424,31 @@ export struct AddSubscriptionSheet {
   private secondaryHeader(title: string) {
     Row() {
       SymbolGlyph($r('sys.symbol.chevron_left'))
-        .fontSize(20)
+        .fontSize(Constants.TOKEN_FONT_20)
         .fontColor([$r('app.color.text_primary')])
-        .padding(10)
+        .padding(Constants.TOKEN_SPACE_10)
         .margin({ left: -10 })
-        .borderRadius(20)
+        .borderRadius(Constants.TOKEN_RADIUS_XL)
         .onClick(() => {
           this.backToMainView();
         })
       Text(title)
-        .fontSize(16)
+        .fontSize(Constants.TOKEN_FONT_TITLE)
         .fontWeight(FontWeight.Medium)
         .fontColor($r('app.color.text_primary'))
         .margin({ left: -6 })
     }
     .width('100%')
-    .padding({ top: 8, bottom: 12 })
+    .padding({ top: Constants.TOKEN_SPACE_S, bottom: Constants.TOKEN_SPACE_M })
   }
 
   @Builder
   private sectionTitle(text: string) {
     Text(text)
-      .fontSize(13)
+      .fontSize(Constants.TOKEN_FONT_BODY)
       .fontWeight(FontWeight.Medium)
       .fontColor($r('app.color.text_secondary'))
-      .margin({ top: 18, bottom: 8 })
+      .margin({ top: 18, bottom: Constants.TOKEN_SPACE_S })
   }
 
   @Builder
@@ -456,26 +458,26 @@ export struct AddSubscriptionSheet {
         // UP 头像 URL 拼缩略后缀会 404，raw=true 直接加载原图
         CoverThumb({ cover: this.upFace, thumbSize: 40, radius: 20, raw: true })
         Text(this.upName)
-          .fontSize(15)
+          .fontSize(Constants.TOKEN_FONT_BODY_L)
           .fontWeight(FontWeight.Medium)
           .fontColor($r('app.color.text_primary'))
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
           .layoutWeight(1)
-          .margin({ left: 10, right: 8 })
+          .margin({ left: Constants.TOKEN_SPACE_10, right: Constants.TOKEN_SPACE_S })
         Text('订阅')
-          .fontSize(13)
+          .fontSize(Constants.TOKEN_FONT_BODY)
           .fontWeight(FontWeight.Medium)
-          .fontColor(this.accentColor)
-          .padding({ left: 12, right: 12, top: 6, bottom: 6 })
-          .borderRadius(14)
+          .fontColor(this.accentColor.value)
+          .padding({ left: Constants.TOKEN_SPACE_M, right: Constants.TOKEN_SPACE_M, top: Constants.TOKEN_SPACE_6, bottom: Constants.TOKEN_SPACE_6 })
+          .borderRadius(Constants.TOKEN_RADIUS_14)
           .backgroundColor($r('app.color.card_background'))
           .onClick(() => {
             this.subscribeUp();
           })
       }
       .width('100%')
-      .margin({ top: 12 })
+      .margin({ top: Constants.TOKEN_SPACE_M })
     }
   }
 
@@ -484,11 +486,11 @@ export struct AddSubscriptionSheet {
     this.sectionTitle('添加订阅')
     Row() {
       TextInput({ placeholder: '粘贴 B 站链接或 ID', text: this.mainInput })
-        .fontSize(14)
+        .fontSize(Constants.TOKEN_FONT_BODY_M)
         .fontColor($r('app.color.text_primary'))
         .placeholderColor($r('app.color.placeholder_color'))
         .backgroundColor($r('app.color.card_background'))
-        .borderRadius(12)
+        .borderRadius(Constants.TOKEN_RADIUS_M)
         .layoutWeight(1)
         .enterKeyType(EnterKeyType.Search)
         .onSubmit(() => {
@@ -501,15 +503,15 @@ export struct AddSubscriptionSheet {
         LoadingProgress()
           .width(22)
           .height(22)
-          .color(this.accentColor)
-          .margin({ left: 10 })
+          .color(this.accentColor.value)
+          .margin({ left: Constants.TOKEN_SPACE_10 })
       } else {
         Text('查询')
-          .fontSize(14)
+          .fontSize(Constants.TOKEN_FONT_BODY_M)
           .fontWeight(FontWeight.Medium)
-          .fontColor(this.accentColor)
-          .padding({ left: 14, right: 14, top: 8, bottom: 8 })
-          .margin({ left: 10 })
+          .fontColor(this.accentColor.value)
+          .padding({ left: Constants.TOKEN_SPACE_14, right: Constants.TOKEN_SPACE_14, top: Constants.TOKEN_SPACE_S, bottom: Constants.TOKEN_SPACE_S })
+          .margin({ left: Constants.TOKEN_SPACE_10 })
           .onClick(() => {
             this.handleMainInput();
           })
@@ -519,14 +521,14 @@ export struct AddSubscriptionSheet {
 
     // 能力枚举放说明行而非占位符：Text 可自动换行，大字模式缩放不溢出
     Text('支持分享文案、短链、BV 号、av 号、UP 主 UID')
-      .fontSize(12)
+      .fontSize(Constants.TOKEN_FONT_BODY_S)
       .fontColor($r('app.color.text_secondary'))
-      .margin({ top: 6 })
+      .margin({ top: Constants.TOKEN_SPACE_6 })
 
     Text('单视频将加入播放列表，不打断当前播放')
-      .fontSize(12)
+      .fontSize(Constants.TOKEN_FONT_BODY_S)
       .fontColor($r('app.color.text_secondary'))
-      .margin({ top: 4 })
+      .margin({ top: Constants.TOKEN_SPACE_XS })
 
     if (this.upInfo !== null) {
       // 查询结果区域整体挂出现/消失过渡（透明度+位移入位），配合 lookupUid 内 animateTo
@@ -536,15 +538,15 @@ export struct AddSubscriptionSheet {
         // 入口行：样式对齐「我的收藏夹」入口行，点击进入 UP 合集/系列二级视图（与 folderView 互斥）
         Row() {
           Text(`合集与系列 (${this.seasons.length + this.series.length})`)
-            .fontSize(14)
+            .fontSize(Constants.TOKEN_FONT_BODY_M)
             .fontColor($r('app.color.text_primary'))
             .layoutWeight(1)
           SymbolGlyph($r('sys.symbol.chevron_right'))
-            .fontSize(14)
+            .fontSize(Constants.TOKEN_FONT_BODY_M)
             .fontColor([$r('app.color.text_secondary')])
         }
         .width('100%')
-        .padding({ top: 10, bottom: 10 })
+        .padding({ top: Constants.TOKEN_SPACE_10, bottom: Constants.TOKEN_SPACE_10 })
         .onClick(() => {
           this.enterUpDetailView();
         })
@@ -558,20 +560,20 @@ export struct AddSubscriptionSheet {
     this.sectionTitle('我的收藏夹')
     if (!this.isLogged) {
       Text('登录 B 站账号后可订阅收藏夹')
-        .fontSize(13)
+        .fontSize(Constants.TOKEN_FONT_BODY)
         .fontColor($r('app.color.text_secondary'))
     } else {
       Row() {
         Text('我的收藏夹')
-          .fontSize(14)
+          .fontSize(Constants.TOKEN_FONT_BODY_M)
           .fontColor($r('app.color.text_primary'))
           .layoutWeight(1)
         SymbolGlyph($r('sys.symbol.chevron_right'))
-          .fontSize(14)
+          .fontSize(Constants.TOKEN_FONT_BODY_M)
           .fontColor([$r('app.color.text_secondary')])
       }
       .width('100%')
-      .padding({ top: 10, bottom: 10 })
+      .padding({ top: Constants.TOKEN_SPACE_10, bottom: Constants.TOKEN_SPACE_10 })
       .onClick(() => {
         this.enterFolderView();
       })
@@ -586,8 +588,8 @@ export struct AddSubscriptionSheet {
       LoadingProgress()
         .width(22)
         .height(22)
-        .color(this.accentColor)
-        .margin({ top: 8 })
+        .color(this.accentColor.value)
+        .margin({ top: Constants.TOKEN_SPACE_S })
     } else {
       ForEach(this.folders, (f: FavFolder) => {
         Row() {
@@ -595,31 +597,31 @@ export struct AddSubscriptionSheet {
           CoverThumb({ thumbSize: 40, radius: 8 })
           Column() {
             Text(f.title)
-              .fontSize(14)
+              .fontSize(Constants.TOKEN_FONT_BODY_M)
               .fontColor($r('app.color.text_primary'))
               .maxLines(1)
               .textOverflow({ overflow: TextOverflow.Ellipsis })
             Text(`${f.count}条`)
-              .fontSize(12)
+              .fontSize(Constants.TOKEN_FONT_BODY_S)
               .fontColor($r('app.color.text_disabled'))
-              .margin({ top: 2 })
+              .margin({ top: Constants.TOKEN_SPACE_XXS })
           }
           .alignItems(HorizontalAlign.Start)
           .layoutWeight(1)
-          .margin({ left: 10, right: 8 })
+          .margin({ left: Constants.TOKEN_SPACE_10, right: Constants.TOKEN_SPACE_S })
           Text('订阅')
-            .fontSize(13)
+            .fontSize(Constants.TOKEN_FONT_BODY)
             .fontWeight(FontWeight.Medium)
-            .fontColor(this.accentColor)
-            .padding({ left: 12, right: 12, top: 6, bottom: 6 })
-            .borderRadius(14)
+            .fontColor(this.accentColor.value)
+            .padding({ left: Constants.TOKEN_SPACE_M, right: Constants.TOKEN_SPACE_M, top: Constants.TOKEN_SPACE_6, bottom: Constants.TOKEN_SPACE_6 })
+            .borderRadius(Constants.TOKEN_RADIUS_14)
             .backgroundColor($r('app.color.card_background'))
             .onClick(() => {
               this.subscribeFolder(f);
             })
         }
         .width('100%')
-        .padding({ top: 8, bottom: 8 })
+        .padding({ top: Constants.TOKEN_SPACE_S, bottom: Constants.TOKEN_SPACE_S })
       }, (f: FavFolder) => `fav_${f.mediaId}`)
     }
   }
@@ -632,15 +634,15 @@ export struct AddSubscriptionSheet {
     if (this.seasons.length + this.series.length === 0) {
       if (this.seasonsLoaded && this.seriesLoaded) {
         Text('该 UP 主暂无合集与系列')
-          .fontSize(13)
+          .fontSize(Constants.TOKEN_FONT_BODY)
           .fontColor($r('app.color.text_secondary'))
-          .margin({ top: 8 })
+          .margin({ top: Constants.TOKEN_SPACE_S })
       } else {
         LoadingProgress()
           .width(22)
           .height(22)
-          .color(this.accentColor)
-          .margin({ top: 8 })
+          .color(this.accentColor.value)
+          .margin({ top: Constants.TOKEN_SPACE_S })
       }
     } else {
       if (this.seasons.length > 0) {
@@ -652,31 +654,31 @@ export struct AddSubscriptionSheet {
           CoverThumb({ cover: s.cover, thumbSize: 40, radius: 8, raw: true })
           Column() {
             Text(s.title)
-              .fontSize(14)
+              .fontSize(Constants.TOKEN_FONT_BODY_M)
               .fontColor($r('app.color.text_primary'))
               .maxLines(1)
               .textOverflow({ overflow: TextOverflow.Ellipsis })
             Text(`合集 · ${s.count}集`)
-              .fontSize(12)
+              .fontSize(Constants.TOKEN_FONT_BODY_S)
               .fontColor($r('app.color.text_disabled'))
-              .margin({ top: 2 })
+              .margin({ top: Constants.TOKEN_SPACE_XXS })
           }
           .alignItems(HorizontalAlign.Start)
           .layoutWeight(1)
-          .margin({ left: 10, right: 8 })
+          .margin({ left: Constants.TOKEN_SPACE_10, right: Constants.TOKEN_SPACE_S })
           Text('订阅')
-            .fontSize(13)
+            .fontSize(Constants.TOKEN_FONT_BODY)
             .fontWeight(FontWeight.Medium)
-            .fontColor(this.accentColor)
-            .padding({ left: 12, right: 12, top: 6, bottom: 6 })
-            .borderRadius(14)
+            .fontColor(this.accentColor.value)
+            .padding({ left: Constants.TOKEN_SPACE_M, right: Constants.TOKEN_SPACE_M, top: Constants.TOKEN_SPACE_6, bottom: Constants.TOKEN_SPACE_6 })
+            .borderRadius(Constants.TOKEN_RADIUS_14)
             .backgroundColor($r('app.color.card_background'))
             .onClick(() => {
               this.subscribeSeason(s);
             })
         }
         .width('100%')
-        .padding({ top: 8, bottom: 8 })
+        .padding({ top: Constants.TOKEN_SPACE_S, bottom: Constants.TOKEN_SPACE_S })
       }, (s: Season) => `season_${s.seasonId}`)
 
       if (this.series.length > 0) {
@@ -688,31 +690,31 @@ export struct AddSubscriptionSheet {
           CoverThumb({ cover: s.cover, thumbSize: 40, radius: 8, raw: true })
           Column() {
             Text(s.title)
-              .fontSize(14)
+              .fontSize(Constants.TOKEN_FONT_BODY_M)
               .fontColor($r('app.color.text_primary'))
               .maxLines(1)
               .textOverflow({ overflow: TextOverflow.Ellipsis })
             Text(`系列 · ${s.count}集`)
-              .fontSize(12)
+              .fontSize(Constants.TOKEN_FONT_BODY_S)
               .fontColor($r('app.color.text_disabled'))
-              .margin({ top: 2 })
+              .margin({ top: Constants.TOKEN_SPACE_XXS })
           }
           .alignItems(HorizontalAlign.Start)
           .layoutWeight(1)
-          .margin({ left: 10, right: 8 })
+          .margin({ left: Constants.TOKEN_SPACE_10, right: Constants.TOKEN_SPACE_S })
           Text('订阅')
-            .fontSize(13)
+            .fontSize(Constants.TOKEN_FONT_BODY)
             .fontWeight(FontWeight.Medium)
-            .fontColor(this.accentColor)
-            .padding({ left: 12, right: 12, top: 6, bottom: 6 })
-            .borderRadius(14)
+            .fontColor(this.accentColor.value)
+            .padding({ left: Constants.TOKEN_SPACE_M, right: Constants.TOKEN_SPACE_M, top: Constants.TOKEN_SPACE_6, bottom: Constants.TOKEN_SPACE_6 })
+            .borderRadius(Constants.TOKEN_RADIUS_14)
             .backgroundColor($r('app.color.card_background'))
             .onClick(() => {
               this.subscribeSeries(s);
             })
         }
         .width('100%')
-        .padding({ top: 8, bottom: 8 })
+        .padding({ top: Constants.TOKEN_SPACE_S, bottom: Constants.TOKEN_SPACE_S })
       }, (s: Season) => `series_${s.seasonId}`)
     }
   }
@@ -747,7 +749,7 @@ export struct AddSubscriptionSheet {
         }
       }
       .alignItems(HorizontalAlign.Start)
-      .padding({ left: 16, right: 16, top: 8, bottom: 24 })
+      .padding({ left: Constants.TOKEN_SPACE_L, right: Constants.TOKEN_SPACE_L, top: Constants.TOKEN_SPACE_S, bottom: Constants.TOKEN_SPACE_XL })
     }
     .width('100%')
     .height('100%')

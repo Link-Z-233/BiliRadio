@@ -24,7 +24,9 @@
 - **pages/** — `Index.ets`（唯一 `@Entry`、单页壳）、`HomePage`、`PlayerOverlay`、`SourcePage`、`SettingsPage`、`AddSubscriptionSheet`
 - **service/** — 业务单例：`PlayerController`（播控）、`BiliService`（B 站 API）、`BiliSession`（登录）、`MediaSession`（锁屏/控中心）、`AudioPlayer`、`LinkResolver`、`WbiSigner`、`SleepTimerController`、`AppStore`（持久化）、`SecureStore`、`SubscriptionStore`、`Constants`
 - **model/** — 数据类：`BiliVideo`、`AudioQuality`（音质档位）、`PlayHistoryItem`、`Subscription`、`Season`、`FavFolder`
-- **component/** — 共用 UI：`MiniPlayer`、`QueueDrawer`、`QueueSheet`、`CoverThumb`、`LogSheet`
+- **component/** — 共用 UI：`MiniPlayer`、`QueueDrawer`、`QueueSheet`、`CoverThumb`、`SettingsRow`、`SettingsGroup`、`EdgeHint`
+
+- **模块边界契约**：`spec/engineering-refactor/architecture-boundary.md`（依赖单向：service→model、pages→service/model、Constants 零业务依赖；上帝对象 PlayerController/BiliService/SettingsPage 只登记不拆分）
 
 ### 导航
 
@@ -35,9 +37,19 @@
 
 ### 状态管理
 
-- 全局 V1 `@Component` + `@State`/`@StorageLink`/`@StorageProp`/`@Watch`
+- **现状（V2 迁移已整体完结，2026-10-11）**：模型层 `@ObservedV2`+`@Trace`（6 类）；7 页面 + 4 挂键组件（SettingsRow/MiniPlayer/QueueDrawer/QueueSheet）全部 `@ComponentV2`（`@Local`/`@Param`/`@Monitor`）；CoverThumb/SettingsGroup/EdgeHint 免迁（`@Prop`-only）；`service/PlayerController.ets` **零装饰器纯类**（手动 `subscribe`/`emitUi` 广播 + 版本计数，消费方 `syncFrom` 拷贝进 `@Local`），代际无关，4.5 已关闭为无需迁移（审计纠错：`@Observed`+`@Track` 记载有误，git 全历史零命中）
+- `AS_*` 瞬态键经 `service/V2State.ets` 包装类（BoolState/NumState/StrState）走 `AppStorageV2.connect`，读写一律 `.value`，同 key 共享实例天然双向；`KEY_*` 持久化仍走 `AppStore`（preferences）
 - AppStorage 键集中在 `Constants.ets`（`AS_*` 瞬态 UI，`KEY_*` 持久化偏好）
 - 单例统一范式：`X.getInstance()`（见 `Constants.ets` 文件头注释）
+- **新代码规则**：已迁 V2 的页面/组件内新代码**必须用 V2 装饰器**（V1 装饰器在 `@ComponentV2` 内编译失败）；`PlayerController` 新增公开 UI 状态沿用零装饰器广播模式（字段 + `emitUi`，消费方 `syncFrom`），勿加任何观测装饰器；新组件可自由选代（单 struct 内不混用）
+- **维度说明**：V2 仅覆盖「状态管理」一个维度，不等于整体重构。路由重构/服务拆分与 V1/V2 **正交**（可独立推进）
+- **V2 迁移边界 4 规则**（详述见 `v2-migration-roadmap.md`）：① 单 struct 内 V1/V2 装饰器不可混用；② V1 状态不得持有 `@ObservedV2` 实例（批次 1 实测：不可变模型数组 `@State` 持有正常）；③ `AppStorage`（V1）与 `AppStorageV2` 不互通，全局存储切换须在相关页面全部迁移后（已完成）；④ 每批迁移独立提交、独立回归
+
+## 版本基线（API 26 前提）
+
+- **compatibleSdkVersion = 26.0.0**（已落地，2026-10-11 实施轮 T004；`targetSdkVersion` 已为 26.0.0）
+- 规划整体基于 **API 26**，**不考虑任何 API<26 兼容设计/守卫**（全局前提详见 `spec/engineering-refactor/spec.md`）
+- **`[API24-COMPAT]` 守卫已全部移除**（2026-10-11 实施轮 T005；`setMediaCenterControlType` 防御性 try/catch 保留、无标记），不再新增守卫
 
 ## 编码原则（Ponytail）
 
@@ -52,24 +64,37 @@
 - **Constants.ets 是唯一真相源**：所有魔法数字、存储键、AppStorage 键、色值、超时值只在此定义，禁止他处重复
 - **禁 `any`/`unknown`/`as` 类型断言**——ArkTS 严格模式
 - **B 站 API 坑**：APP 端点（`BILI_APP_ARCHIVE_URL`）须 BiliDroid UA（在 `Constants`），非浏览器 cookie；Web 端点须 WBI 签名（`WbiSigner`）；`@ohos.net.http` 的 `maxRedirects: 0` 是「零配额」而非「禁重定向」——短链解析用 `@kit.RemoteCommunicationKit` rcp + `autoRedirect`
-- **`[API24-COMPAT]` 守卫**：保护 API 26 接口在 API 24 设备可用——`compatibleSdkVersion` 升至 26 前勿删
+- **令牌/数值规范**（engineering-refactor 轮已落地，2026-10-11）：令牌替换**数值不变**（纯标准化不改观感）；色彩一律 `$r('app.color.*')`、数值一律 `Constants.TOKEN_*`，禁裸数字硬编码（豁免登记 `spec/engineering-refactor/token-exemptions.md`）；组件规范（列表行/卡片/弹窗/空态）跨页面一致
 
 ## 已知问题（PROJECT_NOTES.md）
 
-- **KI-3**：首页订阅列表与播放队列的左滑删除未实现（播放历史已完成）
+- **KI-3**：首页订阅列表左滑删除未实现（播放历史/播放队列已完成）
 - **KI-6**：睡眠定时未经真机验证
 - **KI-7**：链接识别边缘情况（B3–B8）——BV 优先级遮蔽复合 URL，裸数字一律当 UID
 - **DIS-1**：首页下拉刷新已禁用（代码以注释保留，标记 `[DISABLED 2026-10]`）
 
-## Spec
+## 工作方式（SDD 五阶段）
 
-`spec/` 存放功能规格与 UX 反馈轮次，`spec/feature.json` 指向当前活跃目录。实现功能前先查阅对应 spec。
+- **五阶段流程**：spec（需求）→ plan（设计）→ tasks（任务拆解）→ Review Gate（逐阶段确认）→ 子代理实施/验证
+- **规划轮 vs 实施轮**：可只产出规划（spec/plan/tasks 三份文档）不实施代码；`tasks.md` 是实施路线图，实施时按其中「实施轮次建议」分批执行
+- **子代理行为规范**：`spec-implementation` 只实施已批准任务；`spec-verify` 只验证一次（失败不重调，报告由主代理处理并修复）；零代码轮次（规划轮）禁止触碰任何源码/配置
+- **Spec**：`spec/` 存放功能规格与 UX 反馈轮次，`spec/feature.json` 指向当前活跃目录；实现功能前先查阅对应 spec
+- **无人值守模式**（用户批准批次执行时的默认运行方式）：① 小问题（不影响行为/不返工）记录在案（提交信息/PROJECT_NOTES）继续执行；② 大问题（可能行为回归/数据丢失/需返工）立即暂停报告；③ 有争议的问题（多方案均合理/影响后续路线）停下解释选项交用户决策；④ 每单元/批次完成即构建验证、批次独立提交；⑤ 验证失败不无限重试——同一目标最多 3 次，仍失败即暂停报告
 
 ## 参考项目
 
 - `D:/UsersFiles/Link_Z/Desktop/Code/PiliPlus` — Flutter 哔哩哔哩客户端（音质档位/设置交互参考）
 - `D:/UsersFiles/Link_Z/Desktop/Code/bili/biliRelay` — B 站 API 取流参考（QUALITY_MAP / fnval）
 
+## 沟通偏好
+
+- **选择前解释**：让用户做选择前，先解释清楚各选项的含义、差异、影响，给用户选择提供依据（不替用户直接决策，也不罗列黑话）
+- **逐步确认**：每阶段 Review Gate 确认后再推进，不跳步
+- **类比解释**：技术概念用生活类比辅助理解
+- **输出零废话**：不加 emoji、不加前置/后置解释，写完即停（与编码原则一致）
+
 ## Pre-commit
 
 `.githooks/pre-commit` 扫描暂存的 `build-profile.json5` 中签名关键词（`certpath`、`storeFile`、`storePassword`、`keyPassword`、`keyAlias`、`material`、`.ohos/config`），命中即拒绝提交。勿绕过。
+
+- **提交信息简洁**：一行主题概括本轮变更要点即可；验证过程、历史考据、异常排查细节落 PROJECT_NOTES.md / spec 文档，不写进提交信息。

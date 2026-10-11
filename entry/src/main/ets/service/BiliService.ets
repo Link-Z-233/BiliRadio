@@ -170,7 +170,7 @@ function randomDmImgStr(minBytes: number, maxBytes: number): string {
 function buildUpQueryParams(mid: number, pn: number = 1): Record<string, string> {
   return {
     'mid': mid.toString(),
-    'ps': '30',
+    'ps': Constants.UP_PAGE_SIZE.toString(),
     'pn': pn.toString(),
     'order': 'pubdate',
     'platform': 'web',
@@ -775,7 +775,7 @@ export class BiliService {
     return page;
   }
 
-  // UP 主最新投稿（单页 30 条，新集在前）
+  // UP 主最新投稿（单页 20 条，新集在前）
   // 风控降级链：APP 签名链（游客 appkey+ts+sign，无 cookie/WBI 依赖）优先，任何失败只记日志后
   // 降级 Web 链；Web 链内 -352/-412/风控页/网络错误等可重试错误重置 buvid 指数退避后进下一轮，
   // -404/-400/-101 等业务错误立即失败；全败时抛出最后一轮真实错误（含错误码）
@@ -829,7 +829,7 @@ export class BiliService {
     }
   }
 
-  // 按页号抓取 UP 主更早投稿（页号越大越老，每页 30 条），纯 Web 三轮退避链
+  // 按页号抓取 UP 主更早投稿（页号越大越老，每页 20 条），纯 Web 三轮退避链
   static async fetchUpVideosByPage(mid: number, pn: number): Promise<BiliVideo[]> {
     const page: number = Math.max(pn, 1);
     if (page === 1) {

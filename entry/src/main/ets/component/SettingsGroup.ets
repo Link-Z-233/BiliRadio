@@ -1,3 +1,5 @@
+import { Constants } from '../service/Constants';
+
 @Builder
 function groupEmptyContent() {
 }
@@ -11,15 +13,15 @@ export struct SettingsGroup {
     Column() {
       if (this.title !== '') {
         Text(this.title)
-          .fontSize(13)
+          .fontSize(Constants.TOKEN_FONT_BODY)
           .fontColor($r('app.color.text_secondary'))
-          .margin({ left: 16, bottom: 8 })
+          .margin({ left: Constants.TOKEN_SPACE_L, bottom: Constants.TOKEN_SPACE_S })
       }
       Column() {
         this.content()
       }
       .width('100%')
-      .borderRadius(16)
+      .borderRadius(Constants.TOKEN_RADIUS_L)
       .backgroundColor($r('app.color.card_background'))
     }
     .width('100%')

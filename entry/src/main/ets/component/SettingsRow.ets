@@ -1,27 +1,29 @@
 import { Constants } from '../service/Constants';
+import { connectStr, StrState } from '../service/V2State';
 
-@Component
+@ComponentV2
 export struct SettingsRow {
-  @Prop title: string = '';
-  @Prop subtitle: string = '';
-  @Prop valueText: string = '';
-  @Prop rowIcon: Resource | undefined = undefined;
-  @Prop showArrow: boolean = false;
-  @Prop showToggle: boolean = false;
-  @Prop toggleOn: boolean = false;
-  @Prop showDivider: boolean = false;
-  @Prop danger: boolean = false;
-  @StorageProp('accentColor') accentColor: string = Constants.ACCENT_DEFAULT;
-  rowAction: () => void = (): void => {};
-  toggleChange: (on: boolean) => void = (_on: boolean): void => {};
+  @Param title: string = '';
+  @Param subtitle: string = '';
+  @Param valueText: string = '';
+  @Param rowIcon: Resource | undefined = undefined;
+  @Param showArrow: boolean = false;
+  @Param showToggle: boolean = false;
+  @Param toggleOn: boolean = false;
+  @Param showDivider: boolean = false;
+  @Param danger: boolean = false;
+  @Local accentColor: StrState =
+    connectStr(Constants.AS_ACCENT_COLOR, Constants.ACCENT_DEFAULT);
+  @Param rowAction: () => void = (): void => {};
+  @Param toggleChange: (on: boolean) => void = (_on: boolean): void => {};
 
   @Builder
   private iconSlot(icon: Resource | undefined) {
     if (icon !== undefined) {
       SymbolGlyph(icon)
-        .fontSize(22)
+        .fontSize(Constants.TOKEN_FONT_TITLE_L)
         .fontColor([$r('app.color.text_secondary')])
-        .margin({ right: 12 })
+        .margin({ right: Constants.TOKEN_SPACE_M })
     }
   }
 
@@ -31,50 +33,50 @@ export struct SettingsRow {
         this.iconSlot(this.rowIcon)
         Column() {
           Text(this.title)
-            .fontSize(16)
+            .fontSize(Constants.TOKEN_FONT_TITLE)
             .fontColor(this.danger ? $r('app.color.danger_red') : $r('app.color.text_primary'))
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
           if (this.subtitle !== '') {
             Text(this.subtitle)
-              .fontSize(12)
+              .fontSize(Constants.TOKEN_FONT_BODY_S)
               .fontColor($r('app.color.text_secondary'))
-              .margin({ top: 2 })
+              .margin({ top: Constants.TOKEN_SPACE_XXS })
           }
         }
         .alignItems(HorizontalAlign.Start)
         .layoutWeight(1)
         if (this.valueText !== '') {
           Text(this.valueText)
-            .fontSize(14)
+            .fontSize(Constants.TOKEN_FONT_BODY_M)
             .fontColor($r('app.color.text_secondary'))
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
-            .margin({ right: 6 })
+            .margin({ right: Constants.TOKEN_SPACE_6 })
         }
         if (this.showToggle) {
           Toggle({ type: ToggleType.Switch, isOn: this.toggleOn })
-            .selectedColor(this.accentColor)
+            .selectedColor(this.accentColor.value)
             .onChange((isOn: boolean) => {
               this.toggleChange(isOn);
             })
         }
         if (this.showArrow) {
           SymbolGlyph($r('sys.symbol.chevron_right'))
-            .fontSize(16)
+            .fontSize(Constants.TOKEN_FONT_TITLE)
             .fontColor([$r('app.color.placeholder_color')])
         }
       }
       .width('100%')
       .constraintSize({ minHeight: 54 })
-      .padding({ left: 16, right: 16, top: 8, bottom: 8 })
+      .padding({ left: Constants.TOKEN_SPACE_L, right: Constants.TOKEN_SPACE_L, top: Constants.TOKEN_SPACE_S, bottom: Constants.TOKEN_SPACE_S })
       .onClick(() => {
         this.rowAction();
       })
       if (this.showDivider) {
         Divider()
           .color($r('app.color.track_color'))
-          .margin({ left: 16 })
+          .margin({ left: Constants.TOKEN_SPACE_L })
       }
     }
     .width('100%')

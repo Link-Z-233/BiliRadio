@@ -1,19 +1,20 @@
 import { PlayerController } from '../service/PlayerController';
-import { AppStore } from '../service/AppStore';
 import { Constants } from '../service/Constants';
+import { connectBool, connectNum, connectStr, NumState, StrState } from '../service/V2State';
 import { CoverThumb } from './CoverThumb';
 
 // 底部迷你播放条：队列有内容时显示曲目信息，为空时显示占位条（US2）；点按唤起全屏播放层
-@Component
+@ComponentV2
 export struct MiniPlayer {
-  @StorageProp('accentColor') accentColor: string = Constants.ACCENT_DEFAULT;
-  @StorageProp('navBarHeight') navBarHeight: number = 0; // key 与 Constants.AS_NAV_BAR_HEIGHT 对应
-  @State hasContent: boolean = false;
-  @State cover: string = '';
-  @State title: string = '';
-  @State ownerName: string = '';
-  @State isPlaying: boolean = false;
-  @State isPreparing: boolean = false;
+  @Local accentColor: StrState =
+    connectStr(Constants.AS_ACCENT_COLOR, Constants.ACCENT_DEFAULT);
+  @Local navBarHeight: NumState = connectNum(Constants.AS_NAV_BAR_HEIGHT, 0);
+  @Local hasContent: boolean = false;
+  @Local cover: string = '';
+  @Local title: string = '';
+  @Local ownerName: string = '';
+  @Local isPlaying: boolean = false;
+  @Local isPreparing: boolean = false;
 
   // 进度广播退订句柄（US2/KI-1）：aboutToDisappear 中调用，避免监听器累积
   private unsubscribePlayer: () => void = (): void => {};
@@ -33,9 +34,8 @@ export struct MiniPlayer {
   private syncFromPlayer(): void {
     const c: PlayerController = PlayerController.getInstance();
     const idxOk: boolean = c.currentIndex >= 0 && c.currentIndex < c.playlist.length;
-    const dataSaver: boolean = AppStore.getNumber(Constants.KEY_DATA_SAVER, 0) === 1;
     const has: boolean = c.playlist.length > 0;
-    const cover: string = idxOk && !dataSaver ? c.playlist[c.currentIndex].cover : '';
+    const cover: string = idxOk ? c.playlist[c.currentIndex].cover : '';
     const title: string = idxOk ? c.playlist[c.currentIndex].title : '';
     const owner: string = idxOk ? c.playlist[c.currentIndex].ownerName : '';
     // emitUi 在秒级进度 tick 中触发，仅值真正变化时才写状态
@@ -66,67 +66,67 @@ export struct MiniPlayer {
           CoverThumb({ cover: this.cover, thumbSize: 44, radius: 8 })
           Column() {
             Text(this.title)
-              .fontSize(14)
+              .fontSize(Constants.TOKEN_FONT_BODY_M)
               .fontWeight(FontWeight.Medium)
               .fontColor($r('app.color.text_primary'))
               .maxLines(1)
               .textOverflow({ overflow: TextOverflow.Ellipsis })
             if (this.ownerName !== '') {
               Text(this.ownerName)
-                .fontSize(12)
+                .fontSize(Constants.TOKEN_FONT_BODY_S)
                 .fontColor($r('app.color.text_secondary'))
                 .maxLines(1)
                 .textOverflow({ overflow: TextOverflow.Ellipsis })
-                .margin({ top: 2 })
+                .margin({ top: Constants.TOKEN_SPACE_XXS })
             }
           }
           .alignItems(HorizontalAlign.Start)
           .layoutWeight(1)
-          .margin({ left: 10, right: 6 })
+          .margin({ left: Constants.TOKEN_SPACE_10, right: Constants.TOKEN_SPACE_6 })
         }
         .layoutWeight(1)
 
         if (this.isPlaying || this.isPreparing) {
           SymbolGlyph($r('sys.symbol.pause_fill'))
-            .fontSize(24)
-            .fontColor([this.accentColor])
-            .padding(8)
+            .fontSize(Constants.TOKEN_FONT_24)
+            .fontColor([this.accentColor.value])
+            .padding(Constants.TOKEN_SPACE_S)
             .onClick(() => {
               PlayerController.getInstance().togglePlay();
             })
         } else {
           SymbolGlyph($r('sys.symbol.play_fill'))
-            .fontSize(24)
-            .fontColor([this.accentColor])
-            .padding(8)
+            .fontSize(Constants.TOKEN_FONT_24)
+            .fontColor([this.accentColor.value])
+            .padding(Constants.TOKEN_SPACE_S)
             .onClick(() => {
               PlayerController.getInstance().togglePlay();
             })
         }
         SymbolGlyph($r('sys.symbol.forward_end_fill'))
-          .fontSize(20)
+          .fontSize(Constants.TOKEN_FONT_20)
           .fontColor([$r('app.color.text_primary')])
-          .padding(8)
+          .padding(Constants.TOKEN_SPACE_S)
           .onClick(() => {
             PlayerController.getInstance().next();
           })
         SymbolGlyph($r('sys.symbol.list_bullet'))
-          .fontSize(20)
+          .fontSize(Constants.TOKEN_FONT_20)
           .fontColor([$r('app.color.text_primary')])
-          .padding(8)
+          .padding(Constants.TOKEN_SPACE_S)
           .onClick(() => {
-            AppStorage.setOrCreate<boolean>(Constants.AS_SHOW_QUEUE_SHEET, true);
+            connectBool(Constants.AS_SHOW_QUEUE_SHEET, false).value = true;
           })
       }
       .width('100%')
-      .padding({ left: 10, right: 6, top: 8, bottom: 8 })
+      .padding({ left: Constants.TOKEN_SPACE_10, right: Constants.TOKEN_SPACE_6, top: Constants.TOKEN_SPACE_S, bottom: Constants.TOKEN_SPACE_S })
       .backgroundColor($r('app.color.miniplayer_background'))
       .backdropBlur(24)
-      .borderRadius(24)
-      .margin({ bottom: this.navBarHeight + 8 })
+      .borderRadius(Constants.TOKEN_RADIUS_XXL)
+      .margin({ bottom: this.navBarHeight.value + 8 })
       .shadow({ radius: 12, color: '#33000000', offsetX: 0, offsetY: 2 })
       .onClick(() => {
-        AppStorage.setOrCreate<boolean>(Constants.AS_SHOW_PLAYER_OVERLAY, true);
+        connectBool(Constants.AS_SHOW_PLAYER_OVERLAY, false).value = true;
       })
     } else {
       // 空态占位条（US2）：队列无内容时显示占位封面+提示，不显示残留歌曲信息；
@@ -134,22 +134,22 @@ export struct MiniPlayer {
       Row() {
         CoverThumb({ cover: '', thumbSize: 44, radius: 8 })
         Text('暂无播放内容')
-          .fontSize(14)
+          .fontSize(Constants.TOKEN_FONT_BODY_M)
           .fontColor($r('app.color.text_secondary'))
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .margin({ left: 10, right: 6 })
+          .margin({ left: Constants.TOKEN_SPACE_10, right: Constants.TOKEN_SPACE_6 })
       }
       .width('100%')
-      .padding({ left: 10, right: 10, top: 8, bottom: 8 })
+      .padding({ left: Constants.TOKEN_SPACE_10, right: Constants.TOKEN_SPACE_10, top: Constants.TOKEN_SPACE_S, bottom: Constants.TOKEN_SPACE_S })
       .alignItems(VerticalAlign.Center)
       .backgroundColor($r('app.color.miniplayer_background'))
       .backdropBlur(24)
-      .borderRadius(24)
-      .margin({ bottom: this.navBarHeight + 8 })
+      .borderRadius(Constants.TOKEN_RADIUS_XXL)
+      .margin({ bottom: this.navBarHeight.value + 8 })
       .shadow({ radius: 12, color: '#33000000', offsetX: 0, offsetY: 2 })
       .onClick(() => {
-        AppStorage.setOrCreate<boolean>(Constants.AS_SHOW_PLAYER_OVERLAY, true);
+        connectBool(Constants.AS_SHOW_PLAYER_OVERLAY, false).value = true;
       })
     }
   }

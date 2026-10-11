@@ -6,7 +6,7 @@ import { QrCode, QrEcc } from '../service/QrCode';
 import { AppStore } from '../service/AppStore';
 import { Appearance } from '../service/Appearance';
 import { BusinessError } from '@kit.BasicServicesKit';
-import { common, OpenLinkOptions } from '@kit.AbilityKit';
+import { common, OpenLinkOptions, bundleManager } from '@kit.AbilityKit';
 import { componentSnapshot, promptAction } from '@kit.ArkUI';
 import { image } from '@kit.ImageKit';
 import { photoAccessHelper } from '@kit.MediaLibraryKit';
@@ -16,6 +16,7 @@ import { EdgeHint } from '../component/EdgeHint';
 import { SettingsGroup } from '../component/SettingsGroup';
 import { SettingsRow } from '../component/SettingsRow';
 import { Constants } from '../service/Constants';
+import { connectBool, connectNum, connectStr, BoolState, NumState, StrState } from '../service/V2State';
 import { Logger } from '../service/Logger';
 import { PlayHistoryItem } from '../model/PlayHistoryItem';
 import { BiliVideo } from '../model/BiliVideo';
@@ -78,51 +79,54 @@ export function SettingsPageBuilder() {
 // 设置页（NavDestination，US8 HarmonyOS 系统风格重写）：大标题 + 分组卡片（SettingsGroup/SettingsRow），
 // 登录 / 播放设置 / 外观（含主题色板）/ 播放历史 / 日志 / 关于功能全保留；
 // pushPathByName('settingsPage', param) 可带 'playHistory' / 'about' 直开对应面板
-@Component
+@ComponentV2
 struct SettingsPage {
-  @State showQr: boolean = false;
-  @State isLogged: boolean = false;
-  @State loginName: string = '未登录';
-  @State cookieInput: string = '';
-  @State statusMsg: string = '';
-  @State qrStatus: string = '';
-  @State qrExpired: boolean = false;
-  @State qrUrl: string = '';
-  @State oneKeyLogging: boolean = false;
-  @State showAbout: boolean = false;
-  @State debugModeOn: boolean = false;
+  @Local showQr: boolean = false;
+  @Local isLogged: boolean = false;
+  @Local loginName: string = '未登录';
+  @Local cookieInput: string = '';
+  @Local statusMsg: string = '';
+  @Local qrStatus: string = '';
+  @Local qrExpired: boolean = false;
+  @Local qrUrl: string = '';
+  @Local oneKeyLogging: boolean = false;
+  @Local showAbout: boolean = false;
+  @Local debugModeOn: boolean = false;
+  @Local appVersion: string = '';
 
   // —— 播放历史 ——
-  @StorageLink('showPlayHistory') showPlayHistory: boolean = false; // key 与 Constants.AS_SHOW_PLAY_HISTORY 对应
-  @State playHistoryItems: PlayHistoryItem[] = [];
-  @State playHistoryVersion: number = -1;
+  @Local showPlayHistory: BoolState = connectBool(Constants.AS_SHOW_PLAY_HISTORY, false);
+  @Local playHistoryItems: PlayHistoryItem[] = [];
+  @Local playHistoryVersion: number = -1;
   // US6 历史面板顶/底过冲提示
-  @State historyTopHint: string = '';
-  @State historyBottomHint: string = '';
+  @Local historyTopHint: string = '';
+  @Local historyBottomHint: string = '';
 
   // —— 应用内日志（US9） ——
-  @State logCount: number = 0;
+  @Local logCount: number = 0;
 
-  @State autoPlayOnStart: boolean = false;
-  // —— 四个新增设置开关状态 ——
-  @State interruptResume: boolean = false;
-  @State dataSaver: boolean = false;
-  @State wifiOnlyDownload: boolean = false;
+  @Local autoPlayOnStart: boolean = false;
+  // —— 新增设置开关状态 ——
+  @Local interruptResume: boolean = false;
+  @Local wifiOnlyDownload: boolean = false;
   // —— 音质（audio-quality-settings）：双网络默认档 + 单 sheet 选择器（编辑目标标记）——
-  @State wifiQuality: QualityTier = QualityTier.MAX;
-  @State cellularQuality: QualityTier = QualityTier.Q132K;
-  @State showQualitySheet: boolean = false;
-  @State qualityEditTarget: string = 'wifi'; // 'wifi' | 'cellular'
-  // 外观三态选中态（0=跟随系统 1=浅色 2=深色）：由 Appearance 写入 AppStorage 驱动刷新
-  @StorageProp('colorModeSetting') colorModeSetting: number = 0;
+  @Local wifiQuality: QualityTier = QualityTier.MAX;
+  @Local cellularQuality: QualityTier = QualityTier.Q132K;
+  @Local showQualitySheet: boolean = false;
+  @Local qualityEditTarget: string = 'wifi'; // 'wifi' | 'cellular'
+  // 外观三态选中态（0=跟随系统 1=浅色 2=深色）：由 Appearance 写全局键驱动刷新
+  @Local colorModeSetting: NumState =
+    connectNum(Constants.AS_COLOR_MODE_SETTING, Appearance.MODE_FOLLOW_SYSTEM);
 
   // US8 设置页滚动过冲提示（顶/底），空串不渲染
-  @State settingsTopHint: string = '';
-  @State settingsBottomHint: string = '';
+  @Local settingsTopHint: string = '';
+  @Local settingsBottomHint: string = '';
 
-  @StorageProp('accentColor') accentColor: string = Constants.ACCENT_DEFAULT;
-  @StorageProp('miniPlayerVisible') miniPlayerVisible: boolean = false; // key 与 Constants.AS_MINI_PLAYER_VISIBLE 对应
-  @StorageProp('navBarHeight') navBarHeight: number = 0; // key 与 Constants.AS_NAV_BAR_HEIGHT 对应
+  @Local accentColor: StrState =
+    connectStr(Constants.AS_ACCENT_COLOR, Constants.ACCENT_DEFAULT);
+  @Local miniPlayerVisible: BoolState =
+    connectBool(Constants.AS_MINI_PLAYER_VISIBLE, true);
+  @Local navBarHeight: NumState = connectNum(Constants.AS_NAV_BAR_HEIGHT, 0);
   private qrCanvas: CanvasRenderingContext2D =
     new CanvasRenderingContext2D(new RenderingContextSettings(true));
 
@@ -136,7 +140,7 @@ struct SettingsPage {
 
   // 强调色淡底（对齐原 material_tint_primary 的 0x59≈0.349 alpha）：随主题色运行时衍生
   private tintBg(): string {
-    return Appearance.hexWithAlpha(this.accentColor, 0.349);
+    return Appearance.hexWithAlpha(this.accentColor.value, 0.349);
   }
 
 
@@ -163,15 +167,16 @@ struct SettingsPage {
 
   aboutToAppear(): void {
     this.refreshLoginState();
+    const bundleInfo = bundleManager.getBundleInfoForSelfSync(bundleManager.BundleFlag.GET_BUNDLE_INFO_DEFAULT);
+    this.appVersion = bundleInfo.versionName;
     this.autoPlayOnStart = AppStore.getNumber(Constants.KEY_AUTO_PLAY_ON_START, 0) === 1;
     this.interruptResume = AppStore.getNumber(Constants.KEY_INTERRUPT_RESUME, 0) === 1;
-    this.dataSaver = AppStore.getNumber(Constants.KEY_DATA_SAVER, 0) === 1;
     this.wifiOnlyDownload = AppStore.getNumber(Constants.KEY_WIFI_ONLY_DOWNLOAD, 0) === 1;
     this.wifiQuality = this.readStoredTier(Constants.KEY_WIFI_AUDIO_QUALITY, QualityTier.MAX);
     this.cellularQuality = this.readStoredTier(Constants.KEY_CELLULAR_AUDIO_QUALITY, QualityTier.Q132K);
     this.unsubscribePlayer = this.controller.subscribe((): void => {
       this.refreshLoginState();
-      if (this.showPlayHistory && this.playHistoryVersion !== this.controller.playHistoryVersion) {
+      if (this.showPlayHistory.value && this.playHistoryVersion !== this.controller.playHistoryVersion) {
         this.playHistoryVersion = this.controller.playHistoryVersion;
         this.playHistoryItems = this.controller.playHistory.slice(0);
         this.playHistorySource.setItems(this.playHistoryItems);
@@ -247,7 +252,7 @@ struct SettingsPage {
     this.playHistoryItems = this.controller.playHistory.slice(0);
     this.playHistorySource.setItems(this.playHistoryItems);
     this.historyEndY = -1;
-    this.showPlayHistory = true;
+    this.showPlayHistory.value = true;
   }
 
   private handleAboutIconTap(): void {
@@ -394,8 +399,8 @@ struct SettingsPage {
       .height('100%')
       .padding({ left: 18, right: 18 })
       .backgroundColor($r('app.color.danger_red'))
-      .fontColor(Color.White)
-      .fontSize(13)
+      .fontColor($r('app.color.fg_on_dark'))
+      .fontSize(Constants.TOKEN_FONT_BODY)
       .borderRadius(0)
       .onClick(() => {
         this.removeHistoryItem(item);
@@ -695,7 +700,7 @@ struct SettingsPage {
 
 
   private selectAppearance(mode: number): void {
-    if (mode === this.colorModeSetting) {
+    if (mode === this.colorModeSetting.value) {
       return;
     }
     // 立即生效：Appearance 内部完成持久化（key: colorMode）、应用层 setColorMode 与窗口层颜色重设
@@ -706,14 +711,14 @@ struct SettingsPage {
   @Builder
   appearanceOption(label: string, mode: number) {
     Text(label)
-      .fontSize(13)
-      .fontColor(this.colorModeSetting === mode ?
+      .fontSize(Constants.TOKEN_FONT_BODY)
+      .fontColor(this.colorModeSetting.value === mode ?
         $r('app.color.text_primary') : this.textSecondary())
       .textAlign(TextAlign.Center)
       .layoutWeight(1)
       .height(34)
       .borderRadius(17)
-      .backgroundColor(this.colorModeSetting === mode ?
+      .backgroundColor(this.colorModeSetting.value === mode ?
         this.tintBg() : $r('app.color.page_background'))
       .onClick(() => {
         this.selectAppearance(mode);
@@ -721,7 +726,7 @@ struct SettingsPage {
   }
 
   private selectAccent(color: string): void {
-    if (color === this.accentColor) {
+    if (color === this.accentColor.value) {
       return;
     }
     // 立即生效：Appearance 内部完成持久化并写入 AppStorage('accentColor') 驱动全 UI 刷新
@@ -735,16 +740,16 @@ struct SettingsPage {
       Row()
         .width(24)
         .height(24)
-        .borderRadius(12)
+        .borderRadius(Constants.TOKEN_RADIUS_M)
         .backgroundColor(color)
     }
     .width(32)
     .height(32)
-    .borderRadius(16)
+    .borderRadius(Constants.TOKEN_RADIUS_L)
     .justifyContent(FlexAlign.Center)
     .border({
       width: 2,
-      color: this.accentColor === color ? this.accentColor : Color.Transparent
+      color: this.accentColor.value === color ? this.accentColor.value : Color.Transparent
     })
     .onClick(() => {
       this.selectAccent(color);
@@ -761,26 +766,26 @@ struct SettingsPage {
           .height(40)
           .backgroundColor(this.tintBg())
           .fontColor($r('app.color.text_primary'))
-          .borderRadius(20)
-          .fontSize(14)
+          .borderRadius(Constants.TOKEN_RADIUS_XL)
+          .fontSize(Constants.TOKEN_FONT_BODY_M)
           .onClick(() => {
             this.cancelOneKeyLogin();
           })
 
         Text(this.qrStatus)
-          .fontSize(13)
+          .fontSize(Constants.TOKEN_FONT_BODY)
           .fontColor($r('app.color.text_secondary'))
           .width('100%')
-          .margin({ top: 8 })
+          .margin({ top: Constants.TOKEN_SPACE_S })
       } else {
-        Row({ space: 12 }) {
+        Row({ space: Constants.TOKEN_SPACE_M }) {
           Button('B站一键登录')
             .layoutWeight(1)
             .height(40)
-            .backgroundColor(this.accentColor)
-            .fontColor(Color.White)
-            .borderRadius(20)
-            .fontSize(14)
+            .backgroundColor(this.accentColor.value)
+            .fontColor($r('app.color.fg_on_dark'))
+            .borderRadius(Constants.TOKEN_RADIUS_XL)
+            .fontSize(Constants.TOKEN_FONT_BODY_M)
             .onClick(() => {
               this.startOneKeyLogin();
             })
@@ -790,8 +795,8 @@ struct SettingsPage {
             .height(40)
             .backgroundColor($r('app.color.page_background'))
             .fontColor($r('app.color.text_primary'))
-            .borderRadius(20)
-            .fontSize(14)
+            .borderRadius(Constants.TOKEN_RADIUS_XL)
+            .fontSize(Constants.TOKEN_FONT_BODY_M)
             .onClick(() => {
               this.showQr = true;
               this.startQrLogin();
@@ -801,10 +806,10 @@ struct SettingsPage {
 
         if (!this.showQr && this.qrStatus !== '') {
           Text(this.qrStatus)
-            .fontSize(13)
+            .fontSize(Constants.TOKEN_FONT_BODY)
             .fontColor($r('app.color.text_secondary'))
             .width('100%')
-            .margin({ top: 8 })
+            .margin({ top: Constants.TOKEN_SPACE_S })
         }
       }
 
@@ -815,21 +820,21 @@ struct SettingsPage {
             .width(QR_CANVAS_SIZE)
             .height(QR_CANVAS_SIZE)
             .backgroundColor(Constants.QR_BG_COLOR)
-            .borderRadius(12)
+            .borderRadius(Constants.TOKEN_RADIUS_M)
             .onReady(() => {
               this.drawQr();
             })
 
           Text(this.qrStatus)
-            .fontSize(13)
+            .fontSize(Constants.TOKEN_FONT_BODY)
             .fontColor($r('app.color.text_secondary'))
-            .margin({ top: 10 })
+            .margin({ top: Constants.TOKEN_SPACE_10 })
 
-          Row({ space: 12 }) {
+          Row({ space: Constants.TOKEN_SPACE_M }) {
             SaveButton({ text: SaveDescription.SAVE, buttonType: ButtonType.Capsule })
               .height(34)
-              .padding({ left: 14, right: 14 })
-              .fontSize(13)
+              .padding({ left: Constants.TOKEN_SPACE_14, right: Constants.TOKEN_SPACE_14 })
+              .fontSize(Constants.TOKEN_FONT_BODY)
               .fontColor($r('app.color.text_primary'))
               .backgroundColor($r('app.color.page_background'))
               .onClick(async (event: ClickEvent, result: SaveButtonOnClickResult) => {
@@ -842,11 +847,11 @@ struct SettingsPage {
 
             Button(this.qrExpired ? '刷新二维码' : '取消')
               .height(34)
-              .padding({ left: 14, right: 14 })
+              .padding({ left: Constants.TOKEN_SPACE_14, right: Constants.TOKEN_SPACE_14 })
               .backgroundColor($r('app.color.page_background'))
               .fontColor($r('app.color.text_primary'))
               .borderRadius(17)
-              .fontSize(13)
+              .fontSize(Constants.TOKEN_FONT_BODY)
               .onClick(() => {
                 if (this.qrExpired) {
                   this.startQrLogin();
@@ -856,15 +861,15 @@ struct SettingsPage {
                 }
               })
           }
-          .margin({ top: 10 })
+          .margin({ top: Constants.TOKEN_SPACE_10 })
         }
         .width('100%')
         .alignItems(HorizontalAlign.Center)
-        .margin({ top: 12 })
+        .margin({ top: Constants.TOKEN_SPACE_M })
       }
     }
     .width('100%')
-    .padding({ left: 14, right: 14, top: 14, bottom: 14 })
+    .padding({ left: Constants.TOKEN_SPACE_14, right: Constants.TOKEN_SPACE_14, top: Constants.TOKEN_SPACE_14, bottom: Constants.TOKEN_SPACE_14 })
   }
 
   // 手动粘贴 Cookie（US8 卡片内布局）
@@ -872,7 +877,7 @@ struct SettingsPage {
   private cookieBlock() {
     Column() {
       Text('手动粘贴Cookie（需包含 SESSDATA 和 bili_jct）')
-        .fontSize(13)
+        .fontSize(Constants.TOKEN_FONT_BODY)
         .fontColor($r('app.color.text_secondary'))
         .width('100%')
 
@@ -883,41 +888,41 @@ struct SettingsPage {
           .backgroundColor($r('app.color.page_background'))
           .fontColor($r('app.color.text_primary'))
           .placeholderColor($r('app.color.placeholder_color'))
-          .borderRadius(10)
-          .fontSize(13)
+          .borderRadius(Constants.TOKEN_RADIUS_10)
+          .fontSize(Constants.TOKEN_FONT_BODY)
           .onChange((value: string) => {
             this.cookieInput = value;
           })
 
         Button('保存')
           .height(40)
-          .margin({ left: 8 })
-          .padding({ left: 16, right: 16 })
+          .margin({ left: Constants.TOKEN_SPACE_S })
+          .padding({ left: Constants.TOKEN_SPACE_L, right: Constants.TOKEN_SPACE_L })
           .backgroundColor(this.tintBg())
           .fontColor($r('app.color.text_primary'))
-          .borderRadius(10)
-          .fontSize(13)
+          .borderRadius(Constants.TOKEN_RADIUS_10)
+          .fontSize(Constants.TOKEN_FONT_BODY)
           .onClick(() => {
             this.saveCookie(this.cookieInput);
           })
       }
       .width('100%')
-      .margin({ top: 8 })
+      .margin({ top: Constants.TOKEN_SPACE_S })
     }
     .width('100%')
     .alignItems(HorizontalAlign.Start)
-    .padding({ left: 14, right: 14, top: 14, bottom: 14 })
+    .padding({ left: Constants.TOKEN_SPACE_14, right: Constants.TOKEN_SPACE_14, top: Constants.TOKEN_SPACE_14, bottom: Constants.TOKEN_SPACE_14 })
   }
 
   // 「关于」弹窗内的功能条目：圆点 + 说明文字，左侧对齐，支持多行
   @Builder
   aboutFeature(text: string) {
-    Row({ space: 8 }) {
+    Row({ space: Constants.TOKEN_SPACE_S }) {
       Text('·')
-        .fontSize(14)
-        .fontColor(this.accentColor)
+        .fontSize(Constants.TOKEN_FONT_BODY_M)
+        .fontColor(this.accentColor.value)
       Text(text)
-        .fontSize(13)
+        .fontSize(Constants.TOKEN_FONT_BODY)
         .fontColor(this.textSecondary())
         .lineHeight(20)
         .layoutWeight(1)
@@ -935,26 +940,26 @@ struct SettingsPage {
         Blank()
         Button('完成')
           .height(30)
-          .padding({ left: 12, right: 12 })
+          .padding({ left: Constants.TOKEN_SPACE_M, right: Constants.TOKEN_SPACE_M })
           .backgroundColor($r('app.color.btn_glass'))
           .backdropBlur(20)
           .border({ width: 1, color: $r('app.color.btn_border') })
           .fontColor(this.textPrimary())
           .borderRadius(15)
-          .fontSize(12)
+          .fontSize(Constants.TOKEN_FONT_BODY_S)
           .onClick(() => {
             this.showAbout = false;
           })
       }
       .width('100%')
-      .padding({ left: 16, right: 8, top: 8, bottom: 4 })
+      .padding({ left: Constants.TOKEN_SPACE_L, right: Constants.TOKEN_SPACE_S, top: Constants.TOKEN_SPACE_S, bottom: Constants.TOKEN_SPACE_XS })
 
       Scroll() {
         Column() {
           Image($r('app.media.startIcon'))
             .width(76)
             .height(76)
-            .borderRadius(18)
+            .borderRadius(Constants.TOKEN_RADIUS_18)
             .objectFit(ImageFit.Cover)
             .onClick(() => {
               this.handleAboutIconTap();
@@ -974,48 +979,48 @@ struct SettingsPage {
           }
 
           Text('BiliRadio')
-            .fontSize(20)
+            .fontSize(Constants.TOKEN_FONT_20)
             .fontWeight(FontWeight.Bold)
             .fontColor(this.textPrimary())
-            .margin({ top: 12 })
+            .margin({ top: Constants.TOKEN_SPACE_M })
 
-          Text('版本 0.1.0')
-            .fontSize(12)
+          Text(`版本 ${this.appVersion}`)
+            .fontSize(Constants.TOKEN_FONT_BODY_S)
             .fontColor(this.textSecondary())
-            .margin({ top: 4 })
+            .margin({ top: Constants.TOKEN_SPACE_XS })
 
           Text('BiliRadio 是一款 B 站音频播放器，把 B 站视频当作纯音乐来听：支持后台播放、进度记忆、锁屏控制。基于 taotie256 的 BiliMusic（Apache 2.0）开发。')
-            .fontSize(13)
+            .fontSize(Constants.TOKEN_FONT_BODY)
             .fontColor(this.textSecondary())
             .lineHeight(20)
             .width('100%')
             .textAlign(TextAlign.Start)
-            .margin({ top: 16 })
+            .margin({ top: Constants.TOKEN_SPACE_L })
 
           Divider()
             .color($r('app.color.track_color'))
             .strokeWidth(1)
-            .margin({ top: 16, bottom: 14 })
+            .margin({ top: Constants.TOKEN_SPACE_L, bottom: Constants.TOKEN_SPACE_14 })
 
           Text('核心功能')
-            .fontSize(15)
+            .fontSize(Constants.TOKEN_FONT_BODY_L)
             .fontWeight(FontWeight.Bold)
             .fontColor(this.textPrimary())
             .width('100%')
             .textAlign(TextAlign.Start)
 
-          Column({ space: 10 }) {
+          Column({ space: Constants.TOKEN_SPACE_10 }) {
             this.aboutFeature('订阅收听：UP 主 / 收藏夹 / 合集 / 系列，新集自动标 NEW')
             this.aboutFeature('队列播放：整源入队、搜索、多选管理')
             this.aboutFeature('播放控制：倍速、播放模式、睡眠定时、进度续播')
             this.aboutFeature('外观：深浅色三态 + 六色主题色板')
           }
           .width('100%')
-          .margin({ top: 12 })
+          .margin({ top: Constants.TOKEN_SPACE_M })
 
         }
         .width('100%')
-        .padding({ left: 24, right: 24, top: 16, bottom: 24 })
+        .padding({ left: Constants.TOKEN_SPACE_XL, right: Constants.TOKEN_SPACE_XL, top: Constants.TOKEN_SPACE_L, bottom: Constants.TOKEN_SPACE_XL })
         .alignItems(HorizontalAlign.Center)
       }
       .width('100%')
@@ -1045,23 +1050,23 @@ struct SettingsPage {
         if (this.playHistoryItems.length > 0) {
           Button('清空')
             .height(32)
-            .padding({ left: 12, right: 12 })
+            .padding({ left: Constants.TOKEN_SPACE_M, right: Constants.TOKEN_SPACE_M })
             .backgroundColor($r('app.color.card_background'))
             .fontColor($r('app.color.danger_red'))
-            .borderRadius(16)
-            .fontSize(12)
+            .borderRadius(Constants.TOKEN_RADIUS_L)
+            .fontSize(Constants.TOKEN_FONT_BODY_S)
             .onClick(() => {
               this.confirmClearPlayHistory();
             })
         }
       }
       .width('100%')
-      .padding({ left: 16, right: 16, top: 8, bottom: 8 })
+      .padding({ left: Constants.TOKEN_SPACE_L, right: Constants.TOKEN_SPACE_L, top: Constants.TOKEN_SPACE_S, bottom: Constants.TOKEN_SPACE_S })
 
       if (this.playHistoryItems.length === 0) {
         Column() {
           Text('暂无播放历史，听歌后会自动记录')
-            .fontSize(14)
+            .fontSize(Constants.TOKEN_FONT_BODY_M)
             .fontColor($r('app.color.text_secondary'))
             .margin({ top: 80 })
         }
@@ -1080,21 +1085,21 @@ struct SettingsPage {
 
                 Column() {
                   Text(item.title)
-                    .fontSize(14)
+                    .fontSize(Constants.TOKEN_FONT_BODY_M)
                     .fontColor($r('app.color.text_primary'))
                     .maxLines(1)
                     .textOverflow({ overflow: TextOverflow.Ellipsis })
                   Text(this.historyMetaText(item))
-                    .fontSize(11)
+                    .fontSize(Constants.TOKEN_FONT_AUX)
                     .fontColor($r('app.color.text_secondary'))
                     .margin({ top: 3 })
                 }
                 .alignItems(HorizontalAlign.Start)
                 .layoutWeight(1)
-                .margin({ left: 10 })
+                .margin({ left: Constants.TOKEN_SPACE_10 })
               }
               .width('100%')
-              .padding({ left: 16, right: 16, top: 10, bottom: 10 })
+              .padding({ left: Constants.TOKEN_SPACE_L, right: Constants.TOKEN_SPACE_L, top: Constants.TOKEN_SPACE_10, bottom: Constants.TOKEN_SPACE_10 })
               .onClick(() => {
                 this.replayHistory(item);
               })
@@ -1163,23 +1168,23 @@ struct SettingsPage {
         .fontWeight(FontWeight.Bold)
         .fontColor($r('app.color.text_primary'))
         .width('100%')
-        .padding({ left: 16, right: 16, top: 16, bottom: 8 })
+        .padding({ left: Constants.TOKEN_SPACE_L, right: Constants.TOKEN_SPACE_L, top: Constants.TOKEN_SPACE_L, bottom: Constants.TOKEN_SPACE_S })
 
       ForEach(this.qualityOptions(), (tier: QualityTier) => {
         Row() {
           Text(AudioQuality.label(tier))
-            .fontSize(15)
+            .fontSize(Constants.TOKEN_FONT_BODY_L)
             .fontColor(this.currentEditTier() === tier
-              ? this.accentColor : this.textPrimary())
+              ? this.accentColor.value : this.textPrimary())
             .layoutWeight(1)
           if (this.currentEditTier() === tier) {
             Text('✓')
-              .fontSize(15)
-              .fontColor(this.accentColor)
+              .fontSize(Constants.TOKEN_FONT_BODY_L)
+              .fontColor(this.accentColor.value)
           }
         }
         .width('100%')
-        .padding({ left: 16, right: 16, top: 13, bottom: 13 })
+        .padding({ left: Constants.TOKEN_SPACE_L, right: Constants.TOKEN_SPACE_L, top: 13, bottom: 13 })
         .onClick(() => {
           this.applyQualityTier(tier);
         })
@@ -1187,10 +1192,10 @@ struct SettingsPage {
 
       if (!this.isLogged) {
         Text('未登录时最高 64K，登录后可用更高音质')
-          .fontSize(12)
-          .fontColor(this.accentColor)
+          .fontSize(Constants.TOKEN_FONT_BODY_S)
+          .fontColor(this.accentColor.value)
           .width('100%')
-          .padding({ left: 16, right: 16, top: 8, bottom: 16 })
+          .padding({ left: Constants.TOKEN_SPACE_L, right: Constants.TOKEN_SPACE_L, top: Constants.TOKEN_SPACE_S, bottom: Constants.TOKEN_SPACE_L })
       }
     }
     .width('100%')
@@ -1203,12 +1208,12 @@ struct SettingsPage {
         Row() {
           Row() {
             SymbolGlyph($r('sys.symbol.chevron_left'))
-              .fontSize(22)
+              .fontSize(Constants.TOKEN_FONT_TITLE_L)
               .fontColor([$r('app.color.text_primary')])
           }
           .width(36)
           .height(36)
-          .borderRadius(18)
+          .borderRadius(Constants.TOKEN_RADIUS_18)
           .backgroundColor($r('app.color.card_background'))
           .justifyContent(FlexAlign.Center)
           .onClick(() => {
@@ -1216,15 +1221,15 @@ struct SettingsPage {
           })
 
           Text('设置')
-            .fontSize(24)
+            .fontSize(Constants.TOKEN_FONT_24)
             .fontWeight(FontWeight.Bold)
             .fontColor($r('app.color.text_primary'))
             .layoutWeight(1)
-            .margin({ left: 10 })
+            .margin({ left: Constants.TOKEN_SPACE_10 })
         }
         .width('100%')
         .alignItems(VerticalAlign.Center)
-        .padding({ left: 16, right: 16, top: 6, bottom: 10 })
+        .padding({ left: Constants.TOKEN_SPACE_L, right: Constants.TOKEN_SPACE_L, top: Constants.TOKEN_SPACE_6, bottom: Constants.TOKEN_SPACE_10 })
 
         Stack() {
           EdgeHint({ text: this.settingsTopHint, edge: 'top' })
@@ -1249,7 +1254,7 @@ struct SettingsPage {
                   this.loginControls()
                   Divider()
                     .color($r('app.color.track_color'))
-                    .margin({ left: 16, right: 16 })
+                    .margin({ left: Constants.TOKEN_SPACE_L, right: Constants.TOKEN_SPACE_L })
                   this.cookieBlock()
                 }
               }
@@ -1297,26 +1302,12 @@ struct SettingsPage {
                 })
                 if (!this.isLogged) {
                   Text('未登录时最高 64K，登录后可用更高音质')
-                    .fontSize(12)
-                    .fontColor(this.accentColor)
+                    .fontSize(Constants.TOKEN_FONT_BODY_S)
+                    .fontColor(this.accentColor.value)
                     .width('100%')
                     .textAlign(TextAlign.Start)
-                    .padding({ left: 16, right: 16, top: 4, bottom: 10 })
+                    .padding({ left: Constants.TOKEN_SPACE_L, right: Constants.TOKEN_SPACE_L, top: Constants.TOKEN_SPACE_XS, bottom: Constants.TOKEN_SPACE_10 })
                 }
-                SettingsRow({
-                  title: '无图模式',
-                  subtitle: '播放页、播放列表与系统播控均不显示封面与头像',
-                  showToggle: true,
-                  toggleOn: this.dataSaver,
-                  showDivider: true,
-                  toggleChange: (isOn: boolean): void => {
-                    this.dataSaver = isOn;
-                    AppStore.putNumber(Constants.KEY_DATA_SAVER, isOn ? 1 : 0);
-                    this.controller.refreshUi();
-                    // US5：开关切换即时刷新——对当前播放曲目重发一次系统播控元数据
-                    this.controller.refreshMediaSessionMetadata();
-                  }
-                })
                 SettingsRow({
                   title: '仅在 Wi-Fi 环境播放',
                   subtitle: '非 Wi-Fi 网络播放需手动确认',
@@ -1330,25 +1321,25 @@ struct SettingsPage {
               }
 
               SettingsGroup({ title: '外观' }) {
-                Row({ space: 8 }) {
+                Row({ space: Constants.TOKEN_SPACE_S }) {
                   this.appearanceOption('跟随系统', Appearance.MODE_FOLLOW_SYSTEM)
                   this.appearanceOption('浅色', Appearance.MODE_LIGHT)
                   this.appearanceOption('深色', Appearance.MODE_DARK)
                 }
                 .width('100%')
-                .padding({ left: 14, right: 14, top: 14, bottom: 14 })
+                .padding({ left: Constants.TOKEN_SPACE_14, right: Constants.TOKEN_SPACE_14, top: Constants.TOKEN_SPACE_14, bottom: Constants.TOKEN_SPACE_14 })
 
                 Divider()
                   .color($r('app.color.track_color'))
-                  .margin({ left: 16, right: 16 })
+                  .margin({ left: Constants.TOKEN_SPACE_L, right: Constants.TOKEN_SPACE_L })
 
-                Row({ space: 12 }) {
+                Row({ space: Constants.TOKEN_SPACE_M }) {
                   ForEach(Constants.ACCENT_PRESETS, (color: string) => {
                     this.accentSwatch(color)
                   }, (color: string) => color)
                 }
                 .width('100%')
-                .padding({ left: 14, right: 14, top: 12, bottom: 14 })
+                .padding({ left: Constants.TOKEN_SPACE_14, right: Constants.TOKEN_SPACE_14, top: Constants.TOKEN_SPACE_M, bottom: Constants.TOKEN_SPACE_14 })
               }
 
               SettingsGroup({ title: '通用' }) {
@@ -1385,23 +1376,26 @@ struct SettingsPage {
 
               if (this.statusMsg !== '') {
                 Text(this.statusMsg)
-                  .fontSize(13)
+                  .fontSize(Constants.TOKEN_FONT_BODY)
                   .fontColor($r('app.color.text_secondary'))
-                  .margin({ top: 16, bottom: 24 })
+                  .margin({ top: Constants.TOKEN_SPACE_L, bottom: Constants.TOKEN_SPACE_XL })
                   .textAlign(TextAlign.Center)
               }
             }
             .width('100%')
             .alignItems(HorizontalAlign.Start)
-            .padding({ left: 16, right: 16, top: 2,
-              bottom: (this.miniPlayerVisible ? Constants.MINI_PLAYER_CLEARANCE : 24) + this.navBarHeight })
+            .padding({ left: Constants.TOKEN_SPACE_L, right: Constants.TOKEN_SPACE_L, top: Constants.TOKEN_SPACE_XXS,
+              bottom: (this.miniPlayerVisible.value ? Constants.MINI_PLAYER_CLEARANCE : 24) + this.navBarHeight.value })
             // ponytail: about 的 bindSheet 挂外层根 Column 或内层链首位时在 API 24 平板打开即自动关闭；单挂内容容器（HEAD 版 logSheet 同款宿主）稳定
-            .bindSheet($$this.showAbout, this.aboutSheet(), {
+            .bindSheet(this.showAbout, this.aboutSheet(), {
               height: '75%',
               dragBar: true,
               showClose: false,
               backgroundColor: $r('app.color.page_background'),
-              preferType: SheetType.BOTTOM
+              preferType: SheetType.BOTTOM,
+              onDisappear: (): void => {
+                this.showAbout = false;
+              }
             })
           }
           .width('100%')
@@ -1438,23 +1432,29 @@ struct SettingsPage {
         }
         .width('100%')
         .layoutWeight(1)
-        .bindSheet($$this.showQualitySheet, this.qualitySheetPanel(), {
+        .bindSheet(this.showQualitySheet, this.qualitySheetPanel(), {
           height: '40%',
           dragBar: true,
           showClose: false,
           backgroundColor: $r('app.color.page_background'),
-          preferType: SheetType.BOTTOM
+          preferType: SheetType.BOTTOM,
+          onDisappear: (): void => {
+            this.showQualitySheet = false;
+          }
         })
       }
       .width('100%')
       .height('100%')
       .backgroundColor($r('app.color.page_background'))
-      .bindSheet($$this.showPlayHistory, this.playHistoryPanel(), {
+      .bindSheet(this.showPlayHistory.value, this.playHistoryPanel(), {
         height: '62%',
         dragBar: true,
         showClose: false,
         backgroundColor: $r('app.color.page_background'),
         preferType: SheetType.BOTTOM,
+        onDisappear: (): void => {
+          this.showPlayHistory.value = false;
+        },
         onWillDismiss: (dismiss: DismissSheetAction) => {
           // US6：面板内下拉不关闭（只留蒙层点击/系统返回/清空按钮等其余关闭路径）
           if (dismiss.reason === DismissReason.SLIDE_DOWN) {
@@ -1467,11 +1467,11 @@ struct SettingsPage {
     .hideTitleBar(true)
     .onWillAppear(() => {
       // US7/T021：设置页在台标志提前到转场开始时置位——驱动首页播放胶囊在本页隐藏
-      AppStorage.setOrCreate<boolean>(Constants.AS_ON_SETTINGS_PAGE, true);
+      connectBool(Constants.AS_ON_SETTINGS_PAGE, false).value = true;
     })
     .onWillDisappear(() => {
       // US7/T021：返回转场开始即复位，配合 Index 侧胶囊显隐动画随转场即时平滑出现
-      AppStorage.setOrCreate<boolean>(Constants.AS_ON_SETTINGS_PAGE, false);
+      connectBool(Constants.AS_ON_SETTINGS_PAGE, false).value = false;
     })
     .onShown(() => {
       // US5：日志页返回后刷新角标计数——pushPathByName 的 onPop 仅在 pop(result) 带 result 时触发，
@@ -1496,17 +1496,17 @@ struct SettingsPage {
         return true;
       }
       // US4：与 Index.onBackPress 同构——浮层与历史面板同开时先关面板，再按才关浮层
-      const overlayOpen: boolean = AppStorage.get<boolean>(Constants.AS_SHOW_PLAYER_OVERLAY) === true;
-      if (overlayOpen && this.showPlayHistory) {
-        this.showPlayHistory = false;
+      const overlayOpen: boolean = connectBool(Constants.AS_SHOW_PLAYER_OVERLAY, false).value;
+      if (overlayOpen && this.showPlayHistory.value) {
+        this.showPlayHistory.value = false;
         return true;
       }
       if (overlayOpen) {
-        AppStorage.setOrCreate<boolean>(Constants.AS_SHOW_PLAYER_OVERLAY, false);
+        connectBool(Constants.AS_SHOW_PLAYER_OVERLAY, false).value = false;
         return true;
       }
-      if (this.showPlayHistory) {
-        this.showPlayHistory = false;
+      if (this.showPlayHistory.value) {
+        this.showPlayHistory.value = false;
         return true;
       }
       return false;

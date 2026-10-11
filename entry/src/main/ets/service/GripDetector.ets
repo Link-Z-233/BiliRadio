@@ -1,5 +1,6 @@
 import { motion } from '@kit.MultimodalAwarenessKit';
 import { Constants } from './Constants';
+import { connectBool } from './V2State';
 
 const LEFT_ZONE_MAX_RATIO: number = 0.4;
 const RIGHT_ZONE_MIN_RATIO: number = 0.6;
@@ -26,8 +27,7 @@ export class GripDetector {
     };
 
   static isRightHanded(): boolean {
-    const stored: boolean | undefined = AppStorage.get<boolean>(Constants.AS_GRIP_ON_RIGHT);
-    return stored !== undefined ? stored : true;
+    return connectBool(Constants.AS_GRIP_ON_RIGHT, true).value;
   }
 
   static start(): void {
@@ -101,7 +101,7 @@ export class GripDetector {
     }
     const votes: number = onRight ? GripDetector.rightVotes : GripDetector.leftVotes;
     if (votes >= SWITCH_VOTE_COUNT) {
-      AppStorage.setOrCreate(Constants.AS_GRIP_ON_RIGHT, onRight);
+      connectBool(Constants.AS_GRIP_ON_RIGHT, true).value = onRight;
     }
   }
 
@@ -135,7 +135,7 @@ export class GripDetector {
 
   private static applySide(onRight: boolean): void {
     if (GripDetector.isRightHanded() !== onRight) {
-      AppStorage.setOrCreate(Constants.AS_GRIP_ON_RIGHT, onRight);
+      connectBool(Constants.AS_GRIP_ON_RIGHT, true).value = onRight;
     }
   }
 }

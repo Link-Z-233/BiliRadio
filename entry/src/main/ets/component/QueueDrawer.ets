@@ -1,3 +1,5 @@
+import { Constants } from '../service/Constants';
+import { connectBool, BoolState } from '../service/V2State';
 import { QueueSheet } from './QueueSheet';
 
 // 抽屉滑入/滑出动画时长（ms）：与遮罩 OPACITY 过渡一致；关闭延时比动画略长，保证滑出完整
@@ -8,15 +10,16 @@ const DRAWER_CLOSE_DELAY_MS: number = 260;
 // 进出场由挂载时 animateTo 驱动的显式位移状态实现（US1：TransitionEffect.translate
 // 在 API 24 平板 zIndex 失效场景下表现不可靠，改为状态驱动保证全平台一致）；遮罩保留 OPACITY 过渡。
 // 仅负责“打开态”绘制，挂载到哪一图层（Index 内容层 / PlayerOverlay 播放层）由调用方决定。
-@Component
+@ComponentV2
 export struct QueueDrawer {
-  @StorageLink('showQueueSheet') showQueueSheet: boolean = false; // key 与 Constants.AS_SHOW_QUEUE_SHEET 对应
+  @Local showQueueSheet: BoolState = connectBool(Constants.AS_SHOW_QUEUE_SHEET, false);
   // 面板垂直位移：进场 '100%'（屏幕底部外）动画至 '0%'，退出反向；translate 百分比相对面板自身高度
-  @State panelOffsetY: string = '100%';
+  @Local panelOffsetY: string = '100%';
   // US7/T023：关闭句柄注册回调——aboutToAppear 时向宿主上报 closeWithSlide（返回键路径复用滑出动画），
   // aboutToDisappear 时上报 undefined 注销；未注册的宿主（PlayerOverlay 内实例）保持既有行为
-  onRegisterClose: (close: (() => void) | undefined) => void = (close: (() => void) | undefined): void => {
-  };
+  @Param onRegisterClose: (close: (() => void) | undefined) => void =
+    (close: (() => void) | undefined): void => {
+    };
   private closing: boolean = false;
   private closeTimer: number = -1;
 
@@ -52,7 +55,7 @@ export struct QueueDrawer {
     }
     this.closeTimer = setTimeout((): void => {
       this.closeTimer = -1;
-      this.showQueueSheet = false;
+      this.showQueueSheet.value = false;
     }, DRAWER_CLOSE_DELAY_MS);
   }
 
@@ -77,7 +80,7 @@ export struct QueueDrawer {
       .height('65%')
       .backgroundColor($r('app.color.queue_panel_background'))
       .backdropBlur(20)
-      .borderRadius({ topLeft: 16, topRight: 16 })
+      .borderRadius({ topLeft: Constants.TOKEN_RADIUS_L, topRight: Constants.TOKEN_RADIUS_L })
       .clip(true)
       .translate({ y: this.panelOffsetY })
     }

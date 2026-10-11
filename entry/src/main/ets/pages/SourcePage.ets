@@ -8,6 +8,7 @@ import { AppStore } from '../service/AppStore';
 import { PlayHistoryItem } from '../model/PlayHistoryItem';
 import { PlayerController, EnqueueResult } from '../service/PlayerController';
 import { Constants } from '../service/Constants';
+import { connectBool, connectNum, connectStr, BoolState, NumState, StrState } from '../service/V2State';
 import { CoverThumb } from '../component/CoverThumb';
 import { EdgeHint } from '../component/EdgeHint';
 
@@ -49,20 +50,22 @@ export function SourcePageBuilder() {
 
 // 源详情：剧集列表（新在上）/ NEW 徽标 / 已播标记 / 播放全部 / 刷新 / 取消订阅
 // 四类订阅（UP/收藏夹/合集/系列）统一支持触底「加载更早」（按需翻页，只进内存不写缓存）
-@Component
+@ComponentV2
 struct SourcePage {
-  @StorageProp('accentColor') accentColor: string = Constants.ACCENT_DEFAULT;
-  @StorageProp('miniPlayerVisible') miniPlayerVisible: boolean = false; // key 与 Constants.AS_MINI_PLAYER_VISIBLE 对应
-  @StorageProp('navBarHeight') navBarHeight: number = 0; // key 与 Constants.AS_NAV_BAR_HEIGHT 对应
-  @State navTitle: string = '';
-  @State episodes: BiliVideo[] = [];      // 展示序：倒序（新在上，与缓存一致）
-  @State refreshing: boolean = false;
-  @State canLoadOlder: boolean = false;
-  @State loadingOlder: boolean = false;
-  @State episodeCount: number = 0;
+  @Local accentColor: StrState =
+    connectStr(Constants.AS_ACCENT_COLOR, Constants.ACCENT_DEFAULT);
+  @Local miniPlayerVisible: BoolState =
+    connectBool(Constants.AS_MINI_PLAYER_VISIBLE, true);
+  @Local navBarHeight: NumState = connectNum(Constants.AS_NAV_BAR_HEIGHT, 0);
+  @Local navTitle: string = '';
+  @Local episodes: BiliVideo[] = [];      // 展示序：倒序（新在上，与缓存一致）
+  @Local refreshing: boolean = false;
+  @Local canLoadOlder: boolean = false;
+  @Local loadingOlder: boolean = false;
+  @Local episodeCount: number = 0;
   // US5 过冲提示：顶部固定文案，底部与触底加载联动三态
-  @State topHint: string = '';
-  @State bottomHint: string = '';
+  @Local topHint: string = '';
+  @Local bottomHint: string = '';
   private seenBefore: number = 0;         // 进入时的 lastSeenAt，NEW 徽标基准
   private olderPage: number = 1;          // 已加载的最大页号（sortReverse 语义）
   private olderFailAt: number = 0;        // 加载更早失败时间戳：冷却期内禁止重试（US2）
@@ -128,7 +131,13 @@ struct SourcePage {
 
   // 各类型翻页接口的单页大小（FAV 不走此门槛/终止规则，见 loadFromCache/loadOlder）
   private olderPageSize(): number {
-    return this.sub.type === Subscription.TYPE_SEASON ? 20 : 30;
+    if (this.sub.type === Subscription.TYPE_UP) {
+      return Constants.UP_PAGE_SIZE;
+    }
+    if (this.sub.type === Subscription.TYPE_SEASON) {
+      return Constants.SEASON_PAGE_SIZE;
+    }
+    return 30;
   }
 
   private markSeen(): void {
@@ -265,7 +274,7 @@ struct SourcePage {
   }
 
   // UP 触底翻页：APP 签名链 cursor 优先（aid=当前列表末条），失败或无游标降级 Web 链。
-  // Web 起始页按当前列表长度对齐 ps=30 页界推算，upWebLastPage 兜底（全重复页也能前进，防死循环）
+  // Web 起始页按当前列表长度对齐 ps=UP_PAGE_SIZE 页界推算，upWebLastPage 兜底（全重复页也能前进，防死循环）
   // 无游标（进程重启+TTL 内跳过刷新）时先用 APP 主干重建游标再续翻 older；重建后仍无游标才降级 Web
   private fetchUpOlderPage(rebuilt: boolean = false): Promise<BiliVideo[]> {
     const mid: number = this.sub.sourceId;
@@ -354,53 +363,53 @@ struct SourcePage {
           CoverThumb({ cover: this.sub.cover, thumbSize: 56, radius: 14 })
           Column() {
             Text(this.subtitle())
-              .fontSize(13)
+              .fontSize(Constants.TOKEN_FONT_BODY)
               .fontColor($r('app.color.text_secondary'))
               .maxLines(1)
               .textOverflow({ overflow: TextOverflow.Ellipsis })
             Text(`${this.episodeCount} 集`)
-              .fontSize(12)
+              .fontSize(Constants.TOKEN_FONT_BODY_S)
               .fontColor($r('app.color.text_disabled'))
               .margin({ top: 3 })
           }
           .alignItems(HorizontalAlign.Start)
           .layoutWeight(1)
-          .margin({ left: 12, right: 8 })
+          .margin({ left: Constants.TOKEN_SPACE_M, right: Constants.TOKEN_SPACE_S })
           if (this.refreshing) {
             LoadingProgress()
               .width(22)
               .height(22)
-              .color(this.accentColor)
+              .color(this.accentColor.value)
           } else {
             SymbolGlyph($r('sys.symbol.arrow_clockwise'))
-              .fontSize(20)
+              .fontSize(Constants.TOKEN_FONT_20)
               .fontColor([$r('app.color.text_primary')])
               .onClick(() => {
                 this.refreshSource();
               })
           }
           SymbolGlyph($r('sys.symbol.trash'))
-            .fontSize(20)
+            .fontSize(Constants.TOKEN_FONT_20)
             .fontColor([$r('app.color.text_secondary')])
-            .margin({ left: 16 })
+            .margin({ left: Constants.TOKEN_SPACE_L })
             .onClick(() => {
               this.unsubscribe();
             })
         }
         .width('100%')
-        .padding({ left: 16, right: 16, top: 4, bottom: 10 })
+        .padding({ left: Constants.TOKEN_SPACE_L, right: Constants.TOKEN_SPACE_L, top: Constants.TOKEN_SPACE_XS, bottom: Constants.TOKEN_SPACE_10 })
 
         if (this.episodeCount > 0) {
           Row() {
             Text('播放全部')
-              .fontSize(14)
+              .fontSize(Constants.TOKEN_FONT_BODY_M)
               .fontWeight(FontWeight.Medium)
-              .fontColor(this.accentColor)
+              .fontColor(this.accentColor.value)
           }
-          .padding({ left: 14, right: 14, top: 7, bottom: 7 })
-          .borderRadius(16)
+          .padding({ left: Constants.TOKEN_SPACE_14, right: Constants.TOKEN_SPACE_14, top: 7, bottom: 7 })
+          .borderRadius(Constants.TOKEN_RADIUS_L)
           .backgroundColor($r('app.color.card_background'))
-          .margin({ left: 16, bottom: 8 })
+          .margin({ left: Constants.TOKEN_SPACE_L, bottom: Constants.TOKEN_SPACE_S })
           .onClick(() => {
             this.playAll();
           })
@@ -409,7 +418,7 @@ struct SourcePage {
         if (this.episodeCount === 0) {
           Column() {
             Text('暂无节目')
-              .fontSize(15)
+              .fontSize(Constants.TOKEN_FONT_BODY_L)
               .fontColor($r('app.color.text_secondary'))
           }
           .width('100%')
@@ -424,41 +433,41 @@ struct SourcePage {
               ListItem() {
                 Column() {
                   Text(item.title)
-                    .fontSize(15)
+                    .fontSize(Constants.TOKEN_FONT_BODY_L)
                     .fontColor($r('app.color.text_primary'))
                     .maxLines(2)
                     .textOverflow({ overflow: TextOverflow.Ellipsis })
                   Row() {
                     Text(formatDate(item.pubdate))
-                      .fontSize(12)
+                      .fontSize(Constants.TOKEN_FONT_BODY_S)
                       .fontColor($r('app.color.text_disabled'))
                     if (item.duration > 0) {
                       Text(formatDuration(item.duration))
-                        .fontSize(12)
+                        .fontSize(Constants.TOKEN_FONT_BODY_S)
                         .fontColor($r('app.color.text_disabled'))
-                        .margin({ left: 10 })
+                        .margin({ left: Constants.TOKEN_SPACE_10 })
                     }
                     Blank()
                     if (this.isNew(item)) {
                       Text('NEW')
-                        .fontSize(11)
+                        .fontSize(Constants.TOKEN_FONT_AUX)
                         .fontWeight(FontWeight.Bold)
-                        .fontColor(this.accentColor)
+                        .fontColor(this.accentColor.value)
                     }
                     if (this.isPlayed(item)) {
                       SymbolGlyph($r('sys.symbol.checkmark_circle'))
-                        .fontSize(16)
+                        .fontSize(Constants.TOKEN_FONT_TITLE)
                         .fontColor([$r('app.color.success_green')])
                         .margin({ left: this.isNew(item) ? 8 : 0 })
                     }
                   }
                   .width('100%')
-                  .margin({ top: 4 })
+                  .margin({ top: Constants.TOKEN_SPACE_XS })
                 }
                 .width('100%')
                 .alignItems(HorizontalAlign.Start)
-                .padding({ left: 12, right: 12, top: 10, bottom: 10 })
-                .borderRadius(14)
+                .padding({ left: Constants.TOKEN_SPACE_M, right: Constants.TOKEN_SPACE_M, top: Constants.TOKEN_SPACE_10, bottom: Constants.TOKEN_SPACE_10 })
+                .borderRadius(Constants.TOKEN_RADIUS_14)
                 .backgroundColor($r('app.color.card_background'))
                 .onClick(() => {
                   this.playEpisode(index);
@@ -473,29 +482,29 @@ struct SourcePage {
                     .height(18)
                     .color($r('app.color.text_secondary'))
                   Text('加载中...')
-                    .fontSize(13)
+                    .fontSize(Constants.TOKEN_FONT_BODY)
                     .fontColor($r('app.color.text_secondary'))
-                    .margin({ left: 6 })
+                    .margin({ left: Constants.TOKEN_SPACE_6 })
                 }
                 .width('100%')
                 .justifyContent(FlexAlign.Center)
-                .padding({ top: 6, bottom: 6 })
+                .padding({ top: Constants.TOKEN_SPACE_6, bottom: Constants.TOKEN_SPACE_6 })
               }
             }
             if (!this.canLoadOlder) {
               ListItem() {
                 Text('没有更多了')
-                  .fontSize(13)
+                  .fontSize(Constants.TOKEN_FONT_BODY)
                   .fontColor($r('app.color.text_disabled'))
                   .width('100%')
                   .textAlign(TextAlign.Center)
-                  .padding({ top: 6, bottom: 6 })
+                  .padding({ top: Constants.TOKEN_SPACE_6, bottom: Constants.TOKEN_SPACE_6 })
               }
             }
             }
             .width('100%')
             .height('100%')
-            .padding({ left: 12, right: 12, top: 4, bottom: (this.miniPlayerVisible ? Constants.MINI_PLAYER_CLEARANCE : 12) + this.navBarHeight })
+            .padding({ left: Constants.TOKEN_SPACE_M, right: Constants.TOKEN_SPACE_M, top: Constants.TOKEN_SPACE_XS, bottom: (this.miniPlayerVisible.value ? Constants.MINI_PLAYER_CLEARANCE : 12) + this.navBarHeight.value })
             .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
             .onWillStartDragging(() => {
               this.dragging = true;
@@ -564,7 +573,7 @@ struct SourcePage {
       // US4/FR-008：源页退出（标题栏返回/系统返回/退订 pop 均触发 onHidden）通知首页重算——
       // pushPathByName 的 onPop 仅在 pop(result) 带 result 时才触发（SDK 语义），本应用全部
       // 无参 pop() 故永不回调，徽标返回首页不清除；改经 AppStorage tick 驱动 HomePage @Watch 重建
-      AppStorage.setOrCreate<number>(Constants.AS_HOME_REFRESH_TICK, Date.now());
+      connectNum(Constants.AS_HOME_REFRESH_TICK, 0).value = Date.now();
     })
   }
 }

@@ -3,7 +3,6 @@ import { BiliVideo } from '../model/BiliVideo';
 import { common, Want } from '@kit.AbilityKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { AppStore } from '../service/AppStore';
 import { BiliService } from '../service/BiliService';
 import { Constants } from '../service/Constants';
 import { CoverUrl } from '../service/CoverUrl';
@@ -11,6 +10,7 @@ import { Appearance } from '../service/Appearance';
 import { SleepTimerController } from '../service/SleepTimerController';
 import { QueueDrawer } from '../component/QueueDrawer';
 import { AudioTrack, AudioQuality } from '../model/AudioQuality';
+import { connectBool, connectNum, connectStr, BoolState, NumState, StrState } from '../service/V2State';
 
 // 颜色全部使用 base/dark 双份颜色资源：浅色/深色外观下自动匹配（见 resources/base|dark/element/color.json）
 
@@ -24,62 +24,63 @@ const PLAYER_DISMISS_SWIPE: number = 80;
 
 // ±15s 进度微调步长已收敛至 Constants.SEEK_STEP_MS（全库唯一常量点，与播控中心共用）
 
-@Component
+@ComponentV2
 export struct PlayerOverlay {
-  @State isPlaying: boolean = false;
-  @State isPrepared: boolean = false;
-  @State isPreparing: boolean = false;
-  @State playWhenReady: boolean = true;
-  @State currentTime: number = 0;
-  @State duration: number = 0;
+  @Local isPlaying: boolean = false;
+  @Local isPrepared: boolean = false;
+  @Local isPreparing: boolean = false;
+  @Local playWhenReady: boolean = true;
+  @Local currentTime: number = 0;
+  @Local duration: number = 0;
   // 进度条受控值：拖动时实时跟随手指，松开才真正 seek，避免受控值回弹导致拖不动
-  @State sliderValue: number = 0;
-  @State isSeeking: boolean = false;
-  @State statusMsg: string = '';
-  @State trackTitle: string = '未在播放';
-  @State trackCover: string = '';
-  @State ownerName: string = '';
-  @State ownerFace: string = '';
-  @State playMode: MusicPlayMode = MusicPlayMode.SEQUENTIAL;
-  @State playbackRate: number = 1.0;
-  @StorageLink('showSpeed') showSpeed: boolean = false; // key 与 Constants.AS_SHOW_SPEED 对应
-  @StorageLink('showMode') showMode: boolean = false; // key 与 Constants.AS_SHOW_MODE 对应
-  @StorageLink('showSleepTimer') showSleepTimer: boolean = false; // key 与 Constants.AS_SHOW_SLEEP_TIMER 对应
-  @StorageLink('showSleepTimerPicker') showSleepTimerPicker: boolean = false; // key 与 Constants.AS_SHOW_SLEEP_TIMER_PICKER 对应
-  @StorageLink('showQueueSheet') showQueueSheet: boolean = false; // key 与 Constants.AS_SHOW_QUEUE_SHEET 对应
-  // 浮层显示标志（KI-5，key 与 Constants.AS_SHOW_PLAYER_OVERLAY 对应）：与 Index 树内条件渲染的
-  // 显隐同源；任何关闭路径先将该标志置 false，随后组件卸载触发 aboutToDisappear
-  @StorageLink('showPlayerOverlay') showOverlayActive: boolean = false;
-  @StorageProp('statusBarHeight') statusBarHeight: number = 38; // key 与 Constants.AS_STATUS_BAR_HEIGHT 对应
-  @StorageProp('navBarHeight') navBarHeight: number = 0; // key 与 Constants.AS_NAV_BAR_HEIGHT 对应
-  // 主题色（key 与 Constants.AS_ACCENT_COLOR 对应）：全部着色点运行时跟随，衍生色经 Appearance.hexWithAlpha 计算
-  @StorageProp('accentColor') accentColor: string = Constants.ACCENT_DEFAULT;
-  // 生效深浅色（1=浅色 2=深色，key 与 Constants.AS_COLOR_MODE_RESOLVED 对应）：驱动深浅色差异化 alpha
-  @StorageProp('colorModeResolved') colorModeResolved: number = 1;
+  @Local sliderValue: number = 0;
+  @Local isSeeking: boolean = false;
+  @Local statusMsg: string = '';
+  @Local trackTitle: string = '未在播放';
+  @Local trackCover: string = '';
+  @Local ownerName: string = '';
+  @Local ownerFace: string = '';
+  @Local playMode: MusicPlayMode = MusicPlayMode.SEQUENTIAL;
+  @Local playbackRate: number = 1.0;
+  @Local showSpeed: BoolState = connectBool(Constants.AS_SHOW_SPEED, false);
+  @Local showMode: BoolState = connectBool(Constants.AS_SHOW_MODE, false);
+  @Local showSleepTimer: BoolState = connectBool(Constants.AS_SHOW_SLEEP_TIMER, false);
+  @Local showSleepTimerPicker: BoolState = connectBool(Constants.AS_SHOW_SLEEP_TIMER_PICKER, false);
+  @Local showQueueSheet: BoolState = connectBool(Constants.AS_SHOW_QUEUE_SHEET, false);
+  // 浮层显示标志（KI-5）：与 Index 树内条件渲染的显隐同源；
+  // 任何关闭路径先将该标志置 false，随后组件卸载触发 aboutToDisappear
+  @Local showOverlayActive: BoolState = connectBool(Constants.AS_SHOW_PLAYER_OVERLAY, false);
+  @Local statusBarHeight: NumState = connectNum(Constants.AS_STATUS_BAR_HEIGHT, 38);
+  @Local navBarHeight: NumState = connectNum(Constants.AS_NAV_BAR_HEIGHT, 0);
+  // 主题色：全部着色点运行时跟随，衍生色经 Appearance.hexWithAlpha 计算
+  @Local accentColor: StrState =
+    connectStr(Constants.AS_ACCENT_COLOR, Constants.ACCENT_DEFAULT);
+  // 生效深浅色（1=浅色 2=深色）：驱动深浅色差异化 alpha
+  @Local colorModeResolved: NumState = connectNum(Constants.AS_COLOR_MODE_RESOLVED, 1);
 
-  @State glowStrength: number = GLOW_IDLE;
-  @State playBtnScale: number = 1;
-  @State prevBtnScale: number = 1;
-  @State nextBtnScale: number = 1;
-  @State trackIndex: number = -1;
-  @State playlistCount: number = 0;
-  @State showDetail: boolean = false;
+  @Local glowStrength: number = GLOW_IDLE;
+  @Local playBtnScale: number = 1;
+  @Local prevBtnScale: number = 1;
+  @Local nextBtnScale: number = 1;
+  @Local trackIndex: number = -1;
+  @Local playlistCount: number = 0;
+  @Local showDetail: boolean = false;
   // 详情箭头指向（T011）：独立于 showDetail，sheet 任何关闭路径即时翻转
-  @State detailArrowUp: boolean = false;
-  @State sleepTimerActive: boolean = false;
+  @Local detailArrowUp: boolean = false;
+  @Local sleepTimerActive: boolean = false;
   // 播完暂停模式（queue-redesign US3）：激活时 timer 入口仅图标高亮，不显示剩余数字
-  @State sleepTimerPlayToEof: boolean = false;
-  @State sleepTimerRemaining: number = 0;
-  @State pickerHour: number = 0;
-  @State pickerMinute: number = 0;
-  @State trackView: number = 0;
-  @State trackPubdate: number = 0;
-  @State trackDesc: string = '';
+  @Local sleepTimerPlayToEof: boolean = false;
+  @Local sleepTimerRemaining: number = 0;
+  @Local pickerHour: number = 0;
+  @Local pickerMinute: number = 0;
+  @Local trackView: number = 0;
+  @Local trackPubdate: number = 0;
+  @Local trackDesc: string = '';
   // 音质面板镜像（audio-quality-settings US3）：syncFrom 增量同步 controller 公开音质状态
-  @State showQuality: boolean = false;
-  @State availableTracks: AudioTrack[] = [];
-  @State currentQualityCode: number = 0;
-  @State currentTrackSource: string = '';
+  @Local showQuality: boolean = false;
+  @Local availableTracks: AudioTrack[] = [];
+  @Local currentQualityCode: number = 0;
+  @Local currentTrackSource: string = '';
   private trackBvid: string = '';
   private wasPlaying: boolean = false;
   // 简介懒加载（T014）：进行中标志防并发；已尝试的 bvid 防重复请求
@@ -104,17 +105,17 @@ export struct PlayerOverlay {
   // ===== 主题色衍生取色（T006）：alpha 沿用 base/dark 资源键原有取值 =====
 
   private isDarkMode(): boolean {
-    return this.colorModeResolved === 2;
+    return this.colorModeResolved.value === 2;
   }
 
   // 播放键底色/面板选中底色：主题色 + material_tint_primary 原 alpha（0x59 ≈ 0.349，深浅色同值）
   private tintBg(): string {
-    return Appearance.hexWithAlpha(this.accentColor, 0.349);
+    return Appearance.hexWithAlpha(this.accentColor.value, 0.349);
   }
 
   // 播放键阴影：主题色 + shadow_play 原 alpha（浅色 0x8C ≈ 0.549 / 深色 0x73 ≈ 0.451）
   private playBtnShadowColor(): string {
-    return Appearance.hexWithAlpha(this.accentColor, this.isDarkMode() ? 0.451 : 0.549);
+    return Appearance.hexWithAlpha(this.accentColor.value, this.isDarkMode() ? 0.451 : 0.549);
   }
 
   // ===== 播放按钮尺寸同源（US1）：按钮直径为唯一尺寸源，缓冲加载指示尺寸由此派生 =====
@@ -123,10 +124,10 @@ export struct PlayerOverlay {
   private haloColors(): Array<[ResourceColor, number]> {
     const alphas: number[] = this.isDarkMode() ? [0.4, 0.161, 0.051, 0] : [0.502, 0.239, 0.078, 0];
     const colors: Array<[ResourceColor, number]> = [
-      [Appearance.hexWithAlpha(this.accentColor, alphas[0]), 0],
-      [Appearance.hexWithAlpha(this.accentColor, alphas[1]), 0.45],
-      [Appearance.hexWithAlpha(this.accentColor, alphas[2]), 0.75],
-      [Appearance.hexWithAlpha(this.accentColor, alphas[3]), 1]
+      [Appearance.hexWithAlpha(this.accentColor.value, alphas[0]), 0],
+      [Appearance.hexWithAlpha(this.accentColor.value, alphas[1]), 0.45],
+      [Appearance.hexWithAlpha(this.accentColor.value, alphas[2]), 0.75],
+      [Appearance.hexWithAlpha(this.accentColor.value, alphas[3]), 1]
     ];
     return colors;
   }
@@ -165,7 +166,7 @@ export struct PlayerOverlay {
     // 此时必须跳过退订，监听器保活才能继续接收 emitUi，否则 @State 冻结在挂载快照、按钮 UI 不再刷新。
     // 真关闭时 $$ 双向绑定先将 showOverlayActive 置 false，走到这里的退订才是真销毁；
     // 若真销毁时序反了（先回调后翻转），漏退订的旧监听器由 subscribe 的同 owner 单槽覆盖兜底清理。
-    if (this.showOverlayActive) {
+    if (this.showOverlayActive.value) {
       // KI-5 诊断：API 24 上该伪回调若持续出现且渲染仍冻结，
       // 则需放弃 bindContentCover（ModalPage）改用树内条件渲染承载播放层
       hilog.info(Constants.LOG_DOMAIN, Constants.LOG_TAG,
@@ -283,15 +284,14 @@ export struct PlayerOverlay {
     this.playlistCount = c.playlist.length;
     if (c.currentIndex >= 0 && c.currentIndex < c.playlist.length) {
       const item: BiliVideo = c.playlist[c.currentIndex];
-      const dataSaver: boolean = AppStore.getNumber(Constants.KEY_DATA_SAVER, 0) === 1;
       // US6：大封面按显示尺寸取图，非 Wi-Fi 降省流档（UP 头像保持原图，不参与取档）
       const wifi: boolean = c.isWifiNow();
       const coverW: number = wifi ? Constants.COVER_BIG_W : Constants.COVER_SAVER_W;
       const coverH: number = wifi ? Constants.COVER_BIG_H : Constants.COVER_SAVER_H;
       this.trackTitle = item.title;
-      this.trackCover = dataSaver ? '' : CoverUrl.sized(item.cover, coverW, coverH);
+      this.trackCover = CoverUrl.sized(item.cover, coverW, coverH);
       this.ownerName = item.ownerName;
-      this.ownerFace = dataSaver ? '' : item.ownerFace;
+      this.ownerFace = item.ownerFace;
       this.trackBvid = item.bvid;
       this.trackIndex = c.currentIndex;
       this.trackView = item.view;
@@ -418,10 +418,10 @@ export struct PlayerOverlay {
     Column() {
       Column() {
         Text('播放倍速')
-          .fontSize(16)
+          .fontSize(Constants.TOKEN_FONT_TITLE)
           .fontWeight(FontWeight.Bold)
           .fontColor($r('app.color.text_primary'))
-          .margin({ bottom: 14 })
+          .margin({ bottom: Constants.TOKEN_SPACE_14 })
 
         Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Center }) {
           ForEach(PLAYBACK_RATES, (rate: number) => {
@@ -431,20 +431,20 @@ export struct PlayerOverlay {
               .backgroundColor(rate === this.playbackRate ? this.tintBg() : $r('app.color.btn_glass'))
               .backdropBlur(20)
               .fontColor(rate === this.playbackRate ? $r('app.color.text_primary') : this.textPrimary())
-              .borderRadius(20)
-              .fontSize(14)
-              .margin(4)
+              .borderRadius(Constants.TOKEN_RADIUS_XL)
+              .fontSize(Constants.TOKEN_FONT_BODY_M)
+              .margin(Constants.TOKEN_SPACE_XS)
               .onClick(() => {
                 this.controller.setPlaybackRate(rate);
-                this.showSpeed = false;
+                this.showSpeed.value = false;
               })
           }, (rate: number) => rate.toString())
         }
         .width('100%')
       }
       .width('76%')
-      .padding(20)
-      .borderRadius(16)
+      .padding(Constants.TOKEN_SPACE_20)
+      .borderRadius(Constants.TOKEN_RADIUS_L)
       .backgroundColor($r('app.color.page_background'))
     }
     .width('100%')
@@ -454,7 +454,7 @@ export struct PlayerOverlay {
     .backgroundColor($r('app.color.mask_heavy'))
     .transition(TransitionEffect.OPACITY.animation({ duration: 200 }))
     .onClick(() => {
-      this.showSpeed = false;
+      this.showSpeed.value = false;
     })
   }
 
@@ -463,10 +463,10 @@ export struct PlayerOverlay {
     Column() {
       Column() {
         Text('播放顺序')
-          .fontSize(16)
+          .fontSize(Constants.TOKEN_FONT_TITLE)
           .fontWeight(FontWeight.Bold)
           .fontColor($r('app.color.text_primary'))
-          .margin({ bottom: 14 })
+          .margin({ bottom: Constants.TOKEN_SPACE_14 })
 
         Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Center }) {
           ForEach(PLAY_MODES, (mode: MusicPlayMode) => {
@@ -476,20 +476,20 @@ export struct PlayerOverlay {
               .backgroundColor(mode === this.playMode ? this.tintBg() : $r('app.color.btn_glass'))
               .backdropBlur(20)
               .fontColor(mode === this.playMode ? $r('app.color.text_primary') : this.textPrimary())
-              .borderRadius(20)
-              .fontSize(14)
-              .margin(6)
+              .borderRadius(Constants.TOKEN_RADIUS_XL)
+              .fontSize(Constants.TOKEN_FONT_BODY_M)
+              .margin(Constants.TOKEN_SPACE_6)
               .onClick(() => {
                 this.controller.setPlayMode(mode);
-                this.showMode = false;
+                this.showMode.value = false;
               })
           }, (mode: MusicPlayMode) => `${mode}`)
         }
         .width('100%')
       }
       .width('76%')
-      .padding(20)
-      .borderRadius(16)
+      .padding(Constants.TOKEN_SPACE_20)
+      .borderRadius(Constants.TOKEN_RADIUS_L)
       .backgroundColor($r('app.color.page_background'))
     }
     .width('100%')
@@ -498,7 +498,7 @@ export struct PlayerOverlay {
     .backgroundColor($r('app.color.mask_heavy'))
     .transition(TransitionEffect.OPACITY.animation({ duration: 200 }))
     .onClick(() => {
-      this.showMode = false;
+      this.showMode.value = false;
     })
   }
 
@@ -507,17 +507,17 @@ export struct PlayerOverlay {
     Column() {
       Column() {
         Text('定时关闭')
-          .fontSize(16)
+          .fontSize(Constants.TOKEN_FONT_TITLE)
           .fontWeight(FontWeight.Bold)
           .fontColor($r('app.color.text_primary'))
-          .margin({ bottom: 10 })
+          .margin({ bottom: Constants.TOKEN_SPACE_10 })
 
         Text('设置计时结束后，将暂停播放并提醒')
-          .fontSize(13)
+          .fontSize(Constants.TOKEN_FONT_BODY)
           .fontColor($r('app.color.text_secondary'))
           .textAlign(TextAlign.Center)
           .width('100%')
-          .margin({ bottom: 14 })
+          .margin({ bottom: Constants.TOKEN_SPACE_14 })
 
         Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Center }) {
           ForEach(Constants.SLEEP_TIMER_PRESETS, (seconds: number) => {
@@ -527,12 +527,12 @@ export struct PlayerOverlay {
               .backgroundColor($r('app.color.btn_glass'))
               .backdropBlur(20)
               .fontColor(this.textPrimary())
-              .borderRadius(20)
-              .fontSize(14)
-              .margin(4)
+              .borderRadius(Constants.TOKEN_RADIUS_XL)
+              .fontSize(Constants.TOKEN_FONT_BODY_M)
+              .margin(Constants.TOKEN_SPACE_XS)
               .onClick(() => {
                 SleepTimerController.getInstance().startTimer(seconds);
-                this.showSleepTimer = false;
+                this.showSleepTimer.value = false;
               })
           }, (seconds: number) => `${seconds}`)
 
@@ -542,13 +542,13 @@ export struct PlayerOverlay {
             .backgroundColor($r('app.color.btn_glass'))
             .backdropBlur(20)
             .fontColor(this.textPrimary())
-            .borderRadius(20)
-            .fontSize(14)
-            .margin(4)
+            .borderRadius(Constants.TOKEN_RADIUS_XL)
+            .fontSize(Constants.TOKEN_FONT_BODY_M)
+            .margin(Constants.TOKEN_SPACE_XS)
             .onClick(() => {
               this.pickerHour = 0;
               this.pickerMinute = 0;
-              this.showSleepTimerPicker = true;
+              this.showSleepTimerPicker.value = true;
             })
 
           Button('播完暂停')
@@ -557,9 +557,9 @@ export struct PlayerOverlay {
             .backgroundColor(this.sleepTimerPlayToEof ? this.tintBg() : $r('app.color.btn_glass'))
             .backdropBlur(20)
             .fontColor($r('app.color.text_primary'))
-            .borderRadius(20)
-            .fontSize(14)
-            .margin(4)
+            .borderRadius(Constants.TOKEN_RADIUS_XL)
+            .fontSize(Constants.TOKEN_FONT_BODY_M)
+            .margin(Constants.TOKEN_SPACE_XS)
             .onClick(() => {
               const st: SleepTimerController = SleepTimerController.getInstance();
               if (st.isPlayToEofActive()) {
@@ -567,7 +567,7 @@ export struct PlayerOverlay {
               } else {
                 st.armPlayToEof();
               }
-              this.showSleepTimer = false;
+              this.showSleepTimer.value = false;
             })
         }
         .width('100%')
@@ -579,18 +579,18 @@ export struct PlayerOverlay {
             .backgroundColor($r('app.color.btn_glass'))
             .backdropBlur(20)
             .fontColor($r('app.color.text_primary'))
-            .borderRadius(20)
-            .fontSize(14)
-            .margin({ top: 8 })
+            .borderRadius(Constants.TOKEN_RADIUS_XL)
+            .fontSize(Constants.TOKEN_FONT_BODY_M)
+            .margin({ top: Constants.TOKEN_SPACE_S })
             .onClick(() => {
               SleepTimerController.getInstance().cancelTimer();
-              this.showSleepTimer = false;
+              this.showSleepTimer.value = false;
             })
         }
       }
       .width('76%')
-      .padding(20)
-      .borderRadius(16)
+      .padding(Constants.TOKEN_SPACE_20)
+      .borderRadius(Constants.TOKEN_RADIUS_L)
       .backgroundColor($r('app.color.page_background'))
     }
     .width('100%')
@@ -599,7 +599,7 @@ export struct PlayerOverlay {
     .backgroundColor($r('app.color.mask_heavy'))
     .transition(TransitionEffect.OPACITY.animation({ duration: 200 }))
     .onClick(() => {
-      this.showSleepTimer = false;
+      this.showSleepTimer.value = false;
     })
   }
 
@@ -611,10 +611,10 @@ export struct PlayerOverlay {
     Column() {
       Column() {
         Text('音质选择')
-          .fontSize(16)
+          .fontSize(Constants.TOKEN_FONT_TITLE)
           .fontWeight(FontWeight.Bold)
           .fontColor($r('app.color.text_primary'))
-          .margin({ bottom: 14 })
+          .margin({ bottom: Constants.TOKEN_SPACE_14 })
 
         if (this.currentTrackSource === 'dash' && this.availableTracks.length > 0) {
           Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Center }) {
@@ -625,9 +625,9 @@ export struct PlayerOverlay {
                 .backgroundColor(track.id === this.currentQualityCode ? this.tintBg() : $r('app.color.btn_glass'))
                 .backdropBlur(20)
                 .fontColor(track.id === this.currentQualityCode ? $r('app.color.text_primary') : this.textPrimary())
-                .borderRadius(20)
-                .fontSize(14)
-                .margin(6)
+                .borderRadius(Constants.TOKEN_RADIUS_XL)
+                .fontSize(Constants.TOKEN_FONT_BODY_M)
+                .margin(Constants.TOKEN_SPACE_6)
                 .onClick(() => {
                   this.showQuality = false;
                   this.controller.setQualityTier(AudioQuality.tierOfTrackId(track.id), true);
@@ -637,19 +637,19 @@ export struct PlayerOverlay {
           .width('100%')
         } else {
           Text('默认')
-            .fontSize(15)
+            .fontSize(Constants.TOKEN_FONT_BODY_L)
             .fontColor($r('app.color.text_primary'))
-            .margin({ bottom: 6 })
+            .margin({ bottom: Constants.TOKEN_SPACE_6 })
           Text('当前内容未提供多音质选择')
-            .fontSize(13)
+            .fontSize(Constants.TOKEN_FONT_BODY)
             .fontColor(this.textSecondary())
             .textAlign(TextAlign.Center)
             .width('100%')
         }
       }
       .width('76%')
-      .padding(20)
-      .borderRadius(16)
+      .padding(Constants.TOKEN_SPACE_20)
+      .borderRadius(Constants.TOKEN_RADIUS_L)
       .backgroundColor($r('app.color.page_background'))
     }
     .width('100%')
@@ -667,10 +667,10 @@ export struct PlayerOverlay {
     Column() {
       Column() {
         Text('自定义关闭时间')
-          .fontSize(16)
+          .fontSize(Constants.TOKEN_FONT_TITLE)
           .fontWeight(FontWeight.Bold)
           .fontColor($r('app.color.text_primary'))
-          .margin({ bottom: 14 })
+          .margin({ bottom: Constants.TOKEN_SPACE_14 })
 
         Row() {
           TextPicker({ range: this.hourRange(), selected: this.pickerHour })
@@ -681,9 +681,9 @@ export struct PlayerOverlay {
             })
 
           Text('小时')
-            .fontSize(14)
+            .fontSize(Constants.TOKEN_FONT_BODY_M)
             .fontColor($r('app.color.text_primary'))
-            .margin({ left: 8, right: 16 })
+            .margin({ left: Constants.TOKEN_SPACE_S, right: Constants.TOKEN_SPACE_L })
 
           TextPicker({ range: this.minuteRange(), selected: this.pickerMinute })
             .layoutWeight(1)
@@ -693,25 +693,25 @@ export struct PlayerOverlay {
             })
 
           Text('分钟')
-            .fontSize(14)
+            .fontSize(Constants.TOKEN_FONT_BODY_M)
             .fontColor($r('app.color.text_primary'))
-            .margin({ left: 8 })
+            .margin({ left: Constants.TOKEN_SPACE_S })
         }
         .width('100%')
         .alignItems(VerticalAlign.Center)
 
-        Row({ space: 12 }) {
+        Row({ space: Constants.TOKEN_SPACE_M }) {
           Button('取消')
             .layoutWeight(1)
             .height(40)
             .backgroundColor($r('app.color.btn_glass'))
             .backdropBlur(20)
             .fontColor(this.textPrimary())
-            .borderRadius(20)
-            .fontSize(14)
+            .borderRadius(Constants.TOKEN_RADIUS_XL)
+            .fontSize(Constants.TOKEN_FONT_BODY_M)
             .onClick(() => {
-              this.showSleepTimerPicker = false;
-              this.showSleepTimer = true;
+              this.showSleepTimerPicker.value = false;
+              this.showSleepTimer.value = true;
             })
 
           Button('确定')
@@ -720,8 +720,8 @@ export struct PlayerOverlay {
             .backgroundColor(this.tintBg())
             .backdropBlur(20)
             .fontColor($r('app.color.text_primary'))
-            .borderRadius(20)
-            .fontSize(14)
+            .borderRadius(Constants.TOKEN_RADIUS_XL)
+            .fontSize(Constants.TOKEN_FONT_BODY_M)
             .onClick(() => {
               const totalSec: number = this.pickerHour * 3600 + this.pickerMinute * 60;
               if (totalSec <= 0) {
@@ -729,16 +729,16 @@ export struct PlayerOverlay {
                 return;
               }
               SleepTimerController.getInstance().startTimer(totalSec);
-              this.showSleepTimerPicker = false;
-              this.showSleepTimer = false;
+              this.showSleepTimerPicker.value = false;
+              this.showSleepTimer.value = false;
             })
         }
         .width('100%')
-        .margin({ top: 14 })
+        .margin({ top: Constants.TOKEN_SPACE_14 })
       }
       .width('76%')
-      .padding(20)
-      .borderRadius(16)
+      .padding(Constants.TOKEN_SPACE_20)
+      .borderRadius(Constants.TOKEN_RADIUS_L)
       .backgroundColor($r('app.color.page_background'))
     }
     .width('100%')
@@ -747,8 +747,8 @@ export struct PlayerOverlay {
     .backgroundColor($r('app.color.mask_heavy'))
     .transition(TransitionEffect.OPACITY.animation({ duration: 200 }))
     .onClick(() => {
-      this.showSleepTimerPicker = false;
-      this.showSleepTimer = true;
+      this.showSleepTimerPicker.value = false;
+      this.showSleepTimer.value = true;
     })
   }
 
@@ -756,41 +756,41 @@ export struct PlayerOverlay {
   detailSheet() {
     Column() {
       Text(this.trackTitle)
-        .fontSize(18)
+        .fontSize(Constants.TOKEN_FONT_18)
         .fontWeight(FontWeight.Bold)
         .fontColor($r('app.color.text_primary'))
         .textAlign(TextAlign.Center)
         .width('100%')
-        .margin({ top: 4 })
+        .margin({ top: Constants.TOKEN_SPACE_XS })
 
       Row() {
         Text(`播放 ${this.formatCount(this.trackView)}`)
-          .fontSize(12)
+          .fontSize(Constants.TOKEN_FONT_BODY_S)
           .fontColor($r('app.color.text_secondary'))
 
         Text(this.formatPubDate(this.trackPubdate))
-          .fontSize(12)
+          .fontSize(Constants.TOKEN_FONT_BODY_S)
           .fontColor($r('app.color.text_secondary'))
-          .margin({ left: 12 })
+          .margin({ left: Constants.TOKEN_SPACE_M })
 
         Blank()
 
         Text(this.trackBvid)
-          .fontSize(12)
+          .fontSize(Constants.TOKEN_FONT_BODY_S)
           .fontColor($r('app.color.text_secondary'))
       }
       .width('100%')
       .alignItems(VerticalAlign.Center)
-      .margin({ top: 10 })
+      .margin({ top: Constants.TOKEN_SPACE_10 })
 
       Divider()
         .color($r('app.color.track_color'))
         .strokeWidth(1)
-        .margin({ top: 14, bottom: 14 })
+        .margin({ top: Constants.TOKEN_SPACE_14, bottom: Constants.TOKEN_SPACE_14 })
 
       Scroll() {
         Text(this.trackDesc !== '' ? this.trackDesc : '暂无简介')
-          .fontSize(14)
+          .fontSize(Constants.TOKEN_FONT_BODY_M)
           .fontColor(this.trackDesc !== '' ? $r('app.color.detail_text') : $r('app.color.text_secondary'))
           .lineHeight(24)
           .width('100%')
@@ -804,7 +804,7 @@ export struct PlayerOverlay {
     }
     .width('100%')
     .height('100%')
-    .padding({ left: 24, right: 24, top: 4, bottom: 24 })
+    .padding({ left: Constants.TOKEN_SPACE_XL, right: Constants.TOKEN_SPACE_XL, top: Constants.TOKEN_SPACE_XS, bottom: Constants.TOKEN_SPACE_XL })
     .backgroundColor($r('app.color.sheet_background'))
     .backdropBlur(20)
   }
@@ -815,37 +815,37 @@ export struct PlayerOverlay {
         // 顶栏：仅保留收起按钮（spec FR-007，无标题文字与功能图标）
         Row() {
           SymbolGlyph($r('sys.symbol.chevron_down'))
-            .fontSize(22)
+            .fontSize(Constants.TOKEN_FONT_TITLE_L)
             .fontColor([$r('app.color.text_primary')])
-            .padding(6)
+            .padding(Constants.TOKEN_SPACE_6)
             .onClick(() => {
-              AppStorage.setOrCreate<boolean>(Constants.AS_SHOW_PLAYER_OVERLAY, false);
+              connectBool(Constants.AS_SHOW_PLAYER_OVERLAY, false).value = false;
             })
           Blank()
         }
         .width('100%')
-        .padding({ left: 10, right: 10, top: this.statusBarHeight + 6, bottom: 4 })
+        .padding({ left: Constants.TOKEN_SPACE_10, right: Constants.TOKEN_SPACE_10, top: this.statusBarHeight.value + 6, bottom: Constants.TOKEN_SPACE_XS })
 
         // 空态判定（US2 统一口径）：无当前曲目（trackIndex<0）或队列为空任一成立即显示占位，
         // 与播放键 enabled 条件（isPrepared || trackIndex>=0 || playlistCount>0）对称
         if (this.trackIndex < 0 || this.playlistCount === 0) {
           Column() {
             Text('暂无播放内容')
-              .fontSize(22)
+              .fontSize(Constants.TOKEN_FONT_TITLE_L)
               .fontWeight(FontWeight.Bold)
               .fontColor(this.textPrimary())
               .margin({ top: 60 })
 
             Text('在首页点「＋」粘贴BV号直接播放\n或订阅UP主/收藏夹/合集后收听')
-              .fontSize(14)
+              .fontSize(Constants.TOKEN_FONT_BODY_M)
               .fontColor(this.textSecondary())
               .textAlign(TextAlign.Center)
-              .margin({ top: 24 })
+              .margin({ top: Constants.TOKEN_SPACE_XL })
 
             Text('添加内容后即可开始收听')
-              .fontSize(13)
+              .fontSize(Constants.TOKEN_FONT_BODY)
               .fontColor(this.textDisabled())
-              .margin({ top: 12 })
+              .margin({ top: Constants.TOKEN_SPACE_M })
           }
           .width('100%')
           .layoutWeight(1)
@@ -873,37 +873,37 @@ export struct PlayerOverlay {
                     Image(this.trackCover)
                       .width(300)
                       .height(188)
-                      .borderRadius(18)
+                      .borderRadius(Constants.TOKEN_RADIUS_18)
                       .objectFit(ImageFit.Cover)
                       .contentTransition(ContentTransitionEffect.OPACITY)
                   } else {
                     Column() {
                       Text('♪')
                         .fontSize(56)
-                        .fontColor(this.accentColor)
+                        .fontColor(this.accentColor.value)
                     }
                     .width(300)
                     .height(188)
-                    .borderRadius(18)
+                    .borderRadius(Constants.TOKEN_RADIUS_18)
                     .backgroundColor($r('app.color.card_background'))
                     .justifyContent(FlexAlign.Center)
                     .alignItems(HorizontalAlign.Center)
                   }
 
-                  Row({ space: 4 }) {
+                  Row({ space: Constants.TOKEN_SPACE_XS }) {
                     SymbolGlyph($r('sys.symbol.play_round_rectangle'))
-                      .fontSize(12)
+                      .fontSize(Constants.TOKEN_FONT_BODY_S)
                       .fontColor([this.textPrimary()])
                     Text('视频')
-                      .fontSize(11)
+                      .fontSize(Constants.TOKEN_FONT_AUX)
                       .fontColor(this.textPrimary())
                   }
                   .height(26)
-                  .padding({ left: 10, right: 10 })
+                  .padding({ left: Constants.TOKEN_SPACE_10, right: Constants.TOKEN_SPACE_10 })
                   .backgroundColor($r('app.color.btn_glass'))
                   .backdropBlur(20)
                   .borderRadius(13)
-                  .margin(8)
+                  .margin(Constants.TOKEN_SPACE_S)
                   .enabled(this.trackBvid !== '')
                   .opacity(this.trackBvid !== '' ? 1.0 : 0.4)
                   .onClick(() => {
@@ -912,7 +912,7 @@ export struct PlayerOverlay {
                 }
                 .width(300)
                 .height(188)
-                .borderRadius(18)
+                .borderRadius(Constants.TOKEN_RADIUS_18)
                 .clip(true)
                 .shadow({ radius: 30, color: $r('app.color.shadow_cover'), offsetY: 16 })
                 .brightness(this.isPlaying ? 1 : 0.88)
@@ -920,14 +920,14 @@ export struct PlayerOverlay {
               }
               .width(300)
               .height(188)
-              .margin({ top: 24 }) // US10：原 8 过挤，展开态封面与状态栏留出呼吸感
+              .margin({ top: Constants.TOKEN_SPACE_XL }) // US10：原 8 过挤，展开态封面与状态栏留出呼吸感
               .alignSelf(ItemAlign.Center)
               .scale({ x: this.isPlaying ? 1 : 0.94, y: this.isPlaying ? 1 : 0.94 })
               .animation({ duration: 350, curve: Curve.FastOutSlowIn })
 
               Row() {
                 Text(this.trackTitle)
-                  .fontSize(18)
+                  .fontSize(Constants.TOKEN_FONT_18)
                   .fontWeight(FontWeight.Medium)
                   .fontColor(this.textPrimary())
                   .maxLines(2)
@@ -937,17 +937,17 @@ export struct PlayerOverlay {
 
                 if (this.trackIndex >= 0) {
                   Text('▼')
-                    .fontSize(16)
+                    .fontSize(Constants.TOKEN_FONT_TITLE)
                     .fontColor(this.textSecondary())
-                    .margin({ left: 2 })
-                    .padding(12)
+                    .margin({ left: Constants.TOKEN_SPACE_XXS })
+                    .padding(Constants.TOKEN_SPACE_M)
                     .rotate({ angle: this.detailArrowUp ? 180 : 0 })
                     .animation({ duration: 200, curve: Curve.Smooth })
                 }
               }
               .width('92%')
               .alignItems(VerticalAlign.Center)
-              .margin({ top: 16, bottom: 4 })
+              .margin({ top: Constants.TOKEN_SPACE_L, bottom: Constants.TOKEN_SPACE_XS })
               .onClick(() => {
                 if (this.trackBvid !== '') {
                   this.detailArrowUp = true;
@@ -958,7 +958,7 @@ export struct PlayerOverlay {
 
               if (this.ownerName !== '') {
                 Row() {
-                  Row({ space: 6 }) {
+                  Row({ space: Constants.TOKEN_SPACE_6 }) {
                     if (this.ownerFace !== '') {
                       Image(this.ownerFace)
                         .width(22)
@@ -969,9 +969,9 @@ export struct PlayerOverlay {
                     } else {
                       Stack({ alignContent: Alignment.Center }) {
                         Text(this.ownerName.charAt(0))
-                          .fontSize(11)
+                          .fontSize(Constants.TOKEN_FONT_AUX)
                           .fontWeight(FontWeight.Medium)
-                          .fontColor(this.accentColor)
+                          .fontColor(this.accentColor.value)
                       }
                       .width(22)
                       .height(22)
@@ -980,7 +980,7 @@ export struct PlayerOverlay {
                     }
 
                     Text(this.ownerName)
-                      .fontSize(12)
+                      .fontSize(Constants.TOKEN_FONT_BODY_S)
                       .fontColor(this.textSecondary())
                       .maxLines(1)
                       .textOverflow({ overflow: TextOverflow.Ellipsis })
@@ -992,24 +992,24 @@ export struct PlayerOverlay {
                     Blank()
 
                     Text(this.trackIndex >= 0 ? `${this.trackIndex + 1} / ${this.playlistCount}` : `共 ${this.playlistCount} 首`)
-                      .fontSize(12)
+                      .fontSize(Constants.TOKEN_FONT_BODY_S)
                       .fontColor(this.textSecondary())
                   }
                 }
                 .width('92%')
                 .alignItems(VerticalAlign.Center)
-                .margin({ top: 2 })
+                .margin({ top: Constants.TOKEN_SPACE_XXS })
               } else if (this.playlistCount > 0) {
                 Text(this.trackIndex >= 0 ? `${this.trackIndex + 1} / ${this.playlistCount}` : `共 ${this.playlistCount} 首`)
-                  .fontSize(12)
+                  .fontSize(Constants.TOKEN_FONT_BODY_S)
                   .fontColor(this.textSecondary())
               }
 
               // 统计行（plan R8）：播放量 · 发布时间，居中次要色 12vp；无数据时沿用现有占位文案
               Text(`播放 ${this.formatCount(this.trackView)} · ${this.formatPubDate(this.trackPubdate)}`)
-                .fontSize(12)
+                .fontSize(Constants.TOKEN_FONT_BODY_S)
                 .fontColor(this.textSecondary())
-                .margin({ top: 6 })
+                .margin({ top: Constants.TOKEN_SPACE_6 })
             }
             .width('100%')
             // 信息区留白铺满（T007）：内容不足一屏时拉开分布铺满，超出仍可滚动（Scroll 行为不变）
@@ -1037,8 +1037,8 @@ export struct PlayerOverlay {
                 .trackThickness(5)
                 .blockSize({ width: 12, height: 12 })
                 .trackColor($r('app.color.track_color'))
-                .selectedColor(this.accentColor)
-                .blockColor(this.accentColor)
+                .selectedColor(this.accentColor.value)
+                .blockColor(this.accentColor.value)
                 .width('100%')
                 .onChange((value: number, mode: SliderChangeMode) => {
                   this.sliderValue = value;
@@ -1055,31 +1055,31 @@ export struct PlayerOverlay {
               // 时间行：左=当前时间（拖拽中显示拖拽位置）、右=总时长，13vp 次要色
               Row() {
                 Text(this.formatTime(this.isSeeking ? this.sliderValue / 100 * this.duration : this.currentTime))
-                  .fontSize(13)
+                  .fontSize(Constants.TOKEN_FONT_BODY)
                   .fontColor(this.textSecondary())
 
                 Blank()
 
                 Text(this.formatTime(this.duration))
-                  .fontSize(13)
+                  .fontSize(Constants.TOKEN_FONT_BODY)
                   .fontColor(this.textSecondary())
               }
               .width('100%')
               .alignItems(VerticalAlign.Center)
-              .margin({ top: 2 })
+              .margin({ top: Constants.TOKEN_SPACE_XXS })
             }
             .width('92%')
 
             // 控制栏（spec FR-005）：传输五键横排居中，播放键 72×72 主按钮，其余四键次级
-            Row({ space: 12 }) {
+            Row({ space: Constants.TOKEN_SPACE_M }) {
               Row() {
                 SymbolGlyph($r('sys.symbol.backward_end_fill'))
-                  .fontSize(22)
+                  .fontSize(Constants.TOKEN_FONT_TITLE_L)
                   .fontColor([this.textPrimary()])
               }
               .width(44)
               .height(44)
-              .borderRadius(22)
+              .borderRadius(Constants.TOKEN_RADIUS_22)
               .backgroundColor($r('app.color.btn_glass'))
               .backdropBlur(20)
               .justifyContent(FlexAlign.Center)
@@ -1093,12 +1093,12 @@ export struct PlayerOverlay {
 
               Row() {
                 SymbolGlyph($r('sys.symbol.gobackward_15'))
-                  .fontSize(22)
+                  .fontSize(Constants.TOKEN_FONT_TITLE_L)
                   .fontColor([this.textPrimary()])
               }
               .width(44)
               .height(44)
-              .borderRadius(22)
+              .borderRadius(Constants.TOKEN_RADIUS_22)
               .backgroundColor($r('app.color.btn_glass'))
               .backdropBlur(20)
               .justifyContent(FlexAlign.Center)
@@ -1113,7 +1113,7 @@ export struct PlayerOverlay {
               Stack() {
                 if (this.isPreparing && this.playWhenReady) {
                   LoadingProgress()
-                    .color(this.accentColor)
+                    .color(this.accentColor.value)
                     .width(Constants.PLAY_BTN_DIAMETER * 0.5)
                     .height(Constants.PLAY_BTN_DIAMETER * 0.5)
                 } else if (this.isPlaying) {
@@ -1142,12 +1142,12 @@ export struct PlayerOverlay {
 
               Row() {
                 SymbolGlyph($r('sys.symbol.goforward_15'))
-                  .fontSize(22)
+                  .fontSize(Constants.TOKEN_FONT_TITLE_L)
                   .fontColor([this.textPrimary()])
               }
               .width(44)
               .height(44)
-              .borderRadius(22)
+              .borderRadius(Constants.TOKEN_RADIUS_22)
               .backgroundColor($r('app.color.btn_glass'))
               .backdropBlur(20)
               .justifyContent(FlexAlign.Center)
@@ -1159,12 +1159,12 @@ export struct PlayerOverlay {
 
               Row() {
                 SymbolGlyph($r('sys.symbol.forward_end_fill'))
-                  .fontSize(22)
+                  .fontSize(Constants.TOKEN_FONT_TITLE_L)
                   .fontColor([this.textPrimary()])
               }
               .width(44)
               .height(44)
-              .borderRadius(22)
+              .borderRadius(Constants.TOKEN_RADIUS_22)
               .backgroundColor($r('app.color.btn_glass'))
               .backdropBlur(20)
               .justifyContent(FlexAlign.Center)
@@ -1179,107 +1179,107 @@ export struct PlayerOverlay {
             .width('100%')
             .justifyContent(FlexAlign.Center)
             .alignItems(VerticalAlign.Center)
-            .margin({ top: 12 })
+            .margin({ top: Constants.TOKEN_SPACE_M })
 
-            // 底部操作行（spec FR-006 / plan R6）：倍速/播放模式/定时/队列，沿用现有浮层与 @StorageLink 开关
-            Row({ space: 12 }) {
-              Row({ space: 4 }) {
+            // 底部操作行（spec FR-006 / plan R6）：倍速/播放模式/定时/队列，沿用现有全局键开关
+            Row({ space: Constants.TOKEN_SPACE_M }) {
+              Row({ space: Constants.TOKEN_SPACE_XS }) {
                 SymbolGlyph($r('sys.symbol.speed_multiple'))
-                  .fontSize(16)
-                  .fontColor([this.playbackRate === 1.0 ? this.textPrimary() : this.accentColor])
+                  .fontSize(Constants.TOKEN_FONT_TITLE)
+                  .fontColor([this.playbackRate === 1.0 ? this.textPrimary() : this.accentColor.value])
                 Text(PlayerController.rateLabel(this.playbackRate))
-                  .fontSize(13)
-                  .fontColor(this.playbackRate === 1.0 ? this.textPrimary() : this.accentColor)
+                  .fontSize(Constants.TOKEN_FONT_BODY)
+                  .fontColor(this.playbackRate === 1.0 ? this.textPrimary() : this.accentColor.value)
               }
               .height(36)
-              .padding({ left: 14, right: 14 })
+              .padding({ left: Constants.TOKEN_SPACE_14, right: Constants.TOKEN_SPACE_14 })
               .backgroundColor($r('app.color.btn_glass'))
               .backdropBlur(20)
-              .borderRadius(18)
+              .borderRadius(Constants.TOKEN_RADIUS_18)
               .onClick(() => {
-                this.showSpeed = true;
+                this.showSpeed.value = true;
               })
 
               Row() {
                 SymbolGlyph(this.playModeIcon())
-                  .fontSize(18)
-                  .fontColor([this.accentColor])
+                  .fontSize(Constants.TOKEN_FONT_18)
+                  .fontColor([this.accentColor.value])
               }
               .height(36)
-              .padding({ left: 14, right: 14 })
+              .padding({ left: Constants.TOKEN_SPACE_14, right: Constants.TOKEN_SPACE_14 })
               .backgroundColor($r('app.color.btn_glass'))
               .backdropBlur(20)
-              .borderRadius(18)
+              .borderRadius(Constants.TOKEN_RADIUS_18)
               .onClick(() => {
-                this.showMode = true;
+                this.showMode.value = true;
               })
 
               // 音质入口（audio-quality-settings FR-005 + T017）：直接显示当前音质档位短名；
               // dash 多音轨可用时以主题色高亮示意
               Row() {
                 Text(this.qualityEntryLabel())
-                  .fontSize(13)
+                  .fontSize(Constants.TOKEN_FONT_BODY)
                   .fontWeight(FontWeight.Medium)
-                  .fontColor(this.currentTrackSource === 'dash' ? this.accentColor : this.textPrimary())
+                  .fontColor(this.currentTrackSource === 'dash' ? this.accentColor.value : this.textPrimary())
               }
               .height(36)
-              .padding({ left: 14, right: 14 })
+              .padding({ left: Constants.TOKEN_SPACE_14, right: Constants.TOKEN_SPACE_14 })
               .backgroundColor($r('app.color.btn_glass'))
               .backdropBlur(20)
-              .borderRadius(18)
+              .borderRadius(Constants.TOKEN_RADIUS_18)
               .onClick(() => {
                 this.showQuality = true;
               })
 
-              Row({ space: 4 }) {
+              Row({ space: Constants.TOKEN_SPACE_XS }) {
                 SymbolGlyph($r('sys.symbol.timer'))
-                  .fontSize(16)
-                  .fontColor([this.sleepTimerActive ? this.accentColor : this.textPrimary()])
+                  .fontSize(Constants.TOKEN_FONT_TITLE)
+                  .fontColor([this.sleepTimerActive ? this.accentColor.value : this.textPrimary()])
                 if (this.sleepTimerActive && !this.sleepTimerPlayToEof) {
                   Text(this.formatRemaining(this.sleepTimerRemaining))
-                    .fontSize(13)
-                    .fontColor(this.accentColor)
+                    .fontSize(Constants.TOKEN_FONT_BODY)
+                    .fontColor(this.accentColor.value)
                 }
               }
               .height(36)
-              .padding({ left: 14, right: 14 })
+              .padding({ left: Constants.TOKEN_SPACE_14, right: Constants.TOKEN_SPACE_14 })
               .backgroundColor($r('app.color.btn_glass'))
               .backdropBlur(20)
-              .borderRadius(18)
+              .borderRadius(Constants.TOKEN_RADIUS_18)
               .onClick(() => {
-                this.showSleepTimer = true;
+                this.showSleepTimer.value = true;
               })
 
               Row() {
                 SymbolGlyph($r('sys.symbol.list_bullet'))
-                  .fontSize(22)
+                  .fontSize(Constants.TOKEN_FONT_TITLE_L)
                   .fontColor([this.textPrimary()])
               }
               .width(44)
               .height(44)
-              .borderRadius(22)
+              .borderRadius(Constants.TOKEN_RADIUS_22)
               .backgroundColor($r('app.color.btn_glass'))
               .backdropBlur(20)
               .justifyContent(FlexAlign.Center)
               .onClick(() => {
-                AppStorage.setOrCreate<boolean>(Constants.AS_SHOW_QUEUE_SHEET, true);
+                connectBool(Constants.AS_SHOW_QUEUE_SHEET, false).value = true;
               })
             }
             .justifyContent(FlexAlign.Center)
             .alignItems(VerticalAlign.Center)
-            .margin({ top: 14 })
+            .margin({ top: Constants.TOKEN_SPACE_14 })
 
             // 状态行（plan R10）：statusMsg 常驻固定底栏，任意滚动位置可见；isPreparing 时行首显示加载指示
-            Row({ space: 6 }) {
+            Row({ space: Constants.TOKEN_SPACE_6 }) {
               if (this.isPreparing) {
                 LoadingProgress()
-                  .color(this.accentColor)
+                  .color(this.accentColor.value)
                   .width(20)
                   .height(20)
               }
 
               Text(this.statusMsg)
-                .fontSize(13)
+                .fontSize(Constants.TOKEN_FONT_BODY)
                 .fontColor(this.textSecondary())
                 .maxLines(2)
                 .textOverflow({ overflow: TextOverflow.Ellipsis })
@@ -1289,29 +1289,29 @@ export struct PlayerOverlay {
             .width('100%')
             .alignItems(VerticalAlign.Center)
             .justifyContent(FlexAlign.Center)
-            .margin({ top: 10, bottom: 4 })
+            .margin({ top: Constants.TOKEN_SPACE_10, bottom: Constants.TOKEN_SPACE_XS })
           }
           .width('100%')
-          .margin({ top: 8 })
+          .margin({ top: Constants.TOKEN_SPACE_S })
         }
       }
       .width('100%')
       .layoutWeight(1)
-      .padding({ bottom: this.navBarHeight })
+      .padding({ bottom: this.navBarHeight.value })
 
-      if (this.showSpeed) {
+      if (this.showSpeed.value) {
         this.speedPanel()
       }
 
-      if (this.showMode) {
+      if (this.showMode.value) {
         this.modePanel()
       }
 
-      if (this.showSleepTimer) {
+      if (this.showSleepTimer.value) {
         this.sleepTimerPanel()
       }
 
-      if (this.showSleepTimerPicker) {
+      if (this.showSleepTimerPicker.value) {
         this.sleepTimerPicker()
       }
 
@@ -1321,7 +1321,7 @@ export struct PlayerOverlay {
 
       // 播放队列抽屉：渲染在播放层内；显式最高 zIndex（US1）压过倍速/模式/睡眠面板与内容层，
       // 修复 API 24 平板 zIndex 失效导致抽屉被遮挡的问题（全平台行为一致）
-      if (this.showQueueSheet) {
+      if (this.showQueueSheet.value) {
         QueueDrawer()
           .zIndex(100)
       }
@@ -1333,15 +1333,17 @@ export struct PlayerOverlay {
     .parallelGesture(
       PanGesture({ direction: PanDirection.Vertical })
         .onActionEnd((event: GestureEvent) => {
-          const atTop: boolean = this.contentScroller.currentOffset().yOffset <= 0;
-          const noOverlayOpen: boolean = !this.showQueueSheet && !this.showSpeed && !this.showMode &&
-            !this.showSleepTimer && !this.showSleepTimerPicker && !this.showDetail && !this.showQuality;
+          // ponytail: currentOffset() 类型上不可空，但浮层刚挂载时运行时返回 undefined（模拟器实测 crash），防御判空；根因在 Scroller attach 时序，无公开 API 可查
+          const offset: OffsetResult | undefined = this.contentScroller.currentOffset();
+          const atTop: boolean = offset === undefined || offset.yOffset <= 0;
+          const noOverlayOpen: boolean = !this.showQueueSheet.value && !this.showSpeed.value && !this.showMode.value &&
+            !this.showSleepTimer.value && !this.showSleepTimerPicker.value && !this.showDetail && !this.showQuality;
           if (noOverlayOpen && atTop && event.offsetY > PLAYER_DISMISS_SWIPE) {
-            AppStorage.setOrCreate<boolean>(Constants.AS_SHOW_PLAYER_OVERLAY, false);
+            connectBool(Constants.AS_SHOW_PLAYER_OVERLAY, false).value = false;
           }
         })
     )
-    .bindSheet($$this.showDetail, this.detailSheet(), {
+    .bindSheet(this.showDetail, this.detailSheet(), {
       height: '62%',
       dragBar: true,
       showClose: false,
@@ -1352,9 +1354,10 @@ export struct PlayerOverlay {
         this.detailArrowUp = false;
         sheetDismiss.dismiss();
       },
-      // 兜底：任何其他关闭路径同步箭头状态
+      // 兜底：任何其他关闭路径同步箭头状态并复位打开标志
       onDisappear: () => {
         this.detailArrowUp = false;
+        this.showDetail = false;
       }
     })
   }

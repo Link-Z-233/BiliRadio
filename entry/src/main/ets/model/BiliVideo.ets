@@ -1,18 +1,19 @@
+@ObservedV2
 export class BiliVideo {
-  bvid: string = '';
-  aid: number = 0;
-  cid: number = 0;
-  title: string = '';
-  cover: string = '';
-  duration: number = 0;
-  folderIds: number[] = [];
-  seasonKeys: string[] = [];
-  ownerMid: number = 0;
-  ownerName: string = '';
-  ownerFace: string = '';
-  view: number = 0;
-  pubdate: number = 0;
-  desc: string = '';
+  @Trace bvid: string = '';
+  @Trace aid: number = 0;
+  @Trace cid: number = 0;
+  @Trace title: string = '';
+  @Trace cover: string = '';
+  @Trace duration: number = 0;
+  @Trace folderIds: number[] = [];
+  @Trace seasonKeys: string[] = [];
+  @Trace ownerMid: number = 0;
+  @Trace ownerName: string = '';
+  @Trace ownerFace: string = '';
+  @Trace view: number = 0;
+  @Trace pubdate: number = 0;
+  @Trace desc: string = '';
 
   static create(bvid: string, aid: number, cid: number, title: string, cover: string, duration: number): BiliVideo {
     const v = new BiliVideo();

@@ -5,81 +5,68 @@
 
 ## 一、已知问题
 
-### KI-3 列表「左滑删除」未实现
+### KI-3 列表「左滑删除」（三处全部完成）
 
 - **交互约定**：左滑露出「删除」按钮，**点击**执行删除（`ListItem.swipeAction({ end: { builder } })`），不做「滑过阈值直接删」。
-- **待实现清单**：
-  1. **首页订阅列表** [HomePage.ets](entry/src/main/ets/pages/HomePage.ets)：`ListItem` 位于 `LazyForEach`（登记 L365-367 已漂移，2026-10-07 实测 L309-313）；删除复用既有 `removeSub(row)`（含清剧集缓存、持久化、刷新列表）。
-  2. ~~**播放队列** [QueueSheet.ets](entry/src/main/ets/component/QueueSheet.ets)：`LazyForEach` + `ListItem`；删除可复用 `PlayerController.removeSelectedFromPlaylist([bvid])`；需处理与多选（长按 + 竖向滑动选择）手势的共存。暂缓（ux-feedback-round6 轮，2026-10-09）：待队列整体大改时一并处理。~~ **已完成（queue-redesign 轮，2026-10-10）**：QueueSheet 重构为单行头部 + 纯列表，`ListItem` 挂 `swipeAction({ end: 删除按钮 })`（样式对齐播放历史 `historyDeleteAction`），删除调 `PlayerController.removeSelectedFromPlaylist([bvid])`（删除当前条目时既有自动切播语义保留），`PlaylistDataSource.notifyDataDelete` 增量刷新；与多选长按手势经平台手势仲裁共存（横向 swipe 与竖向连选不同轴），无需禁用。
-  3. ~~**播放历史** [SettingsPage.ets](entry/src/main/ets/pages/SettingsPage.ets) 的 `playHistoryPanel`~~ **已完成（play-history-progress 轮，2026-10-06）**：`playHistoryPanel` 已挂 `ListItem.swipeAction({ end: 删除按钮 builder })`，`HistoryDataSource.notifyDataDelete` 增量同步 LazyForEach；单条删除 API 为 `PlayerController.removePlayHistoryItem(bvid)`（splice + `playHistoryVersion++` + 异步写盘），`clearPlayHistory` 行为不变。
-- **状态**：部分实现——播放历史与播放队列两项已完成（见上）；首页订阅列表待实现（仅登记）。
+- **完成记录**：
+  1. **播放历史** [SettingsPage.ets](entry/src/main/ets/pages/SettingsPage.ets) `playHistoryPanel`（play-history-progress 轮，2026-10-06）：`HistoryDataSource.notifyDataDelete` 增量同步；单条删除 `PlayerController.removePlayHistoryItem(bvid)`。
+  2. **播放队列** [QueueSheet.ets](entry/src/main/ets/component/QueueSheet.ets)（queue-redesign 轮，2026-10-10）：`ListItem` 挂 `swipeAction`（样式对齐 `historyDeleteAction`），删除调 `removeSelectedFromPlaylist([bvid])`（删除当前条目时既有自动切播语义保留）；与多选长按手势经平台仲裁共存（横向 swipe 与竖向连选不同轴）。
+  3. **首页订阅列表** [HomePage.ets](entry/src/main/ets/pages/HomePage.ets)（debt-cleanup 轮，2026-10-11）：新增 `subDeleteAction` builder（样式逐字段对齐 `historyDeleteAction`）+ `ListItem.swipeAction({ end })`，点击复用 `removeSub(row)`（含清剧集缓存、持久化、刷新列表）；模拟器验证 PASS（T017）。
+- **状态**：三处全部完成；真机复测通过后关闭本条目（T024 待办）。
 
 ### KI-4 短链识别与解析（已修复：bili-link-recognize 轮，2026-10-07）
 
 - **位置**：识别/抽取/解析逻辑集中至新增 [LinkResolver.ets](entry/src/main/ets/service/LinkResolver.ets)；[AddSubscriptionSheet.ets](entry/src/main/ets/pages/AddSubscriptionSheet.ets) 仅保留「抽取 → 判定 → 解析 → 分发」编排；[BiliService.ets](entry/src/main/ets/service/BiliService.ets) 原 `resolveShortUrl` 已删除。
-- **原登记行号漂移修正**：短链判定原登记 L144，修复前实际已漂移至 L165；`resolveShortUrl` 原登记 L707-736，修复前实际已漂移至 L935-966（两处本轮均已移除/改写，原行号登记就此作废）。
-- **修复说明**（对应原六条缺陷）：
-  1. **前置抽取**（原 #2）：`extractBiliUrl` 在任何识别判断前，从分享文案抽取第一个 B 站域名（b23.tv / bili2233.cn / bilibili.com 及任意子域，忽略大小写，须带 http(s) 前缀）链接并清除尾随中英文标点；未抽到回退 trim 原文，短链与非短链分支统一使用清洗结果。
-  2. **判定修正**（原 #1）：`isBiliShortLink` 按 host 精确判定（忽略大小写），补齐 bili2233.cn；无协议前缀的裸短链（如 `b23.tv/xxx`）自动补 `https://` 后处理。
-  3. **重定向解析**（原 #3，2026-10-07 实机返修）：初版 `maxRedirects: 0` 直读 Location 方案在真机不可行——`@ohos.net.http` 的 `maxRedirects: 0` 实为「零配额」语义，首个 30x 即抛 2300047「重定向次数达到上限」，30x 响应拿不到（文档写「禁用重定向」但行为如此，实机实测）。改用 rcp（`@kit.RemoteCommunicationKit`）自动跟随重定向（`autoRedirect: true` + `maxAutoRedirects: 5`）后读 `Response.effectiveUrl` 作为落地目标——**引用 Bili23-Downloader**（https://github.com/Scighosts/Bili23-Downloader，src/util/parse/parser/b23.py 的 B23Parser + src/util/network/request.py 的 `ResponseType.REDIRECT_URL` → `str(response.url)`），与本仓解析链路同源；未重定向或仍落短链域名判「短链无效或已过期」（对应 B23Parser 的 `response==url` 判定）；目标须为 bilibili.com 域名且可被识别器分类；原 Location 逐跳迭代 / 相对地址补全 / 正文兜底逻辑随之退役。
-  4. **错误分型**（原 #4）：`ShortLinkResult` 结果模型区分网络失败 / 超出跳数 / 无有效目标 / 目标无法识别四类结局，各自携带互不重复的中文提示，不再静默降级 `return shortUrl`。
-  5. **目标覆盖**（原 #5）：`recognizeInput` 迁入 LinkResolver 并扩展 av 号 URL 形态（`bilibili.com/video/av{数字}`）、`m.bilibili.com/space/{uid}` 移动端空间、lists/seriesdetail/collectiondetail host 放宽为 bilibili.com 任意子域；短链 path 含视频号（如 `b23.tv/BV…`）时零网络短路直达视频。
-  6. **缓存与专用超时**（原 #6）：会话级 LRU 缓存（模块级 Map + 插入序数组，容量 50，仅缓存成功结果，命中先删后插、零网络请求，不持久化）；专用超时 `Constants.SHORT_LINK_CONNECT_MS / SHORT_LINK_READ_MS = 8000ms`（通用 15s/30s 保留不动）。
-  7. **输入保持**：解析成功不再回写输入框（原 `mainInput = resolved` 已删除，FR-010）。
-- **配套 UX 修正（2026-10-07，随实机复核轮）**：
-  1. **提示文案补全**：占位符缩短为「粘贴 B 站链接或 ID」（占位符不换行，长枚举在大字模式溢出）；完整能力枚举移至输入框下方常驻说明行「支持分享文案、短链、BV 号、av 号、UP 主 UID」（Text 可换行，任意缩放不溢出）；识别失败 toast 同步补「BV 号 / av 号」。
-  2. **二级页返回按钮加大**：抽共享 `secondaryHeader` builder（收藏夹/合集与系列两视图共用），返回图标触控区由裸 16vp 扩至 40vp（图标 20 + padding 10 + 负 margin 抵消位移）。
-  3. **系统返回支持**：`HomePage` 的 `bindSheet` 挂 `onWillDismiss`，`DismissReason.PRESS_BACK` 时经 `AddSheetBackHandler.requestBack()` 询问面板——二级视图在场则拦截关闭、动画退回一级；一级视图或下滑/关闭按钮/点遮罩路径正常关面板。
-- **状态**：已修复（待实机复核 US1/US2）。
+- **修复要点**（对应原六条缺陷）：
+  1. **前置抽取**：`extractBiliUrl` 在任何识别判断前抽取第一个 B 站域名链接（b23.tv / bili2233.cn / bilibili.com 任意子域，须带 http(s)）并清尾随标点；未抽到回退 trim 原文。
+  2. **判定修正**：`isBiliShortLink` 按 host 精确判定，补齐 bili2233.cn；裸短链自动补 `https://`。
+  3. **重定向解析**（2026-10-07 实机返修）：`@ohos.net.http` 的 `maxRedirects: 0` 实为「零配额」语义（首个 30x 抛 2300047），改 rcp（`@kit.RemoteCommunicationKit`）`autoRedirect` + `maxAutoRedirects: 5` 后读 `Response.effectiveUrl`——引用 Bili23-Downloader 同源链路；未重定向或仍落短链域名判「短链无效或已过期」。
+  4. **错误分型**：`ShortLinkResult` 区分网络失败 / 超出跳数 / 无有效目标 / 目标无法识别四类结局，各自携带互不重复的中文提示，不再静默降级。
+  5. **目标覆盖**：`recognizeInput` 迁入 LinkResolver 并扩展 av 号 URL、`m.bilibili.com/space/{uid}`、lists/seriesdetail/collectiondetail host 放宽任意子域；短链 path 含视频号零网络短路直达。
+  6. **缓存与专用超时**：会话级 LRU 缓存（容量 50，仅缓存成功，不持久化）；专用超时 `Constants.SHORT_LINK_CONNECT_MS / SHORT_LINK_READ_MS = 8000ms`。
+  7. **输入保持**：解析成功不再回写输入框（FR-010）。
+- **配套 UX 修正**：占位符缩短 + 输入框下方常驻说明行（「支持分享文案、短链、BV 号、av 号、UP 主 UID」）；二级页返回按钮触控区扩至 40vp；`bindSheet` 挂 `onWillDismiss` 支持系统返回（二级视图在场拦截、动画退回一级）。
+- **状态**：已修复；debt-cleanup 轮 US3 模拟器验证短链零回归 PASS（T018）。
 
-### KI-5 播放层 UI 冻结（已定位并修复：API 24 ModalPage 渲染管线挂载即断开）
+### KI-5 播放层 UI 冻结（已修复：API 24 ModalPage 渲染管线挂载即断开）
 
-- **现象**：播放层（`PlayerOverlay`）的标题/进度/播放图标停留在打开浮层时的快照，所有按钮按下后功能正常执行但 UI 无任何变化；±15s 按钮因 `isPrepared` 陈旧为 false 而不可见（a11y 树中缺席）。
-- **证据（2026-10-05，MatePad Pro 11 模拟器 / HarmonyOS 6.1.1 API 24，三组对照实验）**：
-  1. 模拟器全量重启后现象复现 → 排除「屏幕合成冻结」；
-  2. `next()` 切到不同 bvid 且 hilog 确认 playing，浮层仍显示旧标题旧进度 → 排除「流停滞」；
-  3. 同一 `PlayerController`/`emitUi` 广播下，**MiniPlayer 数据正确新鲜**（新标题已更新）→ 问题隔离为浮层组件特有。
-- **与监听器累积的关系**：监听器累积（已随第 4 轮修复）可造成类似表现，但本次为进程内首次打开浮层（无陈旧监听器堆积）且 MiniPlayer 在浮层之前已正常收到广播，不能归因于监听器问题，故单独登记。
-- **第 4 轮补充（2026-10，US1/US2 应用层加固）**：虽然根因未定论，本轮已落地多层应用层加固（抽屉 zIndex(100)、QueueDrawer 进出场改 animateTo 驱动、订阅退订+异常隔离+代际号）。**观察结论：仅在 API 24 平板复现，其余设备未见**；应用层加固未消除该问题。
-- **第 5 轮最终定位（2026-10-06，MatePad Pro 真机 192.168.11.123，HarmonyOS 6.1.1 API 24）**：
-  - **根因**：`bindContentCover`（ModalPage）内容组件在该设备上**挂载后渲染管线即断开**——hilog 实测三层异常：① 挂载后 10-21ms 收到伪 `aboutToDisappear`（浮层实际仍显示，探针日志实锤）；② 真关闭时 `aboutToDisappear` 反而**不触发**（无退订日志）；③ @State 更新与 `animateTo` 动画创建均正常执行但 ModalPage 表面**仅渲染首帧**（触摸命中走节点树仍有效，故「功能执行而 UI 冻结」）。
-  - **排除链**：系统包损坏 ×（全量刷机后逐字复现）；animateTo 构建期调用 ×（aboutToAppear 延后修复无效）；订阅链路 ×（守卫+单槽覆盖后 listeners 保持 1、光晕动画正常创建，冻结依旧）。
-  - **溯源**：`bindContentCover` 为 BiliRadio 自研引入（@efbc92f，2026-10-03 播放层改造），BiliMusic 原版 `PlayerPage` 为常规页面架构无此问题——KI-5 属自研回归而非上游继承。
-- **修复（方案 B，2026-10-06）**：`Index.ets` 放弃 `bindContentCover`，改 **Stack 内条件渲染**承载播放层——`if (showPlayerOverlay) PlayerOverlay().expandSafeArea(SYSTEM, TOP+BOTTOM).transition(TransitionEffect.translate({y:'100%'}).animation(350ms Friction))`，生命周期与渲染管线回归常规路径（同 MiniPlayer/QueueDrawer 的健康通路）；expandSafeArea 复现 ModalPage 全窗口视觉，底部滑入滑出近似原 ModalTransition.DEFAULT 手感。**配套防御保留**：① PlayerOverlay `aboutToDisappear` 可见性守卫（`@StorageLink showPlayerOverlay`，浮层显示中跳过退订，兼作其他平台伪回调哨兵）；② PlayerController/SleepTimerController `subscribe` 同 owner 单槽覆盖（防漏退订累积）；③ aboutToAppear 中 `updateGlow` 延后一拍（消除构建期 animateTo 框架告警）。
-- **验证（2026-10-06 真机）**：播放/暂停图标互换、进度条走动、开关浮层全部恢复正常；hilog 订阅退订完全对称（开→subscribe listeners=1，关→unsubscribe listeners=0），伪 `aboutToDisappear` 消失，无监听器累积。
-- **遗留观察**：封面光晕呼吸效果（`updateGlow`，3200ms 往复）用户自最初构建从未观察到，可能亮色模式下不显眼或存在独立问题，登记后续单独检查。
-- **状态**：已修复（方案 B 全平台生效，无需按设备分支）。
+- **现象**：播放层（`PlayerOverlay`）标题/进度/播放图标停留在打开时快照，按钮功能正常但 UI 无变化。
+- **根因**（2026-10-06，MatePad Pro 真机 API 24 定位）：`bindContentCover`（ModalPage）内容组件在该设备**挂载后渲染管线即断开**——挂载后 10-21ms 收到伪 `aboutToDisappear`、真关闭时反而不触发、@State/animateTo 正常执行但仅渲染首帧。自研引入（@efbc92f，2026-10-03 播放层改造），非上游继承。其余设备未见。
+- **修复（方案 B）**：`Index.ets` 放弃 `bindContentCover`，改 **Stack 内条件渲染**——`if (showPlayerOverlay) PlayerOverlay().expandSafeArea(SYSTEM, TOP+BOTTOM).transition(TransitionEffect.translate({y:'100%'}).animation(350ms Friction))`。**配套防御保留**：① PlayerOverlay `aboutToDisappear` 可见性守卫；② PlayerController/SleepTimerController `subscribe` 同 owner 单槽覆盖（防漏退订累积）；③ `updateGlow` 延后一拍（消除构建期 animateTo 告警）。
+- **遗留观察**：封面光晕呼吸效果（`updateGlow`，3200ms 往复）用户从未观察到，可能亮色模式下不显眼，登记后续单独检查。
+- **状态**：已修复（方案 B 全平台生效）；API 26 基线化后 API 24/25 设备已不受支持。
 
-### KI-6 定时播放 / 睡眠定时「未经验证」
+### KI-6 定时播放 / 睡眠定时「部分验证」
 
-- **范围**：睡眠定时功能（倒计时归零暂停播放 + 提醒回调，queue-redesign 轮新增「播完暂停」模式）实现完成，但**未经实机验证**。
-- **位置**：入口为播放层 timer 按钮（`PlayerOverlay` 定时面板，含「播完暂停」选项）；控制器为 [SleepTimerController.ets](entry/src/main/ets/service/SleepTimerController.ets)（单例、墙钟零漂移倒计时、内存态不持久化；`SleepTimerMode` 三态 NONE / COUNTDOWN / PLAY_TO_EOF）。
-- **待验证点**：倒计时——显示与归零暂停、后台/锁屏节流后切回校准、入口按钮状态联动；播完暂停（queue-redesign 轮新增）——三步（面板选「播完暂停」→ 当前条目播完停原条目暂停不切歌 → 手动续播从头重播/手动切歌恢复正常）、与倒计时单选互斥（后选取代先选）、触发时不弹「计时已结束」弹窗。
-- **状态**：实现完成（含播完暂停），待验证——模拟器验证随 queue-redesign 轮验证轮（T032）执行，真机验证欠账保持；验证通过后移除本条目及 `SleepTimerController.ets` 文件头的 `[UNVERIFIED 2026-10]` 标注。
+- **范围**：睡眠定时（倒计时归零暂停 + queue-redesign 轮新增「播完暂停」模式），实机验证欠账。
+- **位置**：入口为播放层 timer 按钮（`PlayerOverlay` 定时面板）；控制器为 [SleepTimerController.ets](entry/src/main/ets/service/SleepTimerController.ets)（单例、墙钟零漂移倒计时、内存态不持久化；`SleepTimerMode` 三态 NONE / COUNTDOWN / PLAY_TO_EOF）。
+- **待验证点**：倒计时显示与归零暂停、后台/锁屏节流后切回校准、入口按钮状态联动；播完暂停三步（面板选「播完暂停」→ 当前条目播完停原条目暂停不切歌 → 手动续播从头重播/手动切歌恢复正常）、与倒计时单选互斥（后选取代先选）、触发时不弹「计时已结束」弹窗。
+- **状态**：debt-cleanup 轮模拟器验证（T020）——倒计时归零（60.1s 精确）/播完暂停/模式互斥/取消定时 PASS；**切后台校准环境受限未验**（devecocli 无 home 键/后台化模拟）。真机复测（[verification-report.md](spec/debt-cleanup/verification-report.md) §4 US5）通过后关闭本条目并移除 `SleepTimerController.ets` 文件头 `[UNVERIFIED 2026-10]` 标注。
 
-### KI-7 链接识别链路遗留问题（bili-link-recognize 轮走查发现，本轮范围外）
+### KI-7 链接识别链路遗留问题
 
 - **位置**：[LinkResolver.ets](entry/src/main/ets/service/LinkResolver.ets) `recognizeInput`（编号沿用特性走查记录）。
 - **登记项**：
-  1. **B3 系列默认类型歧义**：`lists` 路径无 `type=series` 参数时默认按合集（season）处理，实际可能为系列，订阅类型判定存在歧义。
-  2. **B4 BV 优先级全文遮蔽**：BV 号全文扫描置于全部 URL 规则之前，含 BV 号的复合链接（如带 BV 参数的合集/收藏夹页）会被遮蔽误判为视频。
-  3. **B5 fav 弱启发式**：收藏夹判定依赖 `(?:fid|media_id)=(\d+)` + 文本含 fav/collection/favlist 的弱启发式，非收藏夹页面出现同参数时存在误判可能。
-  4. **B7 裸数字语义歧义**：纯数字输入一律按 UP 主 UID 处理，用户意图可能是 av 号/合集 ID 等，语义有歧义（现状维持 UID 优先）。
-  5. **B8 BV 无合法性校验**：`BV[0-9A-Za-z]{10}` 仅匹配形态不校验合法性，伪 BV 号要进入网络请求后才失败。
-  6. **C1 解析结果回写——已解决**：短链解析成功后的 `mainInput` 回写已随 bili-link-recognize 轮移除（FR-010），登记备查。
-  7. **C2 动态/直播/watchlist 目标不识别**：`recognizeInput` 无动态（t.bilibili.com）/直播（live.bilibili.com）/watchlist 目标规则，短链解析到该类页面按「目标无法识别」分型提示（不再误播随机视频，但无法直达）。
-- **状态**：未修复（仅登记；其中 C1 已解决）。
+  1. **B3 系列默认类型歧义**：`lists` 路径无 `type=series` 参数时默认按合集（season）处理，实际可能为系列。
+  2. ~~**B4 BV 优先级全文遮蔽**~~ **已修复（debt-cleanup 轮，2026-10-11）**：BV 全文扫描移至全部 URL 规则之后、裸数字之前（含 BV 参数的复合链接不再被遮蔽误判）。
+  3. ~~**B5 fav 弱启发式**~~ **已修复（debt-cleanup 轮，2026-10-11）**：收紧为「URL path 含 `favlist`/`medialist` 且带 `fid=`/`media_id=` 参数」，合法收藏夹形态不漏判。
+  4. **B7 裸数字语义歧义**：纯数字输入一律按 UP 主 UID 处理（现状维持 UID 优先）。
+  5. **B8 BV 无合法性校验**：仅匹配形态不校验，伪 BV 号要进入网络请求后才失败。
+  6. **C1 解析结果回写——已解决**：短链解析成功后的回写已随 bili-link-recognize 轮移除（FR-010）。
+  7. **C2 动态/直播/watchlist 目标不识别**：该类页面按「目标无法识别」分型提示（不再误播随机视频，但无法直达）。
+- **状态**：B4/B5 已修复（模拟器验证 PASS，T018）；B3/B7/B8/C2 维持登记。
 
 ### KI-8 首页订阅行 latestTitle/newCount 陈旧（已修复：appsign-up-fetch 轮，2026-10-08）
 
-- **根因**：[HomePage.ets](entry/src/main/ets/pages/HomePage.ets) `LazyForEach` 键值生成器返回恒定 `row.sub.id`，数据重载后键值不变 → 框架复用旧组件、不重跑 builder → 行内字幕与 newCount 徽标停在首次挂载值；随 fec92f8 引入的既有 bug，此前被 APP 链 pubdate=0 数据层缺陷掩盖（该缺陷已随本轮 ctime 回退修复）。
+- **根因**：[HomePage.ets](entry/src/main/ets/pages/HomePage.ets) `LazyForEach` 键值生成器返回恒定 `row.sub.id` → 框架复用旧组件、不重跑 builder → 行内字幕与 newCount 徽标停在首次挂载值。
 - **修复**：键值改为 `` `${row.sub.id}_${row.latestTitle}_${row.newCount}` ``，字段变化即重建该行，兼修 newCount 徽标会话内不清零。
-- **遗留**：活体判别待未来新投稿事件自然观察（机制由键值→重建语义保证，本轮验证为渲染无回归）。
+- **遗留**：活体判别待未来新投稿事件自然观察（机制由键值→重建语义保证）。
 
-### KI-9 APP/Web 链页界不对齐（appsign-up-fetch 轮登记）
+### KI-9 APP/Web 链页界不对齐（已修复：engineering-refactor 轮 1，2026-10-11）
 
-- **现象**：APP 签名链 20 条/页（服务端钳制）vs Web 退避链 30 条/页，会话内链路切换（降级/回切）时页界不对齐可能漏条目；现有 bvid 去重兜底，未见用户可见异常。
-- **待处理**：下轮统一页界（Web 链 ps 降为 20 或翻页记账按链路分别校准）。
+- **现象**：APP 签名链 20 条/页（服务端钳制）vs Web 退避链 30 条/页，链路切换（降级/回切）时页界不对齐可能漏条目；现有 bvid 去重兜底。
+- **修复**：Web 链 `fetchUpVideosViaWeb` 请求 `ps` 降为 `Constants.UP_PAGE_SIZE=20`，翻页记账 `olderPageSize()` UP 分支统一引用常量（[BiliService.ets](entry/src/main/ets/service/BiliService.ets) / [SourcePage.ets](entry/src/main/ets/pages/SourcePage.ets)）。
+- **遗留**：降级衔接翻页走查待真机（[verification-report.md](spec/debt-cleanup/verification-report.md) §4 US7）。
 
 ## 二、已移除与禁用功能
 
@@ -87,70 +74,72 @@
 
 - **提交**：@6d403dd（`feat: floating mini player capsule and right-side queue drawer`），配合 @382e789 流式边下边播改造。
 - **移除文件**：`entry/src/main/ets/pages/DownloadsPage.ets`（320 行）、`entry/src/main/ets/service/DownloadManager.ets`（199 行）、`entry/src/main/ets/model/DownloadedSong.ets`（130 行），及 `router_map.json` 中 downloadsPage 路由条目。
-- **原因**：改为流式边下边播（CDN 直链直推播放器）后，整段下载链路成为死代码；下载页入口与状态机全部失效。
+- **原因**：改为流式边下边播（CDN 直链直推播放器）后，整段下载链路成为死代码。
 - **恢复线索**：`git show 6d403dd` 可取三文件历史版本；若恢复需适配现流式缓存结构（`BiliService.cleanCache` 管理）与现路由表。
 
 ### REM-2 收藏夹 folders 页 / 列表同步 / 封面染色（移除）
 
 - **提交**：@2050b84（`refactor: remove folders page, playlist sync and cover-tint dead code`）。
-- **移除内容**：`FoldersPage.ets`（1108 行）与 `SelectedSeason.ets`（folders 页与列表同步状态）、`CoverAnalyzer.ets` / `ForegroundColor.ets` / `LightEffect.ets` / `LitButton.ets`（封面染色链路）。
-- **原因**：三条完全解耦的死代码链——folders 页无任何入口可达；列表同步依赖的 SelectedSeason 状态无来源；封面染色被固定配色方案替代。
+- **移除内容**：`FoldersPage.ets`（1108 行）与 `SelectedSeason.ets`、`CoverAnalyzer.ets` / `ForegroundColor.ets` / `LightEffect.ets` / `LitButton.ets`（封面染色链路）。
+- **原因**：三条完全解耦的死代码链——folders 页无入口可达；列表同步依赖的 SelectedSeason 状态无来源；封面染色被固定配色方案替代。
 - **恢复线索**：`git show 2050b84`；收藏夹数据接口（`BiliService.fetchFavFolders`）仍在，恢复 folders 页只需重新接线路由与状态。
 
 ### DIS-1 首页下拉刷新（本轮禁用）
 
 - **位置**：[HomePage.ets](entry/src/main/ets/pages/HomePage.ets)——`Refresh` 包裹层、`refreshing` 状态与 `manualRefresh()` 以注释块保留，注释头带 `[DISABLED 2026-10]` 标记。
-- **原因**：实机反馈认为首页下拉刷新使用率低，与既有 `silentRefresh()`（新集徽标静默刷新）功能重叠，暂时禁用待产品定夺。
-- **恢复步骤**：
-  1. 从注释块恢复 `refreshing` 状态声明与 `manualRefresh()` 方法；
-  2. 用 `Refresh` 组件重新包裹列表（`layoutWeight(1)` 移回 Refresh 内层的 List），恢复 `.onRefreshing` 链；
-  3. 删除 `[DISABLED 2026-10]` 标记与本条目。
-- **备注**：`silentRefresh()` 保留未动，新集徽标仍会静默刷新。
+- **原因**：实机反馈使用率低，与 `silentRefresh()`（新集徽标静默刷新）重叠，暂时禁用待产品定夺。
+- **恢复步骤**：① 从注释块恢复 `refreshing` 声明与 `manualRefresh()`；② 用 `Refresh` 重新包裹列表（`layoutWeight(1)` 移回内层 List），恢复 `.onRefreshing` 链；③ 删除 `[DISABLED 2026-10]` 标记与本条目。
+- **备注**：`silentRefresh()` 保留未动。
 
 ### DIS-2 独立「更多」页 MorePage（本轮移除）
 
 - **本轮（2026-10）**：删除 `entry/src/main/ets/pages/MorePage.ets` 及 `router_map.json` 中 `morePage` 条目；首页右上角「更多」按钮改为直达 `settingsPage`。
-- **原因**：更多页仅聚合「播放历史」「关于」两个二级入口，二者在设置页均有同款卡片，独立页面无存在必要。
-- **恢复线索**：`git log --diff-filter=D -- entry/src/main/ets/pages/MorePage.ets` 定位删除提交后恢复文件，并在 `router_map.json` 重新登记 `morePage` 条目。
+- **原因**：更多页仅聚合「播放历史」「关于」两个二级入口，二者在设置页均有同款卡片，无存在必要。
+- **恢复线索**：`git log --diff-filter=D -- entry/src/main/ets/pages/MorePage.ets` 定位删除提交后恢复，并在 `router_map.json` 重新登记 `morePage` 条目。
 
 ### REM-3 取消收藏历史（整链移除）
 
 - **本轮（ux-feedback-round5，2026-10-07）**：移除「取消收藏后可找回」的本地历史记录整条链路；取消收藏操作本身仍即时生效，仅不再留痕。
-- **移除内容**：`entry/src/main/ets/model/UnfavoriteRecord.ets`（模型文件已删除）；SettingsPage 侧历史面板全链（`showHistory`/`historyItems`/`historyVersion` 状态、`openHistory`/`formatRemovedAt`、`historyPanel` builder、设置页入口行及 `NavDestination.onBackPressed` 分支）；PlayerController 的 `unfavoriteHistory`/`pushHistory`/`refavoriteFromHistory`/`clearUnfavoriteHistory` 及取消收藏路径上的入史调用；AppStore 的 `loadUnfavoriteHistory`/`saveUnfavoriteHistory` 持久化；`Constants.AS_SHOW_HISTORY` 键。
-- **原因**：实机反馈使用率极低，且与「清空队列」「播放历史」职责重叠；面板入口长期占据设置页空间。
-- **恢复线索**：`git log --diff-filter=D -- entry/src/main/ets/model/UnfavoriteRecord.ets` 定位删除提交（ux-feedback-round5 轮），按上述移除内容反向恢复各调用点。
-- **遗留数据**：老版本写入的 `unfavorite_history.json` 本轮不清理（应用不再读写，无功能影响）；若未来恢复该功能，旧文件数据仍可重新读取。
+- **移除内容**：`entry/src/main/ets/model/UnfavoriteRecord.ets`（已删除）；SettingsPage 侧历史面板全链（`showHistory`/`historyItems`/`historyVersion`、`openHistory`/`formatRemovedAt`、`historyPanel` builder、入口行及 `onBackPressed` 分支）；PlayerController 的 `unfavoriteHistory`/`pushHistory`/`refavoriteFromHistory`/`clearUnfavoriteHistory` 及入史调用；AppStore 的 `loadUnfavoriteHistory`/`saveUnfavoriteHistory`；`Constants.AS_SHOW_HISTORY` 键。
+- **原因**：实机反馈使用率极低，与「清空队列」「播放历史」职责重叠。
+- **恢复线索**：`git log --diff-filter=D -- entry/src/main/ets/model/UnfavoriteRecord.ets` 定位删除提交，按上述移除内容反向恢复各调用点。
+- **遗留数据**：老版本写入的 `unfavorite_history.json` 不清理（应用不再读写，无功能影响）；若未来恢复，旧文件数据仍可读取。
+
+### REM-4 无图模式开关（全链移除）
+
+- **本轮（debt-cleanup，2026-10-11）**：移除「无图模式」开关及其全部生效分支；封面加载策略收敛为「永远有图 + CDN 尺寸分档（缩略 240 档/大图 672×378/省流 480×270）+ 网络态自动降档」，尺寸分档与降档行为零回退。
+- **移除内容（6 文件 8 处）**：`Constants.KEY_DATA_SAVER` 键（[Constants.ets](entry/src/main/ets/service/Constants.ets)）；设置页开关行与 `dataSaver` 状态（[SettingsPage.ets](entry/src/main/ets/pages/SettingsPage.ets)，随行移除 `refreshUi()`/`refreshMediaSessionMetadata()` 调用，方法本体保留）；播控 `refreshMediaSessionMetadata()` 整方法与 2 处 `dataSaver ? '' : cover` 读取点（[PlayerController.ets](entry/src/main/ets/service/PlayerController.ets)）；播放层 `trackCover`/`ownerFace` 置空分支（[PlayerOverlay.ets](entry/src/main/ets/pages/PlayerOverlay.ets)）；迷你条封面置空分支（[MiniPlayer.ets](entry/src/main/ets/component/MiniPlayer.ets)）；队列 `dataSaverOn` 状态/读取/渲染分支（[QueueSheet.ets](entry/src/main/ets/component/QueueSheet.ets)）。MediaSession 空封面守卫保留（服务无封面条目，非无图模式专属）。
+- **原因**：图片占总流量 <2-5%（音频流主导），尺寸分档 + 网络态降档已在，开关边际收益可忽略；且覆盖不全（首页/源页/添加面板不接开关）造成功能名不副实。2026-10-11 用户决策删除。
+- **恢复线索**：`git log -S KEY_DATA_SAVER -- entry/src/main/ets/service/Constants.ets` 定位删除提交；恢复须重接设置页开关行与上述 6 处生效分支。
+- **遗留数据**：老版本写入的 `dataSaver` 持久化值不清理不读取（先例：`unfavorite_history.json`）。
 
 ## 三、规划与预告
 
-- **R9 反馈轮（ux-feedback-round9，2026-10-10）已完成构建验证，UI 自测待用户真机执行**：四项修复——①队列容器由右侧抽屉改底部弹出面板（QueueDrawer 全宽 65% 高、Y 轴 translate，仍为 Stack 条件渲染非系统 sheet，KI-5 规避不变）；②面板背景近实底（base `#F2FFFFFF` / dark `#F01E1E22`，封面不再穿透）；③队列列表补 `alwaysEnabled` 过冲 + 双向 EdgeHint（未铺满也可拖动，触顶/触底提示与首页/设置页/源页一致）；④时长未知条目（合集/收藏夹入队未播过，duration=0）第二行只显示 UP 主名不渲染 00:00。四条用户故事（spec US1-US4）验收场景待真机自测；queue-redesign 欠账 T031/T032 同样待模拟器恢复后补做。
+- **R9 反馈轮（ux-feedback-round9，2026-10-10）——debt-cleanup 轮模拟器全场景 PASS（T019），真机复核后销项**：四项修复——①队列容器由右侧抽屉改底部弹出面板（QueueDrawer 全宽 65% 高、Y 轴 translate，仍为 Stack 条件渲染非系统 sheet，KI-5 规避不变）；②面板背景近实底（base `#F2FFFFFF` / dark `#F01E1E22`）；③队列列表 `alwaysEnabled` 过冲 + 双向 EdgeHint；④时长未知条目（duration=0）第二行只显示 UP 主名不渲染 00:00。queue-redesign 欠账：T031 部署已销（T015）、T032 US2/US4/US6 模拟器 PASS、US7 版本号项过时关闭。
 
-- **R10 反馈轮（ux-feedback-round10，2026-10-10）已完成构建验证，UI 自测待用户真机执行**：三项修复——①小白条沉浸（Index Navigation 包裹层去掉 `bottom: navBarHeight` padding，设置页/日志页/首页/订阅页内容延伸绘制至小白条后方并各自补偿避让：设置页 `24+navBar`、日志页 `navBar`、首页/订阅页 `MINI_PLAYER_CLEARANCE+navBar`，四页补 `@StorageProp navBarHeight`）；②隐藏迷你播放条穿透修复（Index 命中测试 `HitTestMode.None`→`BLOCK_DESCENDANTS`——SDK 实测 None 不阻止子节点命中是原 bug 根因，新枚举令自身+全部子孙退出命中测试、触摸落回下层，可见时 Default 行为不变）；③日志页底部空白（`AS_MINI_PLAYER_VISIBLE` 上报移交 Index——aboutToAppear 初始化 true、`onMiniVisibilityChanged` 写 `!hidden`，MiniPlayer 删除自身上报；消费方避让随真实显隐变化）。三条用户故事（spec US1-US3）验收场景待真机自测；回归约束（MiniPlayer margin / PlayerOverlay / 队列面板）零改动。顺带销项：R8 hilog DEBUG 门控登记（9be0b01 已落地，见上方 ✓ 条目）。签名包 `entry-default-signed.hap` 4,253,404 B，build-only 一次通过。
+- **R10 反馈轮（ux-feedback-round10，2026-10-10）——debt-cleanup 轮模拟器五场景 PASS（T021），真机复核后销项**：三项修复——①小白条沉浸（Index Navigation 包裹层去掉 `bottom: navBarHeight` padding，设置页/日志页/首页/订阅页内容延伸绘制至小白条后方并各自补偿避让，四页补 `@StorageProp navBarHeight`）；②隐藏迷你播放条穿透修复（Index 命中测试 `HitTestMode.None`→`BLOCK_DESCENDANTS`——SDK 实测 None 不阻止子节点命中是原 bug 根因）；③日志页底部空白（`AS_MINI_PLAYER_VISIBLE` 上报移交 Index，消费方避让随真实显隐变化）。顺带销项：R8 hilog DEBUG 门控（9be0b01，见下）。
 
-> **✅ 已实现（9be0b01，随 R8 落地；本条为销项登记）：`Logger` 的 hilog 双写由 DEBUG 模式门控——默认关闭，绝不无条件向 hilog 总线写业务日志。** 开启入口 = 关于页图标三连击（tap 3 次触发 debug 模式，`Constants.DEBUG_TAP_WINDOW_MS = 2000`）；debug 模式开启期间 `Logger.log()` 才同步向 hilog 输出（`Constants.LOG_DOMAIN`/`LOG_TAG`，双写须用 info 级——API 24 设备 D 级被全局过滤不落缓冲，见 [Logger.ets](entry/src/main/ets/service/Logger.ets) L67-68 `ponytail:` 标注），关闭或重启后恢复仅落盘+内存；debug 模式持久化经 `Constants.KEY_DEBUG_MODE`（SettingsPage 启动时经 AppStore 恢复）。任何后续改造不得绕过此门控。
+> **✅ 已实现（9be0b01，随 R8 落地；本条为销项登记）：`Logger` 的 hilog 双写由 DEBUG 模式门控——默认关闭，绝不无条件向 hilog 总线写业务日志。** 开启入口 = 关于页图标三连击（tap 3 次触发，`Constants.DEBUG_TAP_WINDOW_MS = 2000`）；debug 模式开启期间 `Logger.log()` 才同步向 hilog 输出（`Constants.LOG_DOMAIN`/`LOG_TAG`，双写须用 info 级——API 24 设备 D 级被全局过滤不落缓冲，见 [Logger.ets](entry/src/main/ets/service/Logger.ets) L67-68 `ponytail:` 标注）；关闭或重启后恢复仅落盘+内存；持久化经 `Constants.KEY_DEBUG_MODE`。**任何后续改造不得绕过此门控。**
 
-- **下轮候选清单（appsign-up-fetch 收尾登记，2026-10-08，按优先序）**：
-  1. ~~**删除 endArmed**（spec FR-005，真机验证已通过解锁）~~ **已完成（ux-feedback-round6 轮，2026-10-09）**：endArmed 手势触发权与「失败不归还」惩罚已全部移除，回退 `loadingOlder` + `canLoadOlder` 两道门槛，另加 3 秒失败冷却（`Constants.LOAD_OLDER_FAIL_COOLDOWN_MS`）防止触底连发。
-  2. **KI-9 页界统一**——APP 签名链 20 条/页（服务端钳制）vs Web 退避链 30 条/页，降级/回切时页界不对齐可能漏条目（现有 bvid 去重兜底）；方案：Web 链 ps 降为 20，或翻页记账按链路分别校准；见 §一 KI-9。
-  3. **源页刷新反馈**（产品决策）——内容无变化时无可视指示、易误判失效（US2 首验 FAIL 即此假象）；方案：加载动画或轻提示；见下文「源页刷新无反馈假象」。
-- ~~**列表添加逻辑重构预告（US6 后续）**：源详情页「点单集」已改为仅该集入队播放；队列输入框「添加并播放」（`addByBv`）的入队行为后续还会改——计划从「加载并立即播放」调整为「追加进队列不打断当前播放」，落地后与「点单集」路径统一收敛。~~ **已完成（queue-redesign 轮，2026-10-10）**：队列输入框（`addByBv`）随队列头部精简整体移除，单视频入口统一收敛至添加订阅面板——`playBv` 改调 `PlayerController.addSingleVideo`（队列空则起播、非空追加不打断、重复入队去重），与源详情页「点单集」路径行为一致；两路径均有 toast 分型反馈（开始播放/已在队列中/已加入队列/添加失败）。
-- **403 首次添加根因修复（延后）**：首次添加订阅偶发 403/风控拦截，本轮仅做了日志观察（`BiliService` 全链路钩子 + 设置页日志面板，见 US9），待实机日志积累、锁定风控触发模式后针对性修复（候选方向：WBI 签名覆盖面 / buvid 预热策略）。
-  - **实机风控结论补充（US1 触底翻页轮，2026-10-07）**：UP 投稿查询真机实测——APP 端点（spaceArchive BiliDroid 形态）裸 UA 恒 **-400**（PiliPlus 同端点实际经 AccountManager 拦截器携带登录 cookie，未登录裸调不可用）；Web 端点单发在风控期必 **-799**；本设备唯一被验证可靠的是 **Web 三轮 buvid 指数退避链**（直连→WBI 签名），UP 翻页链（`fetchUpVideosByPage`）已与刷新链共用该实现，不再单发直抛。
-  - **配套防风暴**：SourcePage 触底加载挂 `endArmed` 手势触发权（`TouchType.Down` 武装、加载即没收、失败不归还）——ArkUI `onReachEnd` 按住底端时每帧重触发，且 `onScrollIndex` 布局回调与真实滚离无法区分，一次手势最多一页请求，物理上杜绝链式连发打爆风控。US1 触底「加载更早」本轮已扩展至全部四类订阅（UP/FAV 补翻页端点；FAV 失效视频过滤致短页属正常、不按短页终止，仅整页重复判到底；追加前按 bvid 去重防刷新链与翻页链排序漂移产生重复条目）。
-  - **AppSign 接入结论（appsign-up-fetch 轮，2026-10-08）**：UP 投稿 APP 端点已接入 AppSign 游客签名（TV appkey `dfca71928277209b`，[AppSigner.ets](entry/src/main/ets/service/AppSigner.ets) MD5 键序签名、无 `!'()*` 过滤）——真机验证 **-400 消失**，签名链头页与 cursor 翻页均一页恰 1 请求（HTTP 200），81 条全集触底翻页无重复无跳空、到底正确停止，签名链故障时 Web 退避链无缝降级。实测要点（与 PiliPlus 模型差异）：响应为 `data.item[]`（非 `data.list.vlist`）、视频链 `data.next` 恒空（翻页语义=纯 aid 锚点，`fetchUpVideosOlder` 即此形态）、服务端将 ps 钳制为 20（请求 30）。
-  - **endArmed 后续安排（appsign-up-fetch 轮验证通过，2026-10-08）**：签名链真机验证可靠可用（见上条结论），**下一轮可删除 endArmed 手势触发权与「失败不归还」惩罚**（回退 loadingOlder + canLoadOlder 两道门槛，对应 spec FR-005）；删除后若降级链再遇 403 风暴按需恢复。**已执行（ux-feedback-round6 轮，2026-10-09）**：endArmed 已移除，防连发由两道门槛 + 3 秒失败冷却承担。
-- **源页刷新无反馈假象（产品决策待定）**：刷新前后内容相同时无可视指示，易误判按钮失效（appsign-up-fetch 轮 US2 首验 FAIL 即此假象——刷新实际成功、cursor 已重建，但列表无可视变化）；可考虑加载动画或轻提示，待产品定夺。
-- **点赞 / 投币 / 收藏**：依赖登录态与 csrf，交互形态待定，两轮内未排期。
-- **播放历史云端同步**：本地字段/单位对齐已完成（play-history-progress 轮：`PlayHistoryItem` 补齐 viewAt/progress/duration/cid，秒级单位对齐 B 站 `view_at`/`progress` 语义，-1=看完；`HistoryMapper` 预留 `toBiliHistory`/`fromBiliHistory` 映射边界，本轮零网络请求），云端同步（登录态下心跳上报/历史拉取合并）待后续。
-- **audio 三元组优先级限制**：播控中心/后台卡片展示元数据依赖 audio 三元组等系统侧信息优先级策略，B 站侧字段缺失时标题/作者/封面可能展示不全，属系统与上游数据限制，暂不做适配。
-- **订阅源导出导入**（ux-feedback-round6 轮登记，2026-10-09）：本轮不实现；导出载体（本地 JSON 文件 / 分享文本）与去重合并策略待产品决策。
-- **关于页文案优化**（ux-feedback-round6 轮登记，2026-10-09）：本轮不实现，文案方向待定。
-- ~~**版本号更新**（ux-feedback-round6 轮登记，2026-10-09）~~ **已完成（queue-redesign 轮，2026-10-10）**：应用版本号随播放列表重做完成升至 0.2.0/2000（[AppScope/app.json5](AppScope/app.json5)）；README 中版本号信息维持移除不回填。
-- **无图模式覆盖面扩展（ux-feedback-round5 范围外）**：本轮（2026-10-07）已将无图模式（原「省流量模式」，设置页分组 ux-feedback-round6 轮起更名为「省流」）扩展至播放列表条目封面（QueueSheet）与系统播控（AVSession/MediaSession，开关翻转后经 `PlayerController.refreshMediaSessionMetadata()` 强制重发当前曲目元数据）；以下位置仍不判无图模式、保持现状，待后续轮次统一：① 首页订阅列表行封面（HomePage）；② 订阅源详情页头图与列表项（SourcePage）；③ 添加订阅面板 UP 头像/合集封面（AddSubscriptionSheet——该场景封面用于确认订阅目标，刻意不省图）。另：随「取消收藏历史」移除而遗留的 `unfavorite_history.json` 本轮不清理，应用不再读取即无功能影响。
+- **源页刷新无反馈假象（产品决策待定）**：刷新前后内容相同无可视指示、易误判按钮失效（appsign-up-fetch 轮 US2 首验 FAIL 即此假象——刷新实际成功、cursor 已重建，但列表无可视变化）；候选：加载动画或轻提示。
+
+- **403 首次添加根因修复（延后）**：首次添加订阅偶发 403/风控拦截，仅日志观察（`BiliService` 全链路钩子 + 设置页日志面板），待实机日志锁定触发模式（候选：WBI 签名覆盖面 / buvid 预热策略）。
+  - **实机结论（2026-10-07/08）**：UP 投稿 APP 端点（spaceArchive BiliDroid 形态）裸 UA 恒 **-400**（PiliPlus 同端点实际经 AccountManager 拦截器携带登录 cookie）；Web 端点单发在风控期必 **-799**；唯一可靠链 = **Web 三轮 buvid 指数退避**（直连→WBI 签名）。AppSign 接入后（TV appkey `dfca71928277209b`，[AppSigner.ets](entry/src/main/ets/service/AppSigner.ets) MD5 键序签名）**-400 消失**——签名链头页 + cursor 翻页均一页恰 1 请求，81 条触底无重复无跳空，签名链故障时 Web 退避链无缝降级。实测要点：响应为 `data.item[]`（非 `data.list.vlist`）、视频链 `data.next` 恒空（翻页语义 = 纯 aid 锚点，`fetchUpVideosOlder` 即此形态）、服务端将 ps 钳制为 20（请求 30）。
+  - **防连发现状**：endArmed 手势触发权已移除（ux-feedback-round6 轮，2026-10-09），防链式连发由 `loadingOlder` + `canLoadOlder` 两道门槛 + 3 秒失败冷却（`Constants.LOAD_OLDER_FAIL_COOLDOWN_MS`）承担；若降级链再遇 403 风暴按需恢复 endArmed。
+
+- **点赞 / 投币 / 收藏**：依赖登录态与 csrf，交互形态待定，未排期。
+- **播放历史云端同步**：本地字段/单位对齐已完成（play-history-progress 轮：`PlayHistoryItem` 补齐 viewAt/progress/duration/cid，秒级单位对齐 B 站 `view_at`/`progress` 语义，-1=看完；`HistoryMapper` 预留 `toBiliHistory`/`fromBiliHistory` 映射边界，零网络请求）；云端同步（登录态下心跳上报/历史拉取合并）待后续。
+- **audio 三元组优先级限制**：播控中心/后台卡片元数据依赖系统侧信息优先级策略，B 站侧字段缺失时展示可能不全，属系统与上游数据限制，暂不适配。
+- **订阅源导出导入**（ux-feedback-round6 轮登记，2026-10-09）：导出载体（本地 JSON 文件 / 分享文本）与去重合并策略待产品决策。
+- **关于页文案优化**（ux-feedback-round6 轮登记，2026-10-09）：方向待定。
+
+- **模拟器验证终止与 debt-cleanup 验证状态（2026-10-11）**：debt-cleanup 轮验证轮（T014-T025）在 T022/US7 即将开始时模拟器卡死（无响应）；用户决策：**不再进行模拟器验证，改为用户真机实测后反馈**（后续轮次验证一律真机）。模拟器已验项 PASS 记录（US2/US3/US4/US6 全过、US5 大部、US1 部分）与 **37 条真机复测清单**见 [verification-report.md](spec/debt-cleanup/verification-report.md)；未完成项（US1 播放层大封面、US5 切后台校准、US7 降级走查、US8 深浅色走查、T024 销项、T025 关机）在真机复测通过前不销项。
+
+- **工程重构（engineering-refactor，2026-10-11）US1-US3 已落地、US4 产出路线图**：①**US1 翻页页界对齐**——KI-9 销项（见 §一 KI-9；降级衔接走查欠真机）；②**US2 UI 令牌化**——14 个 UI 文件 555 处圆角/字号/间距/色彩字面量归一为 `Constants.TOKEN_*`（数值不变），覆盖率 97%，豁免登记 [token-exemptions.md](spec/engineering-refactor/token-exemptions.md)；结构组件化（T023）因「数值不变」下空态字号 14/15/16 并存不可归一，与观感收敛一并列远期待产品确认；③**US3 模块边界契约化**——契约落盘 [architecture-boundary.md](spec/engineering-refactor/architecture-boundary.md)，依赖审计零违规（service→model、pages→service/model、Constants 零业务依赖）；上帝对象（PlayerController/BiliService/SettingsPage）登记不拆分；④**US4 V2 迁移路线图**——逐文件清单与批次拆解落盘 [v2-migration-roadmap.md](spec/engineering-refactor/v2-migration-roadmap.md)，批次 1（模型层）已实施（2026-10-11：BiliVideo/PlayHistoryItem/Subscription/Season/FavFolder/AudioTrack 六类 `@ObservedV2`+`@Trace`，AudioQuality/ResolvedAudio/QualityTier 无可观察实体不迁），批次 2-4 待续；⑤API 26 基线化见 §四。版本 0.3.0/3000；欠账：T013 降级走查、深浅色/主题色全页走查——均待真机。
+
+- **V2 迁移整体完结（2026-10-11）**：批次 3（七页面）+ 批次 4（全局键/挂键组件）合并一次变更实施——新建 `V2State.ets` 包装类（BoolState/NumState/StrState + connect helpers）承接 `AS_*` 键，`KEY_*`（AppStore preferences）保留不动；**顺带修复既有 crash**：`PlayerOverlay.ets:1336` `currentOffset()` 浮层刚挂载时运行时返回 undefined（类型上不可空）→ pan 下滑关闭手势崩溃，防御判空（批次 1 与本轮部署各复现一次，修复后回归无复现）。批次 2 组件并入或免迁；**4.5 审计纠错**：PlayerController 为零装饰器纯类（手动 `subscribe`/`emitUi` 广播 + 版本计数，四个消费方 `syncFrom` 拷贝 `@Local`），git 全历史 `-S` 检索零命中「@Observed+@Track」，经用户确认按 YAGNI 关闭无需迁移；**V2 迁移路线图整体完结**。
 
 ## 四、API 26 基线化
 
-- **目标**：工程兼容基线 SDK 升到 API 26 后，移除全部 `[API24-COMPAT]` 守卫（全局检索该标记，按本章统一处理），并复核播控中心按钮在低版本设备上的兼容策略。
-- **现状**：`build-profile.json5` 的 `targetSdkVersion` 已为 `26.0.0`，`compatibleSdkVersion` 仍为 `6.1.1(24)`——基线尚未升级，守卫继续保留。
-- **守卫清单**（基线化时逐处移除，新增守卫须同步登记到此）：
-  1. [MediaSession.ets](entry/src/main/ets/service/MediaSession.ets) L42：`setMediaCenterControlType`（API 26 新增接口，API<26 设备运行时抛 TypeError）——try/catch 静默降级，低版本播控中心不显示快进/快退按钮，不影响播放/暂停/上一首/下一首。
+- **✅ 已完成（engineering-refactor 实施轮 1，2026-10-11）**：`compatibleSdkVersion` 升至 `26.0.0`（T004）；`[API24-COMPAT]` 守卫标记全局清零（T005，唯一处 [MediaSession.ets](entry/src/main/ets/service/MediaSession.ets) 已移除，`setMediaCenterControlType` 防御性 try/catch 保留）；版本号升至 0.3.0/3000（T006）。API 24/25 设备自本轮起不再受支持。
+- **守卫清单已清空**（基线化完成，源码全局检索 `[API24-COMPAT]` 零命中）；新增守卫须同步登记到此。
