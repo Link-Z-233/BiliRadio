@@ -63,10 +63,14 @@ export class PlayerController {
   duration: number = 0;
   statusMsg: string = '在首页添加订阅，或到订阅源详情页播放节目';
   pendingSeekMs: number = 0;
-  playWhenReady: boolean = true;
+  // 播放意图（v0.3-bugfix-round3 US1）：用户对播放/暂停的最后表态（点击即翻转），是播放控制图标的第一显示来源；
+  // AVPlayer 事件只做校准复位（出错/打断/停止/播完停止），冷启动恒 false，不落盘
+  playIntent: boolean = false;
   private pausedByUser: boolean = false;
   // 打断前是否处于播放意图：audioInterrupt INTERRUPT 时记录，END_INTERRUPT 时据此决定是否续播，仅播放会话内有效
   private resumeAfterInterrupt: boolean = false;
+  // 内部即时播放态（逻辑读，锁屏/控制中心保持实际态）：与 isPlaying 同步直写（v0.3-bugfix-round3 US1 去抖已删除）
+  private playingNow: boolean = false;
 
   private player: AudioPlayer = new AudioPlayer();
   private mediaSession: MediaSession = MediaSession.getInstance();
@@ -263,7 +267,8 @@ export class PlayerController {
       this.player.onError = (msg: string): void => {
         this.isPreparing = false;
         this.isPrepared = false;
-        this.isPlaying = false;
+        this.playIntent = false;
+        this.setPlaying(false);
         this.statusMsg = `播放错误: ${msg}`;
         this.mediaSession.updateState(false, this.currentTime);
         this.mediaSession.stopBackground();
@@ -272,7 +277,10 @@ export class PlayerController {
       this.player.onAudioInterrupt = (eventType: 'INTERRUPT' | 'END_INTERRUPT'): void => {
         if (eventType === 'INTERRUPT') {
           // isPlaying 在打断瞬间可能已被系统先置 false，改判「用户是否主动暂停过」更可靠
-          this.resumeAfterInterrupt = this.isPlaying || !this.pausedByUser;
+          this.resumeAfterInterrupt = this.playingNow || !this.pausedByUser;
+          // 意图校准：打断即不可播，图标立即回播放键；END_INTERRUPT 续播经 playRequest 置回
+          this.playIntent = false;
+          this.emitUi();
           hilog.info(Constants.LOG_DOMAIN, Constants.LOG_TAG,
             'audioInterrupt INTERRUPT resumeAfterInterrupt=%{public}d', this.resumeAfterInterrupt ? 1 : 0);
         } else {
@@ -322,10 +330,16 @@ export class PlayerController {
     this.emitUi();
   }
 
+  // 即时落定播放态：内部与对外字段同步直写（去抖基建已随意图先行重写删除）
+  private setPlaying(playing: boolean): void {
+    this.playingNow = playing;
+    this.isPlaying = playing;
+  }
+
   private onPlayerState(state: string): void {
-    hilog.info(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'player state: %{public}s, playWhenReady=%{public}d',
-      state, this.playWhenReady ? 1 : 0);
-    Logger.log('player', 'state', `${state} playWhenReady=${this.playWhenReady ? 1 : 0}`);
+    hilog.info(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'player state: %{public}s, playIntent=%{public}d',
+      state, this.playIntent ? 1 : 0);
+    Logger.log('player', 'state', `${state} playIntent=${this.playIntent ? 1 : 0}`);
     if (state === 'prepared') {
       this.isPrepared = true;
       this.isPreparing = false;
@@ -339,7 +353,7 @@ export class PlayerController {
             item.cover, item.ownerName, true);
         }
       }
-      if (this.playWhenReady) {
+      if (this.playIntent) {
         this.player.play();
       } else {
         if (this.pendingSeekMs > 0 && this.pendingSeekMs < this.duration) {
@@ -351,7 +365,6 @@ export class PlayerController {
         this.mediaSession.updateState(false, this.currentTime);
       }
     } else if (state === 'playing') {
-      this.isPlaying = true;
       this.isPreparing = false;
       if (this.pendingSeekMs > 0) {
         const seekTo: number = this.pendingSeekMs;
@@ -367,19 +380,22 @@ export class PlayerController {
       if (this.currentIndex >= 0 && this.currentIndex < this.playlist.length) {
         this.recordOnPlaying(this.playlist[this.currentIndex]);
       }
+      this.setPlaying(true);
     } else if (state === 'paused') {
-      this.isPlaying = false;
       this.persistProgress();
       this.mediaSession.updateState(false, this.currentTime);
+      this.setPlaying(false);
     } else if (state === 'completed') {
-      this.isPlaying = false;
+      this.setPlaying(false);
       this.mediaSession.updateState(false, this.currentTime);
       // 完播标记（plan R5①）：自然播完 → 当前条目 progress=-1 即时写盘
       this.markCurrentHistoryCompleted();
       this.handleCompleted();
     } else if (state === 'idle' || state === 'stopped') {
       this.isPrepared = false;
-      this.isPlaying = false;
+      // 意图校准：播放器停止即不可播，图标回播放键
+      this.playIntent = false;
+      this.setPlaying(false);
       this.mediaSession.updateState(false, this.currentTime);
       this.mediaSession.stopBackground();
     }
@@ -396,12 +412,14 @@ export class PlayerController {
     if (st.isPlayToEofActive()) {
       st.disarmPlayToEof();
       this.currentItemEnded = true;
+      this.playIntent = false;
       this.statusMsg = '本集播完已暂停';
       return;
     }
     if (this.pausedByUser) {
       this.statusMsg = '播放结束';
       this.currentItemEnded = true;
+      this.playIntent = false;
       return;
     }
     if (this.playMode === PlayMode.REPEAT_ONE) {
@@ -415,6 +433,7 @@ export class PlayerController {
         (this.playMode === PlayMode.REVERSE && this.currentIndex <= 0))) {
       this.statusMsg = '播放结束';
       this.currentItemEnded = true;
+      this.playIntent = false;
       return;
     }
     this.next();
@@ -430,11 +449,11 @@ export class PlayerController {
     if (now - this.lastSaveTime > Constants.PROGRESS_SAVE_INTERVAL_MS) {
       this.lastSaveTime = now;
       this.persistProgress();
-      this.mediaSession.updateState(this.isPlaying, time);
+      this.mediaSession.updateState(this.playingNow, time);
     }
     // 完播阈值判定（plan R5②）：duration 已知且进度 ≥ duration×95% → 同样标记已听完
     // （覆盖「拖到结尾附近停住/切走」场景）；duration 未知（=0）保守不判定
-    if (this.isPlaying && this.duration > 0 && time >= this.duration * Constants.PLAY_COMPLETE_RATIO) {
+    if (this.playingNow && this.duration > 0 && time >= this.duration * Constants.PLAY_COMPLETE_RATIO) {
       this.markCurrentHistoryCompleted();
     }
     // 进度 UI（时间文本/进度条）只需秒级刷新：仅秒变化时广播，
@@ -529,7 +548,7 @@ export class PlayerController {
       this.forwardHistory = [];
       this.currentIndex = -1;
       this.isPrepared = false;
-      this.isPlaying = false;
+      this.setPlaying(false);
       this.currentTime = 0;
       this.duration = 0;
       AppStore.savePlaylistFile(this.playlist, startIndex, 0);
@@ -581,9 +600,26 @@ export class PlayerController {
     if (index < 0 || index >= this.playlist.length) {
       return;
     }
+    // 非 Wi-Fi 播放确认：「仅在 Wi-Fi 环境播放」开关开且非 Wi-Fi 时，须经 UI 层确认后放行本次播放。
+    // 拦截须在【任何状态改写之前】完成——未确认则本次不切换（保持旧曲目与 UI 原状），
+    // 避免先改写 currentIndex / 广播新曲目再取消，导致「音频仍放旧曲、UI 却显示新曲」的不一致
+    const wifiOnly: boolean = AppStore.getNumber(Constants.KEY_WIFI_ONLY_DOWNLOAD, 0) === 1;
+    if (wifiOnly && !(await NetUtil.isWifi())) {
+      let confirmed: boolean = false;
+      if (this.confirmCellularDownload !== undefined) {
+        try {
+          confirmed = await this.confirmCellularDownload();
+        } catch (e) {
+          confirmed = false;
+        }
+      }
+      if (!confirmed) {
+        return;
+      }
+    }
     // 每集进度（plan R4）：旧曲目仍在真实出声时先即时 flush 其进度（切歌写盘点）——
     // 此刻 currentIndex/currentTime/duration/currentCid 均属旧曲目，先落史再切换
-    if (this.isPlaying && !this.isPreparing) {
+    if (this.playingNow && !this.isPreparing) {
       this.updateHistoryProgressForCurrent(Math.floor(this.currentTime / 1000));
     }
     if (!fromNav) {
@@ -623,8 +659,8 @@ export class PlayerController {
     this.duration = item.duration > 0 ? item.duration * 1000 : 0;
     this.isPreparing = true;
     this.isPrepared = false;
-    this.isPlaying = false;
-    this.playWhenReady = true;
+    this.setPlaying(false);
+    this.playIntent = true;
     this.pausedByUser = false;
     this.currentItemEnded = false;
     this.statusMsg = '正在解析...';
@@ -632,24 +668,6 @@ export class PlayerController {
     this.loadToken++;
     const token: number = this.loadToken;
     try {
-      // 仅 Wi-Fi 缓存下载门控：开关开且非 Wi-Fi 时，须经 UI 层确认后才放行本次缓存下载
-      const wifiOnly: boolean = AppStore.getNumber(Constants.KEY_WIFI_ONLY_DOWNLOAD, 0) === 1;
-      if (wifiOnly && !(await NetUtil.isWifi())) {
-        let confirmed: boolean = false;
-        if (this.confirmCellularDownload !== undefined) {
-          try {
-            confirmed = await this.confirmCellularDownload();
-          } catch (e) {
-            confirmed = false;
-          }
-        }
-        if (!confirmed) {
-          this.isPreparing = false;
-          this.statusMsg = '当前非 Wi-Fi 网络，已取消播放';
-          this.emitUi();
-          return;
-        }
-      }
       // 流式边下边播（US2）：现取直链（不持久化），缓冲态文案取代整段下载百分比；
       // 视频信息只拉一次——先回填元数据拿到 cid，再按网络默认档解析音轨（audio-quality-settings FR-002）
       this.statusMsg = '正在缓冲...';
@@ -826,14 +844,14 @@ export class PlayerController {
 
   async togglePlay(): Promise<void> {
     if (this.isPreparing) {
-      if (this.playWhenReady) {
+      if (this.playIntent) {
         await this.pauseRequest();
       } else {
         await this.playRequest();
       }
       return;
     }
-    if (this.isPlaying) {
+    if (this.playingNow) {
       await this.pauseRequest();
     } else {
       await this.playRequest();
@@ -841,8 +859,8 @@ export class PlayerController {
   }
 
   async playRequest(): Promise<void> {
+    this.playIntent = true;
     if (this.isPreparing) {
-      this.playWhenReady = true;
       this.pausedByUser = false;
       this.statusMsg = '加载完成后将自动播放';
       this.emitUi();
@@ -865,20 +883,21 @@ export class PlayerController {
 
   async pauseRequest(): Promise<void> {
     this.resumeAfterInterrupt = false;
+    this.playIntent = false;
     if (this.isPreparing) {
-      this.playWhenReady = false;
       this.pausedByUser = true;
       await this.player.pause();
-      this.isPlaying = false;
+      this.setPlaying(false);
       this.statusMsg = '加载完成后将保持暂停';
       this.emitUi();
       return;
     }
-    if (this.isPlaying) {
+    if (this.playingNow) {
       this.pausedByUser = true;
       await this.player.pause();
-      this.isPlaying = false;
+      this.setPlaying(false);
       this.persistProgress();
+      this.emitUi();
     }
   }
 
@@ -947,7 +966,7 @@ export class PlayerController {
       return;
     }
     const resumePos: number = this.currentTime;
-    const wasPlaying: boolean = this.isPlaying && !this.pausedByUser;
+    const wasPlaying: boolean = this.playingNow && !this.pausedByUser;
     const prevQualityCode: number = this.currentQualityCode;
     const prevStatusMsg: string = this.statusMsg;
     // 切档前取消挂起的 seekBy 防抖，防止其到期 seek 到已释放的旧实例
@@ -961,10 +980,10 @@ export class PlayerController {
     this.emitUi();
     this.loadToken++;
     const token: number = this.loadToken;
-    // prepared/playing 回调经既有 pendingSeekMs/playWhenReady 机制恢复进度与播放态
+    // prepared/playing 回调经既有 pendingSeekMs/playIntent 机制恢复进度与播放态
     this.pendingSeekMs = resumePos;
     this.currentTime = resumePos;
-    this.playWhenReady = wasPlaying;
+    this.playIntent = wasPlaying;
     Logger.log('player', 'setQualityTier',
       `bvid=${item.bvid} cid=${this.currentCid} tier=${Number(tier)} resumePos=${resumePos} wasPlaying=${wasPlaying ? 1 : 0}`);
     // 标记换流是否已进入重建阶段（旧实例已释放后失败须走恢复链）
@@ -1023,7 +1042,7 @@ export class PlayerController {
           return;
         }
         this.pendingSeekMs = resumePos;
-        this.playWhenReady = wasPlaying;
+        this.playIntent = wasPlaying;
         await this.openStreamWithRetry(back.urls);
         if (token !== this.loadToken) {
           return;
@@ -1155,7 +1174,7 @@ export class PlayerController {
     if (this.playlist.length === 0) {
       this.currentIndex = -1;
       this.isPrepared = false;
-      this.isPlaying = false;
+      this.setPlaying(false);
       this.currentItemEnded = false;
       this.currentTime = 0;
       this.duration = 0;
@@ -1382,7 +1401,7 @@ export class PlayerController {
     if (this.playlist.length === 0) {
       this.currentIndex = -1;
       this.isPrepared = false;
-      this.isPlaying = false;
+      this.setPlaying(false);
       this.currentItemEnded = false;
       this.currentTime = 0;
       this.duration = 0;
@@ -1391,7 +1410,7 @@ export class PlayerController {
       AppStore.savePlaylistFile(this.playlist, -1, 0);
     } else if (removingCurrent) {
       this.isPrepared = false;
-      this.isPlaying = false;
+      this.setPlaying(false);
       let target: number = this.currentIndex - removedBeforeCurrent;
       if (target >= this.playlist.length) {
         target = 0;
@@ -1407,37 +1426,63 @@ export class PlayerController {
     this.emitUi();
   }
 
-  // 清除已播（queue-redesign US4 FR-009/FR-010）：移除 [0, currentIndex) 前缀；
-  // currentItemEnded 时连当前条目一并移除——播完态清除后无当前条目（currentIndex=-1、
-  // isPrepared/isPlaying=false、resetPlayer、持久化 (playlist, -1, 0)，队列空同此语义）；
-  // 播放中仅移前缀、索引前移到 0、不打断播放；无可清（无前缀且未播完）静默返回。
-  // UI 侧经 playlistVersion++ 触发 syncFrom 的 diff 增量刷新（notifyDataDelete 从高到低）
+  // 清空队列编排（R3 US4）：调用即停声（准备期同时收意图），CLEAR_QUEUE_DATA_DELAY_MS 后
+  // 经 removeSelectedFromPlaylist(全量 bvid) 复用清数据/停播/持久化链路
+  clearAllWithExitDelay(): void {
+    this.player.pause();
+    if (this.isPreparing) {
+      this.playIntent = false;
+    }
+    setTimeout((): void => {
+      const all: string[] = [];
+      for (let i = 0; i < this.playlist.length; i++) {
+        all.push(this.playlist[i].bvid);
+      }
+      this.removeSelectedFromPlaylist(all).catch((): void => {});
+    }, Constants.CLEAR_QUEUE_DATA_DELAY_MS);
+  }
+
+  // 清除已播（v0.3-bugfix-round2 US3 重写）：已听完判定与播放模式无关——播放历史 progress===-1 即已听完，
+  // 移除 playlist 中全部已听完且非当前播放的条目；复用 removeSelectedFromPlaylist 批量链路
+  // （removingCurrent/removedBeforeCurrent 索引修正、空队列重置、持久化全套语义）；
+  // 无可清静默返回；UI 侧经 playlistVersion++ 触发 syncFrom 的 diff 增量刷新
   async clearPlayedItems(): Promise<void> {
-    const ci: number = this.currentIndex;
-    const ended: boolean = this.currentItemEnded && ci >= 0 && ci < this.playlist.length;
-    const prefix: number = ci > 0 ? ci : 0;
-    if (prefix === 0 && !ended) {
+    const toRemove: string[] = this.collectPlayedRemovable();
+    if (toRemove.length === 0) {
       return;
     }
-    const keepFrom: number = ended ? ci + 1 : ci;
-    const kept: BiliVideo[] = this.playlist.slice(keepFrom);
-    this.playlist = kept;
-    this.playlistVersion++;
-    this.currentItemEnded = false;
-    if (!ended) {
-      this.currentIndex = 0;
-      this.statusMsg = '已清除已播条目';
-      AppStore.savePlaylistFile(this.playlist, 0, this.currentTime);
-    } else {
-      this.currentIndex = -1;
-      this.isPrepared = false;
-      this.isPlaying = false;
-      this.currentTime = 0;
-      this.duration = 0;
-      await this.player.resetPlayer();
-      this.statusMsg = '已清除已播条目';
-      AppStore.savePlaylistFile(this.playlist, -1, 0);
+    await this.removeSelectedFromPlaylist(toRemove);
+  }
+
+  // 已听完（playedSet 语义）：内存播放历史命中 bvid 且 progress===-1（markCurrentHistoryCompleted 写入）
+  isPlayed(bvid: string): boolean {
+    for (let i = 0; i < this.playHistory.length; i++) {
+      if (this.playHistory[i].bvid === bvid && this.playHistory[i].progress === -1) {
+        return true;
+      }
     }
-    this.emitUi();
+    return false;
+  }
+
+  // 可清理集合：playlist 中已听完且非当前播放的 bvid（当前条目永远保留，spec FR-003）
+  private collectPlayedRemovable(): string[] {
+    const currentBvid: string = this.currentIndex >= 0 && this.currentIndex < this.playlist.length
+      ? this.playlist[this.currentIndex].bvid : '';
+    const result: string[] = [];
+    for (let i = 0; i < this.playlist.length; i++) {
+      const bvid: string = this.playlist[i].bvid;
+      if (bvid !== currentBvid && this.isPlayed(bvid)) {
+        result.push(bvid);
+      }
+    }
+    return result;
+  }
+
+  hasPlayedItems(): boolean {
+    return this.collectPlayedRemovable().length > 0;
+  }
+
+  playedRemovableCount(): number {
+    return this.collectPlayedRemovable().length;
   }
 }

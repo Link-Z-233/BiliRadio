@@ -8,9 +8,9 @@ import { AppStore } from '../service/AppStore';
 import { PlayHistoryItem } from '../model/PlayHistoryItem';
 import { PlayerController, EnqueueResult } from '../service/PlayerController';
 import { Constants } from '../service/Constants';
+import { dismissOverlaysForBack } from '../service/BackHandler';
 import { connectBool, connectNum, connectStr, BoolState, NumState, StrState } from '../service/V2State';
 import { CoverThumb } from '../component/CoverThumb';
-import { EdgeHint } from '../component/EdgeHint';
 
 function formatDuration(sec: number): string {
   if (sec <= 0) {
@@ -63,9 +63,6 @@ struct SourcePage {
   @Local canLoadOlder: boolean = false;
   @Local loadingOlder: boolean = false;
   @Local episodeCount: number = 0;
-  // US5 过冲提示：顶部固定文案，底部与触底加载联动三态
-  @Local topHint: string = '';
-  @Local bottomHint: string = '';
   private seenBefore: number = 0;         // 进入时的 lastSeenAt，NEW 徽标基准
   private olderPage: number = 1;          // 已加载的最大页号（sortReverse 语义）
   private olderFailAt: number = 0;        // 加载更早失败时间戳：冷却期内禁止重试（US2）
@@ -73,9 +70,6 @@ struct SourcePage {
   private upWebLastPage: number = 0;
   // 最近一次触底页的实际来源：APP 链稀疏（服务端钳 ps 至 20），仅 Web 链短页才是权威到底
   private upOlderViaWeb: boolean = false;
-  // 触底时刻的列表偏移（US5 底部过冲判定基准）；-1 = 未捕获，列表内容增删后失效须重捕
-  private endOffsetY: number = -1;
-  private dragging: boolean = false;
   private sub: Subscription = new Subscription();
   private playedSet: Set<string> = new Set();
   private scroller: Scroller = new Scroller();
@@ -117,7 +111,6 @@ struct SourcePage {
     this.episodeCount = this.episodes.length;
     this.olderPage = 1;
     this.upWebLastPage = 0;
-    this.endOffsetY = -1;
     // 触底门槛按类型区分：
     // - UP/FAV：只要缓存非空即允许触底尝试（UP 的 APP 链服务端钳 ps 至 20 致短页假到底，
     //   Web 降级链无游标无法预知总页数；FAV 刷新只抓第一页且过滤失效视频，短页是正常现象）
@@ -183,17 +176,6 @@ struct SourcePage {
     });
   }
 
-  // 底部过冲提示三态（FR-010）：加载中／没有更多／可加载（含失败冷却期）不显示
-  private bottomHintText(): string {
-    if (this.loadingOlder) {
-      return '加载中…';
-    }
-    if (!this.canLoadOlder) {
-      return '没有更多了';
-    }
-    return '';
-  }
-
   // 触底加载更早：四类订阅统一分派（页号越大越老），只进内存不写缓存。
   // 失败进入 3 秒冷却（LOAD_OLDER_FAIL_COOLDOWN_MS）：ArkUI onReachEnd 在按住底端时每帧重触发，
   // 冷却窗口物理上杜绝链式重试打爆风控
@@ -230,7 +212,6 @@ struct SourcePage {
         this.episodes = this.episodes.concat(fresh);
         this.episodes.sort((a: BiliVideo, b: BiliVideo): number => b.pubdate - a.pubdate);
         this.episodeCount = this.episodes.length;
-        this.endOffsetY = -1;
       }
       if (this.sub.type === Subscription.TYPE_FAV) {
         // FAV：失效视频过滤致短页是正常现象，不按短页终止；
@@ -335,6 +316,7 @@ struct SourcePage {
       alignment: DialogAlignment.Center,
       primaryButton: {
         value: '取消订阅',
+        fontColor: $r('app.color.danger_red'),
         action: (): void => {
           const subs: Subscription[] = SubscriptionStore.loadSubscriptions();
           for (let i = 0; i < subs.length; i++) {
@@ -354,6 +336,11 @@ struct SourcePage {
         }
       }
     });
+  }
+
+  @Styles
+  pressedStyle() {
+    .backgroundColor($r('app.color.item_pressed_background'))
   }
 
   build() {
@@ -426,8 +413,6 @@ struct SourcePage {
           .justifyContent(FlexAlign.Center)
         } else {
           Stack() {
-            EdgeHint({ text: this.topHint, edge: 'top' })
-            EdgeHint({ text: this.bottomHint, edge: 'bottom' })
             List({ space: 4, scroller: this.scroller }) {
             ForEach(this.episodes, (item: BiliVideo, index: number) => {
               ListItem() {
@@ -469,6 +454,7 @@ struct SourcePage {
                 .padding({ left: Constants.TOKEN_SPACE_M, right: Constants.TOKEN_SPACE_M, top: Constants.TOKEN_SPACE_10, bottom: Constants.TOKEN_SPACE_10 })
                 .borderRadius(Constants.TOKEN_RADIUS_14)
                 .backgroundColor($r('app.color.card_background'))
+                .stateStyles({ pressed: this.pressedStyle })
                 .onClick(() => {
                   this.playEpisode(index);
                 })
@@ -506,36 +492,8 @@ struct SourcePage {
             .height('100%')
             .padding({ left: Constants.TOKEN_SPACE_M, right: Constants.TOKEN_SPACE_M, top: Constants.TOKEN_SPACE_XS, bottom: (this.miniPlayerVisible.value ? Constants.MINI_PLAYER_CLEARANCE : 12) + this.navBarHeight.value })
             .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
-            .onWillStartDragging(() => {
-              this.dragging = true;
-            })
-            .onReachStart(() => {
-              if (this.dragging) {
-                this.topHint = '已经到顶了';
-              }
-            })
             .onReachEnd(() => {
-              this.endOffsetY = this.scroller.currentOffset().yOffset;
               this.loadOlder();
-            })
-            .onWillScroll((yOffset: number): void => {
-              const y: number = this.scroller.currentOffset().yOffset;
-              if (yOffset < 0) {
-                this.bottomHint = '';
-                if (y <= 0) {
-                  this.topHint = '已经到顶了';
-                }
-              } else if (yOffset > 0) {
-                this.topHint = '';
-                if (this.endOffsetY >= 0 && y >= this.endOffsetY) {
-                  this.bottomHint = this.bottomHintText();
-                }
-              }
-            })
-            .onScrollStop(() => {
-              this.topHint = '';
-              this.bottomHint = '';
-              this.dragging = false;
             })
           }
           .width('100%')
@@ -575,5 +533,7 @@ struct SourcePage {
       // 无参 pop() 故永不回调，徽标返回首页不清除；改经 AppStorage tick 驱动 HomePage @Watch 重建
       connectNum(Constants.AS_HOME_REFRESH_TICK, 0).value = Date.now();
     })
+    // US5：系统返回先经 BackHandler 关队列/浮层，无浮层可关返回 false 放行默认 pop
+    .onBackPressed((): boolean => dismissOverlaysForBack())
   }
 }

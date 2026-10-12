@@ -38,6 +38,7 @@
     { "name": "fg_on_light_secondary", "value": "#666666" },
     { "name": "sheet_background", "value": "#80FFFFFF" },
     { "name": "btn_border", "value": "#26000000" },
-    { "name": "success_green", "value": "#34C759" }
+    { "name": "success_green", "value": "#34C759" },
+    { "name": "item_pressed_background", "value": "#12000000" }
   ]
 }

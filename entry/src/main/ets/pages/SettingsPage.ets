@@ -12,10 +12,10 @@ import { image } from '@kit.ImageKit';
 import { photoAccessHelper } from '@kit.MediaLibraryKit';
 import { fileIo as fs } from '@kit.CoreFileKit';
 import { CoverThumb } from '../component/CoverThumb';
-import { EdgeHint } from '../component/EdgeHint';
 import { SettingsGroup } from '../component/SettingsGroup';
 import { SettingsRow } from '../component/SettingsRow';
 import { Constants } from '../service/Constants';
+import { dismissOverlaysForBack } from '../service/BackHandler';
 import { connectBool, connectNum, connectStr, BoolState, NumState, StrState } from '../service/V2State';
 import { Logger } from '../service/Logger';
 import { PlayHistoryItem } from '../model/PlayHistoryItem';
@@ -98,9 +98,6 @@ struct SettingsPage {
   @Local showPlayHistory: BoolState = connectBool(Constants.AS_SHOW_PLAY_HISTORY, false);
   @Local playHistoryItems: PlayHistoryItem[] = [];
   @Local playHistoryVersion: number = -1;
-  // US6 历史面板顶/底过冲提示
-  @Local historyTopHint: string = '';
-  @Local historyBottomHint: string = '';
 
   // —— 应用内日志（US9） ——
   @Local logCount: number = 0;
@@ -117,10 +114,6 @@ struct SettingsPage {
   // 外观三态选中态（0=跟随系统 1=浅色 2=深色）：由 Appearance 写全局键驱动刷新
   @Local colorModeSetting: NumState =
     connectNum(Constants.AS_COLOR_MODE_SETTING, Appearance.MODE_FOLLOW_SYSTEM);
-
-  // US8 设置页滚动过冲提示（顶/底），空串不渲染
-  @Local settingsTopHint: string = '';
-  @Local settingsBottomHint: string = '';
 
   @Local accentColor: StrState =
     connectStr(Constants.AS_ACCENT_COLOR, Constants.ACCENT_DEFAULT);
@@ -151,14 +144,9 @@ struct SettingsPage {
   private pollGeneration: number = 0;
   private controller: PlayerController = PlayerController.getInstance();
   private playHistorySource: HistoryDataSource = new HistoryDataSource();
-  private historyScroller: Scroller = new Scroller();
-  // 触底时刻的列表偏移（历史面板底部过冲判定基准）；-1 = 未捕获，条目增删后失效须重捕
-  private historyEndY: number = -1;
-  // FR-013：历史面板拖拽中标志（onReachStart 初始化会误触发一次，仅拖拽期间允许置过冲提示）
-  private historyDragging: boolean = false;
-  // 设置页滚动容器（US8）：触底偏移捕获 + 过冲提示
+  // ListScroller（extends Scroller）：取消确认后经 closeAllSwipeActions 复位滑动行（US1）
+  private historyScroller: ListScroller = new ListScroller();
   private settingsScroller: Scroller = new Scroller();
-  private settingsEndY: number = -1;
   private navPathStack: NavPathStack = new NavPathStack();
   // 进度广播退订句柄（US2/KI-1）：aboutToDisappear 中调用，避免监听器累积
   private unsubscribePlayer: () => void = (): void => {};
@@ -180,7 +168,6 @@ struct SettingsPage {
         this.playHistoryVersion = this.controller.playHistoryVersion;
         this.playHistoryItems = this.controller.playHistory.slice(0);
         this.playHistorySource.setItems(this.playHistoryItems);
-        this.historyEndY = -1;
       }
     }, 'SettingsPage');
     this.logCount = Logger.count();
@@ -251,7 +238,6 @@ struct SettingsPage {
     this.playHistoryVersion = this.controller.playHistoryVersion;
     this.playHistoryItems = this.controller.playHistory.slice(0);
     this.playHistorySource.setItems(this.playHistoryItems);
-    this.historyEndY = -1;
     this.showPlayHistory.value = true;
   }
 
@@ -368,8 +354,8 @@ struct SettingsPage {
   }
 
   // 左滑单条删除（US3 FR-009）：点击时按 bvid 从当前 @State 数组实时解析下标，
-  // 避免 LazyForEach 键复用导致的陈旧索引；@State splice 与 DataSource.notifyDataDelete 双侧同步，
-  // 控制器侧异步写盘（removePlayHistoryItem 不 emitUi，面板自行刷新）
+  // 避免 LazyForEach 键复用导致的陈旧索引；@State splice 与 DataSource.notifyDataDelete 双侧同步
+  // （包补位动画 US6），控制器侧异步写盘（removePlayHistoryItem 不 emitUi，面板自行刷新）
   private removeHistoryItem(item: PlayHistoryItem): void {
     const bvid: string = item.bvid;
     if (bvid === '') {
@@ -387,24 +373,65 @@ struct SettingsPage {
     }
     this.controller.removePlayHistoryItem(bvid);
     this.playHistoryVersion = this.controller.playHistoryVersion;
-    this.playHistoryItems.splice(idx, 1);
-    this.playHistorySource.notifyDataDelete(idx);
-    this.historyEndY = -1;
+    this.getUIContext().animateTo({ duration: Constants.TOKEN_DELETE_ANIM_MS, curve: Curve.EaseOut }, (): void => {
+      this.playHistoryItems.splice(idx, 1);
+      this.playHistorySource.notifyDataDelete(idx);
+    });
   }
 
-  // 左滑露出的红色「删除」按钮（KI-3 交互约定：露出按钮、点击确认删除，不做滑过阈值直删）
+  // 左滑删除确认（US1 双触发）：点垃圾桶/滑过阈值（SwipeActionItem.onAction）均进本弹窗，
+  // 确认后删除，取消/点外围经 closeAllSwipeActions 复位收起滑动行
+  private confirmRemoveHistoryItem(item: PlayHistoryItem): void {
+    AlertDialog.show({
+      title: Constants.DIALOG_DELETE_HISTORY_TITLE,
+      message: Constants.DIALOG_DELETE_HISTORY_MSG,
+      autoCancel: true,
+      alignment: DialogAlignment.Center,
+      primaryButton: {
+        value: '删除',
+        fontColor: $r('app.color.danger_red'),
+        action: (): void => {
+          this.removeHistoryItem(item);
+        }
+      },
+      secondaryButton: {
+        value: '取消',
+        action: (): void => {
+          this.historyScroller.closeAllSwipeActions();
+        }
+      },
+      cancel: (): void => {
+        this.historyScroller.closeAllSwipeActions();
+      }
+    });
+  }
+
+  @Styles
+  pressedStyle() {
+    .backgroundColor($r('app.color.item_pressed_background'))
+  }
+
+  // 左滑露出的红色垃圾桶删除钮（US1 双触发）：点击进确认弹窗，滑过阈值（onAction）同弹窗
   @Builder
   historyDeleteAction(item: PlayHistoryItem) {
-    Button('删除')
-      .height('100%')
-      .padding({ left: 18, right: 18 })
+    Column() {
+      Button() {
+        SymbolGlyph($r('sys.symbol.trash'))
+          .fontSize(Constants.SWIPE_DELETE_ICON_FONT)
+          .fontColor([$r('app.color.fg_on_dark')])
+          .fontWeight(FontWeight.Bold)
+      }
+      .width(Constants.SWIPE_DELETE_BTN_SIZE)
+      .height(Constants.SWIPE_DELETE_BTN_SIZE)
       .backgroundColor($r('app.color.danger_red'))
-      .fontColor($r('app.color.fg_on_dark'))
-      .fontSize(Constants.TOKEN_FONT_BODY)
-      .borderRadius(0)
+      .borderRadius(Constants.SWIPE_DELETE_BTN_RADIUS)
       .onClick(() => {
-        this.removeHistoryItem(item);
+        this.confirmRemoveHistoryItem(item);
       })
+    }
+    .height('100%')
+    .justifyContent(FlexAlign.Center)
+    .padding({ right: Constants.TOKEN_SPACE_M })
   }
 
   private confirmClearPlayHistory(): void {
@@ -420,12 +447,12 @@ struct SettingsPage {
       },
       secondaryButton: {
         value: '清空',
+        fontColor: $r('app.color.danger_red'),
         action: (): void => {
           this.controller.clearPlayHistory();
           this.playHistoryVersion = this.controller.playHistoryVersion;
           this.playHistoryItems = [];
           this.playHistorySource.setItems(this.playHistoryItems);
-          this.historyEndY = -1;
         }
       }
     });
@@ -1075,8 +1102,6 @@ struct SettingsPage {
         .layoutWeight(1)
       } else {
         Stack() {
-          EdgeHint({ text: this.historyTopHint, edge: 'top' })
-          EdgeHint({ text: this.historyBottomHint, edge: 'bottom' })
           List({ space: 0, scroller: this.historyScroller }) {
             LazyForEach(this.playHistorySource, (item: PlayHistoryItem) => {
             ListItem() {
@@ -1100,54 +1125,27 @@ struct SettingsPage {
               }
               .width('100%')
               .padding({ left: Constants.TOKEN_SPACE_L, right: Constants.TOKEN_SPACE_L, top: Constants.TOKEN_SPACE_10, bottom: Constants.TOKEN_SPACE_10 })
+              .stateStyles({ pressed: this.pressedStyle })
               .onClick(() => {
                 this.replayHistory(item);
               })
             }
-            // 左滑露出删除按钮（US3 FR-009）：CustomBuilder 的 void 分支接受 @Builder 调用表达式
+            // 左滑删除（US1 双触发）：SwipeActionItem——点垃圾桶/滑过阈值均进确认弹窗
             .swipeAction({
-              end: this.historyDeleteAction(item)
+              end: {
+                builder: (): void => {
+                  this.historyDeleteAction(item);
+                },
+                onAction: (): void => {
+                  this.confirmRemoveHistoryItem(item);
+                }
+              }
             })
           }, (item: PlayHistoryItem) => `${item.bvid}_${item.viewAt}_${item.progress}`)
           }
           .width('100%')
           .height('100%')
           .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
-          // FR-013：到边即置过冲提示——onWillScroll 在纯边界过冲（偏移量不再变化）时不回调，
-          // 改由 onReachStart/onReachEnd 驱动（onReachStart 初始化会误触发一次，故须拖拽中守卫）
-          .onWillStartDragging(() => {
-            this.historyDragging = true;
-          })
-          .onReachStart(() => {
-            if (this.historyDragging) {
-              this.historyTopHint = '已经到顶了';
-            }
-          })
-          .onReachEnd(() => {
-            this.historyEndY = this.historyScroller.currentOffset().yOffset;
-            if (this.historyDragging) {
-              this.historyBottomHint = '已经到底了';
-            }
-          })
-          .onWillScroll((yOffset: number): void => {
-            const y: number = this.historyScroller.currentOffset().yOffset;
-            if (yOffset < 0) {
-              this.historyBottomHint = '';
-              if (y <= 0) {
-                this.historyTopHint = '已经到顶了';
-              }
-            } else if (yOffset > 0) {
-              this.historyTopHint = '';
-              if (this.historyEndY >= 0 && y >= this.historyEndY) {
-                this.historyBottomHint = '已经到底了';
-              }
-            }
-          })
-          .onScrollStop(() => {
-            this.historyTopHint = '';
-            this.historyBottomHint = '';
-            this.historyDragging = false;
-          })
         }
         .width('100%')
         .layoutWeight(1)
@@ -1232,8 +1230,6 @@ struct SettingsPage {
         .padding({ left: Constants.TOKEN_SPACE_L, right: Constants.TOKEN_SPACE_L, top: Constants.TOKEN_SPACE_6, bottom: Constants.TOKEN_SPACE_10 })
 
         Stack() {
-          EdgeHint({ text: this.settingsTopHint, edge: 'top' })
-          EdgeHint({ text: this.settingsBottomHint, edge: 'bottom' })
           Scroll(this.settingsScroller) {
             Column() {
               SettingsGroup({ title: '账号' }) {
@@ -1402,33 +1398,6 @@ struct SettingsPage {
           .height('100%')
           .scrollBar(BarState.Off)
           .edgeEffect(EdgeEffect.Spring)
-          .onScrollEdge((side: Edge): void => {
-            if (side === Edge.Bottom) {
-              this.settingsEndY = this.settingsScroller.currentOffset().yOffset;
-              this.settingsBottomHint = '已经到底了';
-            } else if (side === Edge.Top) {
-              // US8-AC4：onWillScroll 在纯边界过冲（偏移量不再变化）时不回调，到边提示改由本回调驱动
-              this.settingsTopHint = '已经到顶了';
-            }
-          })
-          .onWillScroll((yOffset: number): void => {
-            const y: number = this.settingsScroller.currentOffset().yOffset;
-            if (yOffset < 0) {
-              this.settingsBottomHint = '';
-              if (y <= 0) {
-                this.settingsTopHint = '已经到顶了';
-              }
-            } else if (yOffset > 0) {
-              this.settingsTopHint = '';
-              if (this.settingsEndY >= 0 && y >= this.settingsEndY) {
-                this.settingsBottomHint = '已经到底了';
-              }
-            }
-          })
-          .onScrollStop(() => {
-            this.settingsTopHint = '';
-            this.settingsBottomHint = '';
-          })
         }
         .width('100%')
         .layoutWeight(1)
@@ -1469,14 +1438,16 @@ struct SettingsPage {
       // US7/T021：设置页在台标志提前到转场开始时置位——驱动首页播放胶囊在本页隐藏
       connectBool(Constants.AS_ON_SETTINGS_PAGE, false).value = true;
     })
-    .onWillDisappear(() => {
-      // US7/T021：返回转场开始即复位，配合 Index 侧胶囊显隐动画随转场即时平滑出现
-      connectBool(Constants.AS_ON_SETTINGS_PAGE, false).value = false;
-    })
     .onShown(() => {
       // US5：日志页返回后刷新角标计数——pushPathByName 的 onPop 仅在 pop(result) 带 result 时触发，
       // 日志页返回按钮为无参 pop()，onPop 永不回调，须在设置页重新可见时主动重读
       this.logCount = Logger.count();
+    })
+    .onHidden(() => {
+      // US3（v0.3-bugfix-round3）：页面真正隐藏（退场转场播完）才复位在台标志——
+      // 返回首页时胶囊在设置页滑出动画结束后才出现，不再压在退场页面上层；
+      // 推入日志页时同触发，胶囊延后到转场后在日志页显示（现状行为仅时序后移）
+      connectBool(Constants.AS_ON_SETTINGS_PAGE, false).value = false;
     })
     .onReady((ctx: NavDestinationContext) => {
       this.navPathStack = ctx.pathStack;
@@ -1491,18 +1462,13 @@ struct SettingsPage {
       }
     })
     .onBackPressed((): boolean => {
+      // US5：浮层/队列统一交 BackHandler 分层关闭（含浮层与历史面板同开先关面板语义），
+      // 无可关走本页自身面板分支
+      if (dismissOverlaysForBack()) {
+        return true;
+      }
       if (this.showQualitySheet) {
         this.showQualitySheet = false;
-        return true;
-      }
-      // US4：与 Index.onBackPress 同构——浮层与历史面板同开时先关面板，再按才关浮层
-      const overlayOpen: boolean = connectBool(Constants.AS_SHOW_PLAYER_OVERLAY, false).value;
-      if (overlayOpen && this.showPlayHistory.value) {
-        this.showPlayHistory.value = false;
-        return true;
-      }
-      if (overlayOpen) {
-        connectBool(Constants.AS_SHOW_PLAYER_OVERLAY, false).value = false;
         return true;
       }
       if (this.showPlayHistory.value) {

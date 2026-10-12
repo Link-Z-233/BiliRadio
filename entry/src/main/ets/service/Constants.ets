@@ -109,6 +109,19 @@ export class Constants {
   // 日志落盘硬上限（字节）：超限保留最新一半重写（滚动淘汰），文件占用有界
   static readonly LOG_FILE_MAX_BYTES: number = 512 * 1024;
 
+  // —— 删除补位动画与面板关闭时序（v0.3-bugfix-round2 US6/US8）——
+  // 删除数据变更包 animateTo 的过渡时长（ms）：notifyDataDelete 落闭包内即补位动画
+  static readonly TOKEN_DELETE_ANIM_MS: number = 250;
+  // 队列面板滑出动画结束后卸载/关浮层的延时（ms）：略长于 250ms 滑出动画保证完整播完
+  static readonly DRAWER_CLOSE_DELAY_MS: number = 260;
+  // 清空队列延时清数据（ms，v0.3-bugfix-round3 US4）：先关层后清数据，延时大于浮层 350ms 转场保证清数据时浮层已卸载
+  static readonly CLEAR_QUEUE_DATA_DELAY_MS: number = 400;
+
+  // —— 左滑删除圆钮（v0.3-bugfix-round3 US6）：圆形红底垃圾桶，尺寸/圆角/图标字号唯一来源 ——
+  static readonly SWIPE_DELETE_BTN_SIZE: number = 44;
+  static readonly SWIPE_DELETE_BTN_RADIUS: number = 22;
+  static readonly SWIPE_DELETE_ICON_FONT: number = 18;
+
   // —— B 站端点与 UA（US3：未登录查询 UP 投稿风控修复） ——
   // APP 投稿端点：BiliDroid 客户端渠道，无需 cookie/WBI 即可查询投稿列表
   static readonly BILI_APP_ARCHIVE_URL: string = 'https://app.bilibili.com/x/v2/space/archive/cursor';
@@ -139,8 +152,17 @@ export class Constants {
   // —— 清除已播（queue-redesign US4）：无可清 toast 与二次确认框文案 ——
   static readonly TOAST_QUEUE_NO_PLAYED: string = '没有可清除的已播内容';
   static readonly DIALOG_CLEAR_PLAYED_TITLE: string = '清除已播';
-  static readonly DIALOG_CLEAR_PLAYED_PLAYING_MSG: string = '将移除当前条目之前的已播条目';
-  static readonly DIALOG_CLEAR_PLAYED_ENDED_MSG: string = '将移除已播条目及已播完的当前条目';
+  // v0.3-bugfix-round2 US3：计数式文案（N 由实际可清条目数代入）
+  static readonly DIALOG_CLEAR_PLAYED_COUNT_MSG: string = '确定清除 N 首已播条目吗？';
+  // —— 删除二次确认（v0.3-bugfix-round2 US1/US2）：三处左滑 + 多选移除 ——
+  static readonly DIALOG_DELETE_HISTORY_TITLE: string = '删除播放记录';
+  static readonly DIALOG_DELETE_HISTORY_MSG: string = '确定删除这条播放记录吗？';
+  static readonly DIALOG_DELETE_QUEUE_ITEM_TITLE: string = '移除队列条目';
+  static readonly DIALOG_DELETE_QUEUE_ITEM_MSG: string = '确定从队列移除该条目吗？';
+  static readonly DIALOG_DELETE_SUB_TITLE: string = '删除订阅';
+  static readonly DIALOG_DELETE_SUB_MSG: string = '确定删除该订阅吗？';
+  static readonly DIALOG_REMOVE_SELECTED_TITLE: string = '移除所选';
+  static readonly DIALOG_REMOVE_SELECTED_MSG: string = '确定移除所选条目吗？';
   // —— 队列空态引导（queue-redesign US1） ——
   static readonly QUEUE_EMPTY_HINT: string = '到订阅源详情页播放节目，或在首页点「＋」添加订阅';
 
@@ -165,6 +187,7 @@ export class Constants {
   static readonly TOKEN_FONT_20: number = 20;
   static readonly TOKEN_FONT_TITLE_L: number = 22;
   static readonly TOKEN_FONT_24: number = 24;
+  static readonly TOKEN_FONT_56: number = 56;
   // 圆角：基础档（plan）+ 实测扩展档
   static readonly TOKEN_RADIUS_S: number = 8;
   static readonly TOKEN_RADIUS_M: number = 12;

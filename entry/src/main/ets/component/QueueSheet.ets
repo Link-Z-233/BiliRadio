@@ -4,8 +4,8 @@ import { BiliVideo } from '../model/BiliVideo';
 
 import { Constants } from '../service/Constants';
 import { connectBool, connectStr, BoolState, StrState } from '../service/V2State';
+import { closeBothLayersNow } from '../service/BackHandler';
 import { CoverThumb } from './CoverThumb';
-import { EdgeHint } from './EdgeHint';
 import { promptAction } from '@kit.ArkUI';
 
 // 颜色全部使用 base/dark 双份颜色资源：浅色/深色外观下自动匹配（见 resources/base|dark/element/color.json）
@@ -91,11 +91,11 @@ export struct QueueSheet {
   @Local playlistVersion: number = -1;
   @Local selectMode: BoolState = connectBool(Constants.AS_PLAYLIST_SELECT_MODE, false);
   @Local selectedBvids: string[] = [];
+  // 面板显隐同源（v0.3 US7）：与 QueueDrawer/Index 共享同键实例，关闭时驱动多选复位
+  @Local showQueueSheet: BoolState = connectBool(Constants.AS_SHOW_QUEUE_SHEET, false);
 
   @Local pageHeight: number = 0;
   @Local headerHeight: number = 72;
-  @Local queueTopHint: string = '';
-  @Local queueBottomHint: string = '';
 
   // 主题色（T016）：强调色运行时跟随外观设置（Appearance 写入 AppStorage），衍生色一律经 hexWithAlpha
   @Local accentColor: StrState =
@@ -116,10 +116,9 @@ export struct QueueSheet {
   }
 
   private listSource: PlaylistDataSource = new PlaylistDataSource();
-  private listScroller: Scroller = new Scroller();
+  // ListScroller（extends Scroller）：取消确认后经 closeAllSwipeActions 复位滑动行（US1）
+  private listScroller: ListScroller = new ListScroller();
   private swipeStartIndex: number = -1;
-  private queueEndY: number = -1;
-  private queueDragging: boolean = false;
   // 进度广播退订句柄（US2/KI-1）：aboutToDisappear 中调用，避免监听器累积
   private unsubscribePlayer: () => void = (): void => {};
 
@@ -133,6 +132,22 @@ export struct QueueSheet {
   aboutToDisappear(): void {
     this.unsubscribePlayer();
     this.unsubscribePlayer = (): void => {};
+  }
+
+  // 面板关闭（遮罩/返回/滑出任一方式）自动退出多选（v0.3 US7 FR-009）
+  @Monitor('showQueueSheet.value')
+  onQueueSheetVisibilityChanged(): void {
+    if (!this.showQueueSheet.value) {
+      this.exitSelectMode();
+    }
+  }
+
+  // 多选退出即清选中（v0.3 US7）：外部（Index 系统返回）仅翻转 selectMode，选中项由本侧复位
+  @Monitor('selectMode.value')
+  onSelectModeChanged(): void {
+    if (!this.selectMode.value) {
+      this.selectedBvids = [];
+    }
   }
 
   private syncFrom(c: PlayerController): void {
@@ -219,43 +234,26 @@ export struct QueueSheet {
     this.selectedBvids = [];
   }
 
+  // 多选移除（US2）：二次确认防误触；确认后批量移除包补位动画（US6）
   private removeSelected(): void {
     const count: number = this.selectedBvids.length;
     if (count === 0) {
       return;
     }
-    const bvids: string[] = this.selectedBvids.slice(0);
-    this.exitSelectMode();
-    this.controller.removeSelectedFromPlaylist(bvids);
-  }
-
-  // 左滑单条删除（US2 FR-004/FR-005）：按 bvid 走既有批量移除链路
-  // （含当前条目自动切播语义，FR-010），UI 刷新交由 syncFrom 的 diff 增量通知
-  private removeQueueItem(item: BiliVideo): void {
-    if (item.bvid === '') {
-      return;
-    }
-    this.queueEndY = -1;
-    this.controller.removeSelectedFromPlaylist([item.bvid]);
-  }
-
-  // 清除已播（US4 FR-009）：无可清（无前缀且未播完）toast 不弹框，可清时二次确认
-  private confirmClearPlayed(): void {
-    const canClear: boolean = this.controller.currentIndex > 0 || this.controller.currentItemEnded;
-    if (!canClear) {
-      promptAction.showToast({ message: Constants.TOAST_QUEUE_NO_PLAYED });
-      return;
-    }
     AlertDialog.show({
-      title: Constants.DIALOG_CLEAR_PLAYED_TITLE,
-      message: this.controller.currentItemEnded
-        ? Constants.DIALOG_CLEAR_PLAYED_ENDED_MSG : Constants.DIALOG_CLEAR_PLAYED_PLAYING_MSG,
+      title: Constants.DIALOG_REMOVE_SELECTED_TITLE,
+      message: Constants.DIALOG_REMOVE_SELECTED_MSG,
       autoCancel: true,
       alignment: DialogAlignment.Center,
       primaryButton: {
-        value: '清除',
+        value: '移除',
+        fontColor: $r('app.color.danger_red'),
         action: (): void => {
-          this.controller.clearPlayedItems();
+          const bvids: string[] = this.selectedBvids.slice(0);
+          this.exitSelectMode();
+          this.getUIContext().animateTo({ duration: Constants.TOKEN_DELETE_ANIM_MS, curve: Curve.EaseOut }, (): void => {
+            this.controller.removeSelectedFromPlaylist(bvids);
+          });
         }
       },
       secondaryButton: {
@@ -266,7 +264,75 @@ export struct QueueSheet {
     });
   }
 
-  // 清空队列：移除全部条目（含当前播放），二次确认防误触
+  // 左滑单条删除（US2 FR-004/FR-005）：按 bvid 走既有批量移除链路
+  // （含当前条目自动切播语义，FR-010），UI 刷新交由 syncFrom 的 diff 增量通知
+  private removeQueueItem(item: BiliVideo): void {
+    if (item.bvid === '') {
+      return;
+    }
+    this.controller.removeSelectedFromPlaylist([item.bvid]);
+  }
+
+  // 左滑删除确认（US1 双触发）：点垃圾桶/滑过阈值（SwipeActionItem.onAction）均进本弹窗，
+  // 确认后删除（US6 补位动画），取消/点外围经 closeAllSwipeActions 复位收起滑动行
+  private confirmRemoveQueueItem(item: BiliVideo): void {
+    AlertDialog.show({
+      title: Constants.DIALOG_DELETE_QUEUE_ITEM_TITLE,
+      message: Constants.DIALOG_DELETE_QUEUE_ITEM_MSG,
+      autoCancel: true,
+      alignment: DialogAlignment.Center,
+      primaryButton: {
+        value: '移除',
+        fontColor: $r('app.color.danger_red'),
+        action: (): void => {
+          this.getUIContext().animateTo({ duration: Constants.TOKEN_DELETE_ANIM_MS, curve: Curve.EaseOut }, (): void => {
+            this.removeQueueItem(item);
+          });
+        }
+      },
+      secondaryButton: {
+        value: '取消',
+        action: (): void => {
+          this.listScroller.closeAllSwipeActions();
+        }
+      },
+      cancel: (): void => {
+        this.listScroller.closeAllSwipeActions();
+      }
+    });
+  }
+
+  // 清除已播（US3）：无可清 toast 不弹框；可清时按可清计数二次确认，确认后按 playedSet 语义清理
+  private confirmClearPlayed(): void {
+    const count: number = this.controller.playedRemovableCount();
+    if (count === 0) {
+      promptAction.showToast({ message: Constants.TOAST_QUEUE_NO_PLAYED });
+      return;
+    }
+    AlertDialog.show({
+      title: Constants.DIALOG_CLEAR_PLAYED_TITLE,
+      message: Constants.DIALOG_CLEAR_PLAYED_COUNT_MSG.replace('N', `${count}`),
+      autoCancel: true,
+      alignment: DialogAlignment.Center,
+      primaryButton: {
+        value: '清除',
+        fontColor: $r('app.color.danger_red'),
+        action: (): void => {
+          this.getUIContext().animateTo({ duration: Constants.TOKEN_DELETE_ANIM_MS, curve: Curve.EaseOut }, (): void => {
+            this.controller.clearPlayedItems();
+          });
+        }
+      },
+      secondaryButton: {
+        value: '取消',
+        action: (): void => {
+        }
+      }
+    });
+  }
+
+  // 清空队列（R3 US4）：移除全部条目（含当前播放），二次确认防误触；
+  // 确认后两层同收（closeBothLayersNow）+ 停声先行、延时清数据（clearAllWithExitDelay）
   private clearQueue(): void {
     if (this.items.length === 0) {
       return;
@@ -278,12 +344,10 @@ export struct QueueSheet {
       alignment: DialogAlignment.Center,
       primaryButton: {
         value: '清空',
+        fontColor: $r('app.color.danger_red'),
         action: (): void => {
-          const all: string[] = [];
-          for (let i = 0; i < this.items.length; i++) {
-            all.push(this.items[i].bvid);
-          }
-          this.controller.removeSelectedFromPlaylist(all);
+          closeBothLayersNow();
+          this.controller.clearAllWithExitDelay();
         }
       },
       secondaryButton: {
@@ -315,20 +379,32 @@ export struct QueueSheet {
     ];
   }
 
-  // 左滑露出的红色「删除」按钮（US2，样式对齐 SettingsPage.historyDeleteAction：
-  // 露出按钮、点击执行删除，不做滑过阈值直删）
+  // 左滑露出的红色垃圾桶删除钮（US1 双触发）：点击进确认弹窗，滑过阈值（onAction）同弹窗
   @Builder
   queueDeleteAction(item: BiliVideo) {
-    Button('删除')
-      .height('100%')
-      .padding({ left: 18, right: 18 })
+    Column() {
+      Button() {
+        SymbolGlyph($r('sys.symbol.trash'))
+          .fontSize(Constants.SWIPE_DELETE_ICON_FONT)
+          .fontColor([$r('app.color.fg_on_dark')])
+          .fontWeight(FontWeight.Bold)
+      }
+      .width(Constants.SWIPE_DELETE_BTN_SIZE)
+      .height(Constants.SWIPE_DELETE_BTN_SIZE)
       .backgroundColor($r('app.color.danger_red'))
-      .fontColor($r('app.color.fg_on_dark'))
-      .fontSize(Constants.TOKEN_FONT_BODY)
-      .borderRadius(0)
+      .borderRadius(Constants.SWIPE_DELETE_BTN_RADIUS)
       .onClick(() => {
-        this.removeQueueItem(item);
+        this.confirmRemoveQueueItem(item);
       })
+    }
+    .height('100%')
+    .justifyContent(FlexAlign.Center)
+    .padding({ right: Constants.TOKEN_SPACE_M })
+  }
+
+  @Styles
+  pressedStyle() {
+    .backgroundColor($r('app.color.item_pressed_background'))
   }
 
   build() {
@@ -484,8 +560,6 @@ export struct QueueSheet {
         .padding({ top: this.headerHeight })
       } else {
         Stack() {
-          EdgeHint({ text: this.queueTopHint, edge: 'top' })
-          EdgeHint({ text: this.queueBottomHint, edge: 'bottom' })
           List({ space: 0, scroller: this.listScroller }) {
             LazyForEach(this.listSource, (item: BiliVideo, index: number) => {
               ListItem() {
@@ -505,7 +579,7 @@ export struct QueueSheet {
                       })
                   }
 
-                  CoverThumb({ cover: item.cover, highlight: index === this.currentIndex })
+                  CoverThumb({ cover: item.cover, highlight: index === this.currentIndex, accent: this.accentColor.value })
 
                   Column() {
                     Row() {
@@ -530,11 +604,20 @@ export struct QueueSheet {
                   .alignItems(HorizontalAlign.Start)
                   .layoutWeight(1)
                   .margin({ left: Constants.TOKEN_SPACE_10 })
+
+                  // 已播标记（US4）：非当前条目且已播完时行尾绿 ✓，对齐 SourcePage NEW 徽标视觉
+                  if (!this.selectMode.value && this.controller.isPlayed(item.bvid)) {
+                    SymbolGlyph($r('sys.symbol.checkmark_circle'))
+                      .fontSize(Constants.TOKEN_FONT_TITLE)
+                      .fontColor([$r('app.color.success_green')])
+                      .margin({ left: Constants.TOKEN_SPACE_XS })
+                  }
                 }
                 .width('100%')
                 .padding({ left: Constants.TOKEN_SPACE_L, right: Constants.TOKEN_SPACE_L, top: Constants.TOKEN_SPACE_M, bottom: Constants.TOKEN_SPACE_M })
                 .backgroundColor(Color.Transparent)
                 .borderRadius(Constants.TOKEN_RADIUS_M)
+                .stateStyles({ pressed: this.pressedStyle })
                 .onClick(() => {
                   if (this.selectMode.value) {
                     this.toggleSelect(item.bvid);
@@ -566,7 +649,14 @@ export struct QueueSheet {
                 )
               }
               .swipeAction({
-                end: this.queueDeleteAction(item)
+                end: {
+                  builder: (): void => {
+                    this.queueDeleteAction(item);
+                  },
+                  onAction: (): void => {
+                    this.confirmRemoveQueueItem(item);
+                  }
+                }
               })
             }, (item: BiliVideo) => `${item.bvid}_${item.ownerName}`)
           }
@@ -579,41 +669,6 @@ export struct QueueSheet {
           .linearGradientBlur(EDGE_BLUR_RADIUS, {
             fractionStops: this.listBlurStops(),
             direction: GradientDirection.Bottom
-          })
-          // FR-103（修订 US5/FR-008）：双向过冲提示——拖拽中拉过顶/底露出「已经到顶了/已经到底了」，回弹消失
-          // （模式对齐设置页历史面板；onReachStart 初始化误触发一次，故须拖拽中守卫）
-          .onWillStartDragging(() => {
-            this.queueDragging = true;
-          })
-          .onReachStart(() => {
-            if (this.queueDragging) {
-              this.queueTopHint = '已经到顶了';
-            }
-          })
-          .onReachEnd(() => {
-            this.queueEndY = this.listScroller.currentOffset().yOffset;
-            if (this.queueDragging) {
-              this.queueBottomHint = '已经到底了';
-            }
-          })
-          .onWillScroll((yOffset: number): void => {
-            const y: number = this.listScroller.currentOffset().yOffset;
-            if (yOffset < 0) {
-              this.queueBottomHint = '';
-              if (y <= 0) {
-                this.queueTopHint = '已经到顶了';
-              }
-            } else if (yOffset > 0) {
-              this.queueTopHint = '';
-              if (this.queueEndY >= 0 && y >= this.queueEndY) {
-                this.queueBottomHint = '已经到底了';
-              }
-            }
-          })
-          .onScrollStop(() => {
-            this.queueTopHint = '';
-            this.queueBottomHint = '';
-            this.queueDragging = false;
           })
         }
         .width('100%')

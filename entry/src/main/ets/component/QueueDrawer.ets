@@ -4,7 +4,6 @@ import { QueueSheet } from './QueueSheet';
 
 // 抽屉滑入/滑出动画时长（ms）：与遮罩 OPACITY 过渡一致；关闭延时比动画略长，保证滑出完整
 const DRAWER_SLIDE_MS: number = 250;
-const DRAWER_CLOSE_DELAY_MS: number = 260;
 
 // 底部弹出播放队列面板（FR-101/plan D1）：点击遮罩关闭；面板从底部平移进出场（退出时反向滑出）。
 // 进出场由挂载时 animateTo 驱动的显式位移状态实现（US1：TransitionEffect.translate
@@ -56,7 +55,7 @@ export struct QueueDrawer {
     this.closeTimer = setTimeout((): void => {
       this.closeTimer = -1;
       this.showQueueSheet.value = false;
-    }, DRAWER_CLOSE_DELAY_MS);
+    }, Constants.DRAWER_CLOSE_DELAY_MS);
   }
 
   build() {

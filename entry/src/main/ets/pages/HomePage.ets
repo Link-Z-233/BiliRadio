@@ -4,9 +4,9 @@ import { SubscriptionStore } from '../service/SubscriptionStore';
 import { Constants } from '../service/Constants';
 import { connectBool, connectNum, connectStr, BoolState, NumState, StrState } from '../service/V2State';
 import { CoverThumb } from '../component/CoverThumb';
-import { EdgeHint } from '../component/EdgeHint';
 import { AddSubscriptionSheet, AddSheetBackHandler } from './AddSubscriptionSheet';
 import { promptAction } from '@kit.ArkUI';
+import { hilog } from '@kit.PerformanceAnalysisKit';
 
 interface PopupStateChange {
   isVisible: boolean;
@@ -49,6 +49,17 @@ class SubDataSource implements IDataSource {
       this.listeners[i].onDataReloaded();
     }
   }
+
+  // 删除单行（US2）：notifyDataDelete 通知 LazyForEach 走补位动画；越界静默返回
+  delete(index: number): void {
+    if (index < 0 || index >= this.rows.length) {
+      return;
+    }
+    this.rows.splice(index, 1);
+    for (let i = 0; i < this.listeners.length; i++) {
+      this.listeners[i].onDataDelete(index);
+    }
+  }
 }
 
 // 主页：订阅源列表（新集徽标 / 长按置顶删除 / 空态）；下拉刷新已注释禁用（[DISABLED 2026-10]，见 PROJECT_NOTES.md）
@@ -65,19 +76,13 @@ export struct HomePage {
   // @Local refreshing: boolean = false;
   @Local rowCount: number = 0;
   @Local showAddSheet: boolean = false;
-  // US5 过冲提示（顶/底），空串不渲染
-  @Local topHint: string = '';
-  @Local bottomHint: string = '';
   // 添加订阅面板的系统返回拦截句柄（onWillDismiss PRESS_BACK 时经其询问面板是否消费）
   private addSheetBack: AddSheetBackHandler = new AddSheetBackHandler();
   private subs: Subscription[] = [];
   private provider: SubDataSource = new SubDataSource();
   private refreshingNow: boolean = false;
-  // US9：拖拽中标志（onReachStart 初始化会误触发一次，仅拖拽期间允许置过冲提示）
-  private dragging: boolean = false;
-  private scroller: Scroller = new Scroller();
-  // 触底时刻的列表偏移（US5 底部过冲判定基准）；-1 = 未捕获，列表重建后失效须重捕
-  private endOffsetY: number = -1;
+  // ListScroller（extends Scroller）：取消确认后经 closeAllSwipeActions 复位滑动行（US1）
+  private scroller: ListScroller = new ListScroller();
   @Param navPathStack: NavPathStack = new NavPathStack();
 
   aboutToAppear(): void {
@@ -89,7 +94,6 @@ export struct HomePage {
   private rebuild(): void {
     this.subs = SubscriptionStore.loadSubscriptions();
     this.subs.sort((a: Subscription, b: Subscription): number => a.sortOrder - b.sortOrder);
-    this.endOffsetY = -1;
     const rows: SubRow[] = [];
     for (let i = 0; i < this.subs.length; i++) {
       const sub: Subscription = this.subs[i];
@@ -161,15 +165,58 @@ export struct HomePage {
     this.rebuild();
   }
 
+  // 删除订阅（US2 健壮化）：按 sub.id 定位（替代引用匹配，消除闭包陈旧引用静默早退），
+  // animateTo 闭包内经 provider.delete 补位动画，闭包内不 rebuild；保存后校验持久化结果
   private removeSub(row: SubRow): void {
-    const idx: number = this.subs.indexOf(row.sub);
+    const subId: string = row.sub.id;
+    let idx: number = -1;
+    for (let i = 0; i < this.subs.length; i++) {
+      if (this.subs[i].id === subId) {
+        idx = i;
+        break;
+      }
+    }
     if (idx < 0) {
       return;
     }
-    this.subs.splice(idx, 1);
-    SubscriptionStore.removeEpisodes(row.sub.id);
-    SubscriptionStore.saveSubscriptions(this.subs);
-    this.rebuild();
+    this.getUIContext().animateTo({ duration: Constants.TOKEN_DELETE_ANIM_MS, curve: Curve.EaseOut }, (): void => {
+      this.provider.delete(idx);
+      this.subs.splice(idx, 1);
+      SubscriptionStore.saveSubscriptions(this.subs);
+      SubscriptionStore.removeEpisodes(subId);
+      this.rowCount = this.subs.length;
+      if (SubscriptionStore.subExists(subId)) {
+        hilog.error(Constants.LOG_DOMAIN, Constants.LOG_TAG,
+          'removeSub persist check failed, sub still on disk: %{public}s', subId);
+      }
+    });
+  }
+
+  // 删除订阅确认（US1/US2 双入口）：左滑垃圾桶/长按菜单共用同弹窗，
+  // 取消/点外围经 closeAllSwipeActions 复位收起滑动行
+  private confirmRemoveSub(row: SubRow): void {
+    AlertDialog.show({
+      title: Constants.DIALOG_DELETE_SUB_TITLE,
+      message: Constants.DIALOG_DELETE_SUB_MSG,
+      autoCancel: true,
+      alignment: DialogAlignment.Center,
+      primaryButton: {
+        value: '删除',
+        fontColor: $r('app.color.danger_red'),
+        action: (): void => {
+          this.removeSub(row);
+        }
+      },
+      secondaryButton: {
+        value: '取消',
+        action: (): void => {
+          this.scroller.closeAllSwipeActions();
+        }
+      },
+      cancel: (): void => {
+        this.scroller.closeAllSwipeActions();
+      }
+    });
   }
 
   private addSubscription(sub: Subscription): void {
@@ -245,6 +292,7 @@ export struct HomePage {
     .padding({ left: Constants.TOKEN_SPACE_M, right: Constants.TOKEN_SPACE_M, top: Constants.TOKEN_SPACE_10, bottom: Constants.TOKEN_SPACE_10 })
     .borderRadius(Constants.TOKEN_RADIUS_14)
     .backgroundColor($r('app.color.card_background'))
+    .stateStyles({ pressed: this.pressedStyle })
     .onClick(() => {
       this.navPathStack.pushPathByName('sourcePage', row.sub.id);
     })
@@ -262,31 +310,39 @@ export struct HomePage {
         })
       MenuItem({ startIcon: $r('sys.symbol.trash'), content: '删除订阅' })
         .onClick(() => {
-          this.removeSub(row);
+          this.confirmRemoveSub(row);
         })
     }
   }
 
   @Builder
   private subDeleteAction(row: SubRow) {
-    Button('删除')
-      .height('100%')
-      .padding({ left: 18, right: 18 })
+    Column() {
+      Button() {
+        SymbolGlyph($r('sys.symbol.trash'))
+          .fontSize(Constants.SWIPE_DELETE_ICON_FONT)
+          .fontColor([$r('app.color.fg_on_dark')])
+          .fontWeight(FontWeight.Bold)
+      }
+      .width(Constants.SWIPE_DELETE_BTN_SIZE)
+      .height(Constants.SWIPE_DELETE_BTN_SIZE)
       .backgroundColor($r('app.color.danger_red'))
-      .fontColor($r('app.color.fg_on_dark'))
-      .fontSize(Constants.TOKEN_FONT_BODY)
-      .borderRadius(0)
+      .borderRadius(Constants.SWIPE_DELETE_BTN_RADIUS)
       .onClick(() => {
-        this.removeSub(row);
+        this.confirmRemoveSub(row);
       })
+    }
+    .height('100%')
+    .justifyContent(FlexAlign.Center)
+    .padding({ right: Constants.TOKEN_SPACE_M })
   }
 
   @Builder
   private emptyView() {
     Column() {
-      Text('♪')
+      SymbolGlyph($r('sys.symbol.headphones'))
         .fontSize(42)
-        .fontColor($r('app.color.placeholder_color'))
+        .fontColor([$r('app.color.placeholder_color')])
       Text('还没有订阅')
         .fontSize(Constants.TOKEN_FONT_TITLE)
         .fontWeight(FontWeight.Medium)
@@ -300,6 +356,11 @@ export struct HomePage {
     .width('100%')
     .layoutWeight(1)
     .justifyContent(FlexAlign.Center)
+  }
+
+  @Styles
+  pressedStyle() {
+    .backgroundColor($r('app.color.item_pressed_background'))
   }
 
   build() {
@@ -350,54 +411,28 @@ export struct HomePage {
         // ②取消 Refresh 包裹层注释并把 List 的 layoutWeight(1) 移回 Refresh 上。
         // Refresh({ refreshing: $$this.refreshing }) {
         Stack() {
-          EdgeHint({ text: this.topHint, edge: 'top' })
-          EdgeHint({ text: this.bottomHint, edge: 'bottom' })
           List({ space: Constants.TOKEN_SPACE_S, scroller: this.scroller }) {
             LazyForEach(this.provider, (row: SubRow) => {
               ListItem() {
                 this.subRowItem(row)
               }
-              .swipeAction({ end: this.subDeleteAction(row) })
+               .swipeAction({
+                 end: {
+                   builder: (): void => {
+                     this.subDeleteAction(row);
+                   },
+                   onAction: (): void => {
+                     this.confirmRemoveSub(row);
+                   }
+                 }
+               })
             }, (row: SubRow) => `${row.sub.id}_${row.latestTitle}_${row.newCount}_${row.sub.cover}`)
           }
           .width('100%')
           .height('100%')
           .padding({ left: Constants.TOKEN_SPACE_M, right: Constants.TOKEN_SPACE_M, top: Constants.TOKEN_SPACE_XS, bottom: (this.miniPlayerVisible.value ? Constants.MINI_PLAYER_CLEARANCE : 12) + this.navBarHeight.value })
-          // US9：内容不足一屏时 List 默认不开启边缘效果，须显式 alwaysEnabled 才有过冲提示；
-          // onWillScroll 在纯边界过冲（偏移量不再变化）时不回调，到边提示改由 reach 回调驱动
+          // US9：内容不足一屏时 List 默认不开启边缘效果，须显式 alwaysEnabled 才有过冲物理回弹
           .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
-          .onWillStartDragging(() => {
-            this.dragging = true;
-          })
-          .onReachStart(() => {
-            if (this.dragging) {
-              this.topHint = '已经到顶了';
-            }
-          })
-          .onReachEnd(() => {
-            this.endOffsetY = this.scroller.currentOffset().yOffset;
-            if (this.dragging) {
-              this.bottomHint = '已经到底了';
-            }
-          })
-          .onWillScroll((yOffset: number): void => {
-            const y: number = this.scroller.currentOffset().yOffset;
-            if (yOffset < 0) {
-              this.bottomHint = '';
-              if (y <= 0) {
-                this.topHint = '已经到顶了';
-              }
-            } else if (yOffset > 0) {
-              this.topHint = '';
-              if (this.endOffsetY >= 0 && y >= this.endOffsetY) {
-                this.bottomHint = '已经到底了';
-              }
-            }
-          })
-          .onScrollStop(() => {
-            this.topHint = '';
-            this.bottomHint = '';
-          })
         }
         .width('100%')
         .layoutWeight(1)

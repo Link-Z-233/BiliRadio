@@ -14,10 +14,10 @@ import { connectBool, connectNum, connectStr, BoolState, NumState, StrState } fr
 
 // 颜色全部使用 base/dark 双份颜色资源：浅色/深色外观下自动匹配（见 resources/base|dark/element/color.json）
 
-// 封面光晕呼吸参数：静止亮度 / 呼吸峰值 / 呼吸周期
+// 封面光晕两态参数：静止亮度 / 活动亮度 / 播放态淡入时长（v0.3 US1：原无限呼吸已收敛为一次性过渡）
 const GLOW_IDLE: number = 0.35;
 const GLOW_ACTIVE: number = 0.8;
-const GLOW_BREATH_MS: number = 3200;
+const GLOW_FADE_IN_MS: number = 3200;
 
 // 下滑退出播放层的位移阈值（vp）：内容已到顶部时，下滑超过该距离才退出
 const PLAYER_DISMISS_SWIPE: number = 80;
@@ -26,10 +26,9 @@ const PLAYER_DISMISS_SWIPE: number = 80;
 
 @ComponentV2
 export struct PlayerOverlay {
-  @Local isPlaying: boolean = false;
   @Local isPrepared: boolean = false;
   @Local isPreparing: boolean = false;
-  @Local playWhenReady: boolean = true;
+  @Local playIntent: boolean = false;
   @Local currentTime: number = 0;
   @Local duration: number = 0;
   // 进度条受控值：拖动时实时跟随手指，松开才真正 seek，避免受控值回弹导致拖不动
@@ -81,8 +80,12 @@ export struct PlayerOverlay {
   @Local availableTracks: AudioTrack[] = [];
   @Local currentQualityCode: number = 0;
   @Local currentTrackSource: string = '';
+  // 队列抽屉关闭句柄上抛（v0.3 US5）：Index 统一持有，系统返回走滑出动画（与首页实例一致）
+  @Param onRegisterClose: (close: (() => void) | undefined) => void =
+    (close: (() => void) | undefined): void => {
+    };
   private trackBvid: string = '';
-  private wasPlaying: boolean = false;
+  private wasPlayIntent: boolean = false;
   // 简介懒加载（T014）：进行中标志防并发；已尝试的 bvid 防重复请求
   private descLoading: boolean = false;
   private descTriedBvid: string = '';
@@ -96,10 +99,6 @@ export struct PlayerOverlay {
 
   private textSecondary(): Resource {
     return $r('app.color.text_secondary');
-  }
-
-  private textDisabled(): Resource {
-    return $r('app.color.text_disabled');
   }
 
   // ===== 主题色衍生取色（T006）：alpha 沿用 base/dark 资源键原有取值 =====
@@ -135,7 +134,7 @@ export struct PlayerOverlay {
 
   aboutToAppear(): void {
     this.syncFrom(this.controller);
-    this.wasPlaying = this.isPlaying;
+    this.wasPlayIntent = this.playIntent;
     // KI-5：aboutToAppear 运行于节点构建中，此处调用 animateTo 会触发框架告警
     // （"node stack is not empty, not suitable for animateTo"），
     // 且疑似在 API 24 上引发 ModalPage 渲染管线挂载后冻结（仅渲染首帧）——
@@ -145,8 +144,9 @@ export struct PlayerOverlay {
     }, 0);
     this.unsubscribePlayer = this.controller.subscribe((): void => {
       this.syncFrom(this.controller);
-      if (this.isPlaying !== this.wasPlaying) {
-        this.wasPlaying = this.isPlaying;
+      // 光晕强度以意图翻转为动画触发源（US1 意图先行）
+      if (this.playIntent !== this.wasPlayIntent) {
+        this.wasPlayIntent = this.playIntent;
         this.updateGlow();
       }
     }, 'PlayerOverlay');
@@ -187,13 +187,8 @@ export struct PlayerOverlay {
   }
 
   private updateGlow(): void {
-    if (this.isPlaying) {
-      this.getUIContext().animateTo({
-        duration: GLOW_BREATH_MS,
-        curve: Curve.EaseInOut,
-        iterations: -1,
-        playMode: PlayMode.Alternate
-      }, (): void => {
+    if (this.playIntent) {
+      this.getUIContext().animateTo({ duration: GLOW_FADE_IN_MS, curve: Curve.EaseInOut }, (): void => {
         this.glowStrength = GLOW_ACTIVE;
       });
     } else {
@@ -261,10 +256,9 @@ export struct PlayerOverlay {
   }
 
   private syncFrom(c: PlayerController): void {
-    this.isPlaying = c.isPlaying;
     this.isPrepared = c.isPrepared;
     this.isPreparing = c.isPreparing;
-    this.playWhenReady = c.playWhenReady;
+    this.playIntent = c.playIntent;
     this.currentTime = c.currentTime;
     this.duration = c.duration;
     // US2：切剧瞬间（controller 进入 preparing）复位拖拽状态，
@@ -390,7 +384,7 @@ export struct PlayerOverlay {
     return result;
   }
 
-  // 播放模式四态映射符号（T009）：顺序=order_play / 随机=shuffle / 单曲循环=repeat_1 / 倒序=reverse_order
+  // 播放模式四态映射符号：顺序/倒序=order_play（倒序另经 playModeRotate 旋转 180°）/ 随机=shuffle / 单曲循环=repeat_1
   private playModeIcon(): Resource {
     if (this.playMode === MusicPlayMode.RANDOM) {
       return $r('sys.symbol.shuffle');
@@ -398,10 +392,12 @@ export struct PlayerOverlay {
     if (this.playMode === MusicPlayMode.REPEAT_ONE) {
       return $r('sys.symbol.repeat_1');
     }
-    if (this.playMode === MusicPlayMode.REVERSE) {
-      return $r('sys.symbol.reverse_order');
-    }
     return $r('sys.symbol.order_play');
+  }
+
+  // 倒序模式图标旋转角（度）：仅 REVERSE 旋转 180°，表达「方向相反=倒序」
+  private playModeRotate(): number {
+    return this.playMode === MusicPlayMode.REVERSE ? 180 : 0;
   }
 
   // 音质入口按钮短名（T017，替代波形图标）：dash 流式 → 当前音轨码精确档名
@@ -826,36 +822,10 @@ export struct PlayerOverlay {
         .width('100%')
         .padding({ left: Constants.TOKEN_SPACE_10, right: Constants.TOKEN_SPACE_10, top: this.statusBarHeight.value + 6, bottom: Constants.TOKEN_SPACE_XS })
 
-        // 空态判定（US2 统一口径）：无当前曲目（trackIndex<0）或队列为空任一成立即显示占位，
-        // 与播放键 enabled 条件（isPrepared || trackIndex>=0 || playlistCount>0）对称
-        if (this.trackIndex < 0 || this.playlistCount === 0) {
-          Column() {
-            Text('暂无播放内容')
-              .fontSize(Constants.TOKEN_FONT_TITLE_L)
-              .fontWeight(FontWeight.Bold)
-              .fontColor(this.textPrimary())
-              .margin({ top: 60 })
-
-            Text('在首页点「＋」粘贴BV号直接播放\n或订阅UP主/收藏夹/合集后收听')
-              .fontSize(Constants.TOKEN_FONT_BODY_M)
-              .fontColor(this.textSecondary())
-              .textAlign(TextAlign.Center)
-              .margin({ top: Constants.TOKEN_SPACE_XL })
-
-            Text('添加内容后即可开始收听')
-              .fontSize(Constants.TOKEN_FONT_BODY)
-              .fontColor(this.textDisabled())
-              .margin({ top: Constants.TOKEN_SPACE_M })
-          }
-          .width('100%')
-          .layoutWeight(1)
-          .justifyContent(FlexAlign.Start)
-          .alignItems(HorizontalAlign.Center)
-        } else {
           Scroll(this.contentScroller) {
             Column() {
               Stack() {
-                // 封面环境光晕 — 多段衰减模拟自然光扩散，播放时呼吸；粉色系资源，浅色下适当调亮保持协调
+                // 封面环境光晕 — 多段衰减模拟自然光扩散，播放时淡入高亮（v0.3 US1 一次性过渡，无往复）
                 Column()
                   .width(450)
                   .height(450)
@@ -878,9 +848,9 @@ export struct PlayerOverlay {
                       .contentTransition(ContentTransitionEffect.OPACITY)
                   } else {
                     Column() {
-                      Text('♪')
-                        .fontSize(56)
-                        .fontColor(this.accentColor.value)
+                      SymbolGlyph($r('sys.symbol.headphones'))
+                        .fontSize(Constants.TOKEN_FONT_56)
+                        .fontColor([this.accentColor.value])
                     }
                     .width(300)
                     .height(188)
@@ -915,14 +885,14 @@ export struct PlayerOverlay {
                 .borderRadius(Constants.TOKEN_RADIUS_18)
                 .clip(true)
                 .shadow({ radius: 30, color: $r('app.color.shadow_cover'), offsetY: 16 })
-                .brightness(this.isPlaying ? 1 : 0.88)
+                .brightness(this.playIntent ? 1 : 0.88)
                 .animation({ duration: 400, curve: Curve.FastOutSlowIn })
               }
               .width(300)
               .height(188)
               .margin({ top: Constants.TOKEN_SPACE_XL }) // US10：原 8 过挤，展开态封面与状态栏留出呼吸感
               .alignSelf(ItemAlign.Center)
-              .scale({ x: this.isPlaying ? 1 : 0.94, y: this.isPlaying ? 1 : 0.94 })
+              .scale({ x: this.playIntent ? 1 : 0.94, y: this.playIntent ? 1 : 0.94 })
               .animation({ duration: 350, curve: Curve.FastOutSlowIn })
 
               Row() {
@@ -1108,15 +1078,15 @@ export struct PlayerOverlay {
                 this.controller.seekBy(-Constants.SEEK_STEP_MS);
               })
 
-              // 播放键（US1 尺寸同源）：缓冲中（isPreparing && playWhenReady）以系统 LoadingProgress
-              // 反馈加载状态（US4，跨 API 版本表现一致），其余时间显示播放/暂停图标
+              // 播放键（US1 尺寸同源）：意图先行（US1）——缓冲中且意图为播以系统 LoadingProgress
+              // 反馈加载状态（US4，跨 API 版本表现一致）；其余按意图显示暂停/播放图标
               Stack() {
-                if (this.isPreparing && this.playWhenReady) {
+                if (this.isPreparing && this.playIntent) {
                   LoadingProgress()
                     .color(this.accentColor.value)
                     .width(Constants.PLAY_BTN_DIAMETER * 0.5)
                     .height(Constants.PLAY_BTN_DIAMETER * 0.5)
-                } else if (this.isPlaying) {
+                } else if (this.playIntent) {
                   SymbolGlyph($r('sys.symbol.pause_fill'))
                     .fontSize(32)
                     .fontColor([$r('app.color.text_primary')])
@@ -1204,6 +1174,7 @@ export struct PlayerOverlay {
                 SymbolGlyph(this.playModeIcon())
                   .fontSize(Constants.TOKEN_FONT_18)
                   .fontColor([this.accentColor.value])
+                  .rotate({ angle: this.playModeRotate() })
               }
               .height(36)
               .padding({ left: Constants.TOKEN_SPACE_14, right: Constants.TOKEN_SPACE_14 })
@@ -1268,32 +1239,9 @@ export struct PlayerOverlay {
             .justifyContent(FlexAlign.Center)
             .alignItems(VerticalAlign.Center)
             .margin({ top: Constants.TOKEN_SPACE_14 })
-
-            // 状态行（plan R10）：statusMsg 常驻固定底栏，任意滚动位置可见；isPreparing 时行首显示加载指示
-            Row({ space: Constants.TOKEN_SPACE_6 }) {
-              if (this.isPreparing) {
-                LoadingProgress()
-                  .color(this.accentColor.value)
-                  .width(20)
-                  .height(20)
-              }
-
-              Text(this.statusMsg)
-                .fontSize(Constants.TOKEN_FONT_BODY)
-                .fontColor(this.textSecondary())
-                .maxLines(2)
-                .textOverflow({ overflow: TextOverflow.Ellipsis })
-                .textAlign(TextAlign.Center)
-                .constraintSize({ maxWidth: '80%' })
-            }
-            .width('100%')
-            .alignItems(VerticalAlign.Center)
-            .justifyContent(FlexAlign.Center)
-            .margin({ top: Constants.TOKEN_SPACE_10, bottom: Constants.TOKEN_SPACE_XS })
           }
           .width('100%')
           .margin({ top: Constants.TOKEN_SPACE_S })
-        }
       }
       .width('100%')
       .layoutWeight(1)
@@ -1322,7 +1270,7 @@ export struct PlayerOverlay {
       // 播放队列抽屉：渲染在播放层内；显式最高 zIndex（US1）压过倍速/模式/睡眠面板与内容层，
       // 修复 API 24 平板 zIndex 失效导致抽屉被遮挡的问题（全平台行为一致）
       if (this.showQueueSheet.value) {
-        QueueDrawer()
+        QueueDrawer({ onRegisterClose: this.onRegisterClose })
           .zIndex(100)
       }
     }

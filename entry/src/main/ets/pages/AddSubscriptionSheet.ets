@@ -419,6 +419,11 @@ export struct AddSubscriptionSheet {
     return false;
   }
 
+  @Styles
+  pressedStyle() {
+    .backgroundColor($r('app.color.item_pressed_background'))
+  }
+
   // 二级视图标题行：返回图标外扩至 40vp 触控区（padding 10），负 margin 抵消布局位移保持视觉位置不变
   @Builder
   private secondaryHeader(title: string) {
@@ -478,6 +483,7 @@ export struct AddSubscriptionSheet {
       }
       .width('100%')
       .margin({ top: Constants.TOKEN_SPACE_M })
+      .stateStyles({ pressed: this.pressedStyle })
     }
   }
 
@@ -593,7 +599,7 @@ export struct AddSubscriptionSheet {
     } else {
       ForEach(this.folders, (f: FavFolder) => {
         Row() {
-          // 收藏夹无封面字段：统一走 CoverThumb ♪ 占位，与其余类型无封面形态一致
+          // 收藏夹无封面字段：统一走 CoverThumb 耳机占位，与其余类型无封面形态一致
           CoverThumb({ thumbSize: 40, radius: 8 })
           Column() {
             Text(f.title)
@@ -622,6 +628,7 @@ export struct AddSubscriptionSheet {
         }
         .width('100%')
         .padding({ top: Constants.TOKEN_SPACE_S, bottom: Constants.TOKEN_SPACE_S })
+        .stateStyles({ pressed: this.pressedStyle })
       }, (f: FavFolder) => `fav_${f.mediaId}`)
     }
   }
@@ -679,6 +686,7 @@ export struct AddSubscriptionSheet {
         }
         .width('100%')
         .padding({ top: Constants.TOKEN_SPACE_S, bottom: Constants.TOKEN_SPACE_S })
+        .stateStyles({ pressed: this.pressedStyle })
       }, (s: Season) => `season_${s.seasonId}`)
 
       if (this.series.length > 0) {
@@ -715,6 +723,7 @@ export struct AddSubscriptionSheet {
         }
         .width('100%')
         .padding({ top: Constants.TOKEN_SPACE_S, bottom: Constants.TOKEN_SPACE_S })
+        .stateStyles({ pressed: this.pressedStyle })
       }, (s: Season) => `series_${s.seasonId}`)
     }
   }

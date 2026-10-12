@@ -27,6 +27,11 @@ export struct SettingsRow {
     }
   }
 
+  @Styles
+  pressedStyle() {
+    .backgroundColor($r('app.color.item_pressed_background'))
+  }
+
   build() {
     Column() {
       Row() {
@@ -70,6 +75,7 @@ export struct SettingsRow {
       .width('100%')
       .constraintSize({ minHeight: 54 })
       .padding({ left: Constants.TOKEN_SPACE_L, right: Constants.TOKEN_SPACE_L, top: Constants.TOKEN_SPACE_S, bottom: Constants.TOKEN_SPACE_S })
+      .stateStyles({ pressed: this.pressedStyle })
       .onClick(() => {
         this.rowAction();
       })

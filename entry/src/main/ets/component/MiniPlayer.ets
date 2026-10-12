@@ -13,8 +13,7 @@ export struct MiniPlayer {
   @Local cover: string = '';
   @Local title: string = '';
   @Local ownerName: string = '';
-  @Local isPlaying: boolean = false;
-  @Local isPreparing: boolean = false;
+  @Local playIntent: boolean = false;
 
   // 进度广播退订句柄（US2/KI-1）：aboutToDisappear 中调用，避免监听器累积
   private unsubscribePlayer: () => void = (): void => {};
@@ -51,11 +50,8 @@ export struct MiniPlayer {
     if (owner !== this.ownerName) {
       this.ownerName = owner;
     }
-    if (c.isPlaying !== this.isPlaying) {
-      this.isPlaying = c.isPlaying;
-    }
-    if (c.isPreparing !== this.isPreparing) {
-      this.isPreparing = c.isPreparing;
+    if (c.playIntent !== this.playIntent) {
+      this.playIntent = c.playIntent;
     }
   }
 
@@ -86,7 +82,7 @@ export struct MiniPlayer {
         }
         .layoutWeight(1)
 
-        if (this.isPlaying || this.isPreparing) {
+        if (this.playIntent) {
           SymbolGlyph($r('sys.symbol.pause_fill'))
             .fontSize(Constants.TOKEN_FONT_24)
             .fontColor([this.accentColor.value])
@@ -129,8 +125,7 @@ export struct MiniPlayer {
         connectBool(Constants.AS_SHOW_PLAYER_OVERLAY, false).value = true;
       })
     } else {
-      // 空态占位条（US2）：队列无内容时显示占位封面+提示，不显示残留歌曲信息；
-      // 点击同样唤起播放层（播放层空态有完整引导文案）
+      // 空态占位条（US2）：队列无内容时显示占位封面+提示，不显示残留歌曲信息；点按无动作（R3 US4）
       Row() {
         CoverThumb({ cover: '', thumbSize: 44, radius: 8 })
         Text('暂无播放内容')
@@ -148,9 +143,6 @@ export struct MiniPlayer {
       .borderRadius(Constants.TOKEN_RADIUS_XXL)
       .margin({ bottom: this.navBarHeight.value + 8 })
       .shadow({ radius: 12, color: '#33000000', offsetX: 0, offsetY: 2 })
-      .onClick(() => {
-        connectBool(Constants.AS_SHOW_PLAYER_OVERLAY, false).value = true;
-      })
     }
   }
 }

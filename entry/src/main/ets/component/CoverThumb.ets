@@ -1,13 +1,16 @@
 import { CoverUrl } from '../service/CoverUrl';
 import { Constants } from '../service/Constants';
 
-// 封面缩略图：播放列表与播放历史共用的封面渲染（有封面显示图片，无封面显示 ♪ 占位——全类型唯一无图形态）。
+// 封面缩略图：播放列表与播放历史共用的封面渲染（有封面显示图片，无封面显示耳机占位——全类型唯一无图形态）。
 @Component
 export struct CoverThumb {
   @Prop cover: string = '';
   thumbSize: number = 44;
   radius: number = 8;
-  highlight: boolean = false;
+  // @Prop 化（v0.3-bugfix-round2 US4）：普通成员不随父组件切歌更新，高亮停留首帧是本根因
+  @Prop highlight: boolean = false;
+  // 高亮边框色（US4）：主题色运行时可变，由持有 StrState 的父方传入
+  @Prop accent: string = Constants.ACCENT_DEFAULT;
   // raw=true 直接加载原始 URL、不拼缩略后缀（UP 头像/合集封面等 URL 拼后缀会 404 的场景）；默认 false 行为不变
   raw: boolean = false;
 
@@ -28,12 +31,12 @@ export struct CoverThumb {
         .borderRadius(this.radius)
         .objectFit(ImageFit.Cover)
         .alt($r('app.media.startIcon'))
-        .border(this.highlight ? { width: 2, color: $r('app.color.primary_color') } : { width: 0 })
+        .border(this.highlight ? { width: 2, color: this.accent } : { width: 0 })
     } else {
       Column() {
-        Text('♪')
-          .fontSize(Constants.TOKEN_FONT_TITLE)
-          .fontColor($r('app.color.text_secondary'))
+        SymbolGlyph($r('sys.symbol.headphones'))
+          .fontSize(this.thumbSize / 2)
+          .fontColor([$r('app.color.text_secondary')])
       }
       .width(this.thumbSize)
       .height(this.thumbSize)
@@ -41,7 +44,7 @@ export struct CoverThumb {
       .justifyContent(FlexAlign.Center)
       .backgroundColor($r('app.color.btn_glass'))
       .border(this.highlight
-        ? { width: 2, color: $r('app.color.primary_color') }
+        ? { width: 2, color: this.accent }
         : { width: 1, color: $r('app.color.btn_border') })
     }
   }

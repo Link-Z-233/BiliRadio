@@ -9,6 +9,7 @@ import { MiniPlayer } from '../component/MiniPlayer';
 import { mediaquery } from '@kit.ArkUI';
 import { Constants } from '../service/Constants';
 import { connectBool, connectNum, BoolState, NumState } from '../service/V2State';
+import { registerQueueClose, dismissOverlaysForBack } from '../service/BackHandler';
 
 @Entry
 @ComponentV2
@@ -23,8 +24,6 @@ struct Index {
   @Local miniHidden: boolean = false;
   private navPathStack: NavPathStack = new NavPathStack();
   private pageWidth: number = 0;
-  // US7/T024：QueueDrawer 注册的关闭句柄（先播滑出动画再卸载）；空句柄回退直接卸载
-  private queueClose: (() => void) | undefined = undefined;
   private wideListener: mediaquery.MediaQueryListener | undefined = undefined;
 
   aboutToAppear(): void {
@@ -104,29 +103,13 @@ struct Index {
     });
   }
 
-  // 拦截系统返回键：各浮层打开时先逐层关闭，而不是直接退出应用
+  // 拦截系统返回键：队列/浮层经 BackHandler 统一「先关队列（多选优先退出）→ 再关浮层」序列（US5），
+  // 其余弹层逐层关闭，而不是直接退出应用
   onBackPress(): boolean {
-    if (this.showQueueSheet.value) {
-      // US7/T024：返回键退出播放队列也走滑出动画（与遮罩点击一致）；句柄为空（如极端时序下
-      // 抽屉刚被卸载未及注册）回退直接置 false 卸载
-      if (this.queueClose !== undefined) {
-        this.queueClose();
-      } else {
-        this.showQueueSheet.value = false;
-      }
+    if (dismissOverlaysForBack()) {
       return true;
     }
-    // US4：浮层与历史面板同开时，第一次返回仅关面板（播放不中断），再按才收浮层；
-    // 禁止返回事件穿透弹回首页
     const playHistory: BoolState = connectBool(Constants.AS_SHOW_PLAY_HISTORY, false);
-    if (this.showPlayerOverlay.value) {
-      if (playHistory.value) {
-        playHistory.value = false;
-        return true;
-      }
-      this.showPlayerOverlay.value = false;
-      return true;
-    }
     if (playHistory.value) {
       playHistory.value = false;
       return true;
@@ -196,9 +179,7 @@ struct Index {
       // 队列抽屉：仅内容层渲染；播放页展开时改由 PlayerOverlay 层渲染，避免被封面图层遮挡
       if (this.showQueueSheet.value && !this.showPlayerOverlay.value) {
         QueueDrawer({
-          onRegisterClose: (close: (() => void) | undefined): void => {
-            this.queueClose = close;
-          }
+          onRegisterClose: registerQueueClose
         })
       }
 
@@ -207,7 +188,9 @@ struct Index {
       // 生命周期与渲染管线回归常规路径；expandSafeArea 延伸系统栏区域复现 ModalPage 全窗口视觉，
       // 底部滑入/滑出转场近似原 ModalTransition.DEFAULT 手感
       if (this.showPlayerOverlay.value) {
-        PlayerOverlay()
+        PlayerOverlay({
+          onRegisterClose: registerQueueClose
+        })
           .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
           .transition(TransitionEffect.translate({ y: '100%' })
             .animation({ duration: 350, curve: Curve.Friction }))

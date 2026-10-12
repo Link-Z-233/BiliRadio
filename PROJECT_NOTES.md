@@ -13,6 +13,7 @@
   2. **播放队列** [QueueSheet.ets](entry/src/main/ets/component/QueueSheet.ets)（queue-redesign 轮，2026-10-10）：`ListItem` 挂 `swipeAction`（样式对齐 `historyDeleteAction`），删除调 `removeSelectedFromPlaylist([bvid])`（删除当前条目时既有自动切播语义保留）；与多选长按手势经平台仲裁共存（横向 swipe 与竖向连选不同轴）。
   3. **首页订阅列表** [HomePage.ets](entry/src/main/ets/pages/HomePage.ets)（debt-cleanup 轮，2026-10-11）：新增 `subDeleteAction` builder（样式逐字段对齐 `historyDeleteAction`）+ `ListItem.swipeAction({ end })`，点击复用 `removeSub(row)`（含清剧集缓存、持久化、刷新列表）；模拟器验证 PASS（T017）。
 - **状态**：三处全部完成；真机复测通过后关闭本条目（T024 待办）。
+- **升级（v0.3-bugfix-round2，2026-10-12）**：三处左滑统一升级 `SwipeActionItem` 双触发——点垃圾桶/滑过阈值均进二次确认弹窗，取消经 `ListScroller.closeAllSwipeActions()` 复位收起；交互约定由「点击直删」演进为「双触发 + 二次确认」。
 
 ### KI-4 短链识别与解析（已修复：bili-link-recognize 轮，2026-10-07）
 
@@ -67,6 +68,12 @@
 - **现象**：APP 签名链 20 条/页（服务端钳制）vs Web 退避链 30 条/页，链路切换（降级/回切）时页界不对齐可能漏条目；现有 bvid 去重兜底。
 - **修复**：Web 链 `fetchUpVideosViaWeb` 请求 `ps` 降为 `Constants.UP_PAGE_SIZE=20`，翻页记账 `olderPageSize()` UP 分支统一引用常量（[BiliService.ets](entry/src/main/ets/service/BiliService.ets) / [SourcePage.ets](entry/src/main/ets/pages/SourcePage.ets)）。
 - **遗留**：降级衔接翻页走查待真机（[verification-report.md](spec/debt-cleanup/verification-report.md) §4 US7）。
+
+### KI-10 屏幕常亮疑问（销项，v0.3-bugfix-round2 轮，2026-10-12）
+
+- **现象**：v0.3-bugfix-round1 修复后实机反馈「屏幕保持常亮」疑问（v0.3-bugfix-round2 E 项）。
+- **结论**：全代码库无 `keepScreenOn` 调用，无代码改动；实测常亮为系统层行为，最可能是开发者选项「不锁定屏幕」（USB 调试充电时保持唤醒）触发（plan.md D10）。
+- **验证方式**：拔掉 USB 线重测；若仍常亮再 reopen 本条目排查。
 
 ## 二、已移除与禁用功能
 

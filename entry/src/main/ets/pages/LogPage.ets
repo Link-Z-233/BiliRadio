@@ -1,5 +1,6 @@
 import { Logger, LogEntry } from '../service/Logger';
 import { Constants } from '../service/Constants';
+import { dismissOverlaysForBack } from '../service/BackHandler';
 import { connectNum, connectStr, NumState, StrState } from '../service/V2State';
 import { picker, fileIo as fs } from '@kit.CoreFileKit';
 import { promptAction } from '@kit.ArkUI';
@@ -122,6 +123,11 @@ struct LogPage {
     return '网络';
   }
 
+  @Styles
+  pressedStyle() {
+    .backgroundColor($r('app.color.item_pressed_background'))
+  }
+
   build() {
     NavDestination() {
       Column() {
@@ -225,6 +231,7 @@ struct LogPage {
                 .alignItems(HorizontalAlign.Start)
                 .width('100%')
                 .padding({ left: Constants.TOKEN_SPACE_L, right: Constants.TOKEN_SPACE_L, top: Constants.TOKEN_SPACE_S, bottom: Constants.TOKEN_SPACE_S })
+                .stateStyles({ pressed: this.pressedStyle })
               }
             }, (item: LogEntry) => `${item.time}_${item.summary}`)
           }
@@ -241,5 +248,7 @@ struct LogPage {
     .onReady((ctx: NavDestinationContext) => {
       this.navPathStack = ctx.pathStack;
     })
+    // US5：系统返回先经 BackHandler 关队列/浮层，无浮层可关返回 false 放行默认 pop
+    .onBackPressed((): boolean => dismissOverlaysForBack())
   }
 }
