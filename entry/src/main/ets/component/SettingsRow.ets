@@ -16,6 +16,7 @@ export struct SettingsRow {
     connectStr(Constants.AS_ACCENT_COLOR, Constants.ACCENT_DEFAULT);
   @Param rowAction: () => void = (): void => {};
   @Param toggleChange: (on: boolean) => void = (_on: boolean): void => {};
+  @Local isPressed: boolean = false;
 
   @Builder
   private iconSlot(icon: Resource | undefined) {
@@ -25,11 +26,6 @@ export struct SettingsRow {
         .fontColor([$r('app.color.text_secondary')])
         .margin({ right: Constants.TOKEN_SPACE_M })
     }
-  }
-
-  @Styles
-  pressedStyle() {
-    .backgroundColor($r('app.color.item_pressed_background'))
   }
 
   build() {
@@ -75,7 +71,14 @@ export struct SettingsRow {
       .width('100%')
       .constraintSize({ minHeight: 54 })
       .padding({ left: Constants.TOKEN_SPACE_L, right: Constants.TOKEN_SPACE_L, top: Constants.TOKEN_SPACE_S, bottom: Constants.TOKEN_SPACE_S })
-      .stateStyles({ pressed: this.pressedStyle })
+      .backgroundColor(this.isPressed ? $r('app.color.item_pressed_background') : Color.Transparent)
+      .onTouch((e: TouchEvent): void => {
+        if (e.type === TouchType.Down) {
+          this.isPressed = true;
+        } else if (e.type === TouchType.Up || e.type === TouchType.Cancel) {
+          this.isPressed = false;
+        }
+      })
       .onClick(() => {
         this.rowAction();
       })

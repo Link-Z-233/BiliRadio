@@ -7,6 +7,7 @@ import { BiliService } from '../service/BiliService';
 import { Constants } from '../service/Constants';
 import { CoverUrl } from '../service/CoverUrl';
 import { Appearance } from '../service/Appearance';
+import { CoverPalette } from '../service/CoverPalette';
 import { SleepTimerController } from '../service/SleepTimerController';
 import { QueueDrawer } from '../component/QueueDrawer';
 import { AudioTrack, AudioQuality } from '../model/AudioQuality';
@@ -18,6 +19,7 @@ import { connectBool, connectNum, connectStr, BoolState, NumState, StrState } fr
 const GLOW_IDLE: number = 0.35;
 const GLOW_ACTIVE: number = 0.8;
 const GLOW_FADE_IN_MS: number = 3200;
+const GLOW_FADE_OUT_MS: number = 800;
 
 // 下滑退出播放层的位移阈值（vp）：内容已到顶部时，下滑超过该距离才退出
 const PLAYER_DISMISS_SWIPE: number = 80;
@@ -57,6 +59,10 @@ export struct PlayerOverlay {
   // 生效深浅色（1=浅色 2=深色）：驱动深浅色差异化 alpha
   @Local colorModeResolved: NumState = connectNum(Constants.AS_COLOR_MODE_RESOLVED, 1);
 
+  // 封面取色基色（palette-glow）：光晕着色源，'' = 未取到回退主题色
+  @Local paletteColor: string = '';
+  // 背景渐变淡入进度（palette-bg）：0-1，首取色 animateTo 拉满
+  @Local paletteReveal: number = 0;
   @Local glowStrength: number = GLOW_IDLE;
   @Local playBtnScale: number = 1;
   @Local prevBtnScale: number = 1;
@@ -86,6 +92,8 @@ export struct PlayerOverlay {
     };
   private trackBvid: string = '';
   private wasPlayIntent: boolean = false;
+  // 取色防抖键（palette-glow）：当前已请求取色的 bvid，防重复请求
+  private paletteBvid: string = '';
   // 简介懒加载（T014）：进行中标志防并发；已尝试的 bvid 防重复请求
   private descLoading: boolean = false;
   private descTriedBvid: string = '';
@@ -112,33 +120,72 @@ export struct PlayerOverlay {
     return Appearance.hexWithAlpha(this.accentColor.value, 0.349);
   }
 
-  // 播放键阴影：主题色 + shadow_play 原 alpha（浅色 0x8C ≈ 0.549 / 深色 0x73 ≈ 0.451）
-  private playBtnShadowColor(): string {
-    return Appearance.hexWithAlpha(this.accentColor.value, this.isDarkMode() ? 0.451 : 0.549);
-  }
+  // ===== 播放按钮尺寸同源（US1）：按钮直径为唯一尺寸源，缓冲加载指示与图标字号由此派生 =====
 
-  // ===== 播放按钮尺寸同源（US1）：按钮直径为唯一尺寸源，缓冲加载指示尺寸由此派生 =====
-
-  // 封面光晕梯度：主题色 + halo_pink_0..3 原 alpha 序列（浅色 [0x80,0x3D,0x14,0x00] / 深色 [0x66,0x29,0x0D,0x00]）
+  // 封面光晕梯度：取色基色（无则主题色） + halo_pink_0..3 原 alpha 序列（浅色 [0x80,0x3D,0x14,0x00] / 深色 [0x66,0x29,0x0D,0x00]）
   private haloColors(): Array<[ResourceColor, number]> {
     const alphas: number[] = this.isDarkMode() ? [0.4, 0.161, 0.051, 0] : [0.502, 0.239, 0.078, 0];
+    // 深色外观光晕基色经 glowTint 压明度保色相；纯灰白取色（glowTint 返回 ''）回退主题色，保证光晕始终彩色
+    const tinted: string = this.paletteColor !== '' ?
+      CoverPalette.glowTint(this.paletteColor, this.isDarkMode()) : '';
+    const base: string = tinted !== '' ? tinted : this.accentColor.value;
     const colors: Array<[ResourceColor, number]> = [
-      [Appearance.hexWithAlpha(this.accentColor.value, alphas[0]), 0],
-      [Appearance.hexWithAlpha(this.accentColor.value, alphas[1]), 0.45],
-      [Appearance.hexWithAlpha(this.accentColor.value, alphas[2]), 0.75],
-      [Appearance.hexWithAlpha(this.accentColor.value, alphas[3]), 1]
+      [Appearance.hexWithAlpha(base, alphas[0]), 0],
+      [Appearance.hexWithAlpha(base, alphas[1]), 0.45],
+      [Appearance.hexWithAlpha(base, alphas[2]), 0.75],
+      [Appearance.hexWithAlpha(base, alphas[3]), 1]
     ];
     return colors;
+  }
+
+  // 换曲取色（palette-glow/palette-bg）：bvid 防抖；结果回填经一致性校验丢弃过期响应；失败/空回退主题色
+  private requestPalette(rawCover: string): void {
+    const bvid: string = this.paletteBvid;
+    CoverPalette.dominantOf(bvid, rawCover).then((hex: string): void => {
+      if (this.paletteBvid !== bvid) {
+        return;
+      }
+      this.applyPalette(hex === '' ? this.accentColor.value : hex);
+    }).catch((): void => {
+      if (this.paletteBvid !== bvid) {
+        return;
+      }
+      this.applyPalette(this.accentColor.value);
+    });
+  }
+
+  // 应用取色：光晕基色直接用取色；首取色背景渐变淡入（此后换曲直接换色）
+  private applyPalette(color: string): void {
+    this.paletteColor = color;
+    if (this.paletteReveal === 0) {
+      this.getUIContext().animateTo({ duration: Constants.PALETTE_BG_REVEAL_MS, curve: Curve.FastOutSlowIn }, (): void => {
+        this.paletteReveal = 1;
+      });
+    }
+  }
+
+  // 背景衍生色渐变（palette-bg）：washTint 压饱和/定明度后的柔和色铺顶部渐变（幅度有限），
+  // 非取色态全透明（纯 page_background）
+  private bgStops(): Array<[ResourceColor, number]> {
+    if (this.paletteColor === '') {
+      return [[Color.Transparent, 0], [Color.Transparent, 1]];
+    }
+    const tint: string = CoverPalette.washTint(this.paletteColor, this.isDarkMode());
+    if (tint === '') {
+      return [[Color.Transparent, 0], [Color.Transparent, 1]];
+    }
+    return [
+      [Appearance.hexWithAlpha(tint, this.paletteReveal), 0],
+      [Appearance.hexWithAlpha(tint, 0), 1]
+    ];
   }
 
 
   aboutToAppear(): void {
     this.syncFrom(this.controller);
     this.wasPlayIntent = this.playIntent;
-    // KI-5：aboutToAppear 运行于节点构建中，此处调用 animateTo 会触发框架告警
-    // （"node stack is not empty, not suitable for animateTo"），
-    // 且疑似在 API 24 上引发 ModalPage 渲染管线挂载后冻结（仅渲染首帧）——
-    // 光晕初始化延后到构建完成后的下一拍执行，延迟一帧对视觉无感知影响
+    // KI-5：挂载期状态变更在 API 24 疑似引发 ModalPage 渲染管线冻结（仅渲染首帧），
+    // 光晕强度初始化延后到构建完成后的下一拍执行，延迟一帧对视觉无感知影响
     setTimeout((): void => {
       this.updateGlow();
     }, 0);
@@ -186,49 +233,50 @@ export struct PlayerOverlay {
     this.sleepTimerRemaining = st.getRemainingSeconds();
   }
 
+  // 光晕动画改由光晕节点自身 animation 属性承载（节点级隔离）：animateTo 会波及同帧内
+  // 播放键图标的透明度翻转，产生数秒交叉渐变（按钮"每次按都渐变"的根因）
   private updateGlow(): void {
-    if (this.playIntent) {
-      this.getUIContext().animateTo({ duration: GLOW_FADE_IN_MS, curve: Curve.EaseInOut }, (): void => {
-        this.glowStrength = GLOW_ACTIVE;
-      });
-    } else {
-      this.getUIContext().animateTo({ duration: 800, curve: Curve.EaseInOut }, (): void => {
-        this.glowStrength = GLOW_IDLE;
-      });
-    }
+    this.glowStrength = this.playIntent ? GLOW_ACTIVE : GLOW_IDLE;
   }
 
+  // 缩放回弹延后一拍启动：与按键状态翻转解耦，避免 animateTo 同帧污染图标切换（交叉渐变）
   private popPlay(): void {
-    this.getUIContext().animateTo({ duration: 100, curve: Curve.Friction }, (): void => {
-      this.playBtnScale = 0.88;
-    });
     setTimeout((): void => {
-      this.getUIContext().animateTo({ duration: 250, curve: Curve.Smooth }, (): void => {
-        this.playBtnScale = 1;
+      this.getUIContext().animateTo({ duration: 100, curve: Curve.Friction }, (): void => {
+        this.playBtnScale = 0.88;
       });
-    }, 120);
+      setTimeout((): void => {
+        this.getUIContext().animateTo({ duration: 250, curve: Curve.Smooth }, (): void => {
+          this.playBtnScale = 1;
+        });
+      }, 120);
+    }, 0);
   }
 
   private popPrev(): void {
-    this.getUIContext().animateTo({ duration: 100, curve: Curve.Friction }, (): void => {
-      this.prevBtnScale = 0.9;
-    });
     setTimeout((): void => {
-      this.getUIContext().animateTo({ duration: 250, curve: Curve.Smooth }, (): void => {
-        this.prevBtnScale = 1;
+      this.getUIContext().animateTo({ duration: 100, curve: Curve.Friction }, (): void => {
+        this.prevBtnScale = 0.9;
       });
-    }, 120);
+      setTimeout((): void => {
+        this.getUIContext().animateTo({ duration: 250, curve: Curve.Smooth }, (): void => {
+          this.prevBtnScale = 1;
+        });
+      }, 120);
+    }, 0);
   }
 
   private popNext(): void {
-    this.getUIContext().animateTo({ duration: 100, curve: Curve.Friction }, (): void => {
-      this.nextBtnScale = 0.9;
-    });
     setTimeout((): void => {
-      this.getUIContext().animateTo({ duration: 250, curve: Curve.Smooth }, (): void => {
-        this.nextBtnScale = 1;
+      this.getUIContext().animateTo({ duration: 100, curve: Curve.Friction }, (): void => {
+        this.nextBtnScale = 0.9;
       });
-    }, 120);
+      setTimeout((): void => {
+        this.getUIContext().animateTo({ duration: 250, curve: Curve.Smooth }, (): void => {
+          this.nextBtnScale = 1;
+        });
+      }, 120);
+    }, 0);
   }
 
   // 详情简介懒加载（T014）：空简介时后台拉取；回填写入队列条目避免下次 syncFrom 覆盖本地态；
@@ -291,6 +339,11 @@ export struct PlayerOverlay {
       this.trackView = item.view;
       this.trackPubdate = item.pubdate;
       this.trackDesc = item.desc;
+      // 换曲才重新取色（palette-glow），同曲广播不重复请求
+      if (item.bvid !== this.paletteBvid) {
+        this.paletteBvid = item.bvid;
+        this.requestPalette(item.cover);
+      }
     } else {
       this.trackTitle = '未在播放';
       this.trackCover = '';
@@ -301,6 +354,12 @@ export struct PlayerOverlay {
       this.trackView = 0;
       this.trackPubdate = 0;
       this.trackDesc = '';
+      // 空态退出取色（palette-glow/palette-bg）：光晕与背景渐变复位
+      if (this.paletteBvid !== '') {
+        this.paletteBvid = '';
+        this.paletteColor = '';
+        this.paletteReveal = 0;
+      }
     }
   }
 
@@ -808,35 +867,40 @@ export struct PlayerOverlay {
   build() {
     Stack() {
       Column() {
-        // 顶栏：仅保留收起按钮（spec FR-007，无标题文字与功能图标）
-        Row() {
-          SymbolGlyph($r('sys.symbol.chevron_down'))
-            .fontSize(Constants.TOKEN_FONT_TITLE_L)
-            .fontColor([$r('app.color.text_primary')])
-            .padding(Constants.TOKEN_SPACE_6)
-            .onClick(() => {
-              connectBool(Constants.AS_SHOW_PLAYER_OVERLAY, false).value = false;
-            })
-          Blank()
-        }
-        .width('100%')
-        .padding({ left: Constants.TOKEN_SPACE_10, right: Constants.TOKEN_SPACE_10, top: this.statusBarHeight.value + 6, bottom: Constants.TOKEN_SPACE_XS })
-
+        // US5 骨架修正：顶栏移入滚动内容，Scroll 视口自屏幕顶起算，封面光晕不再被视口顶边截断；
+        // 顶栏与封面同组（SpaceBetween 间隙数不变，静止布局逐像素等价）
           Scroll(this.contentScroller) {
             Column() {
+              Column() {
+                Row() {
+                  SymbolGlyph($r('sys.symbol.chevron_down'))
+                    .fontSize(Constants.TOKEN_FONT_TITLE_L)
+                    .fontColor([$r('app.color.text_primary')])
+                    .padding(Constants.TOKEN_SPACE_6)
+                    .onClick(() => {
+                      connectBool(Constants.AS_SHOW_PLAYER_OVERLAY, false).value = false;
+                    })
+                  Blank()
+                }
+                .width('100%')
+                .padding({ left: Constants.TOKEN_SPACE_10, right: Constants.TOKEN_SPACE_10, top: this.statusBarHeight.value + 6, bottom: Constants.TOKEN_SPACE_XS })
+
               Stack() {
                 // 封面环境光晕 — 多段衰减模拟自然光扩散，播放时淡入高亮（v0.3 US1 一次性过渡，无往复）
                 Column()
                   .width(450)
                   .height(450)
                   .borderRadius(225)
+                  .position({ x: -75, y: -131 })
+                  .opacity(this.glowStrength)
+                  // 节点级属性动画（animation 仅对其前面的属性生效）：光晕淡入/淡出不产生
+                  // 同帧动画作用域，不会波及播放键图标的透明度翻转；radialGradient 在其后，色彩切换即时
+                  .animation({ duration: this.playIntent ? GLOW_FADE_IN_MS : GLOW_FADE_OUT_MS, curve: Curve.EaseInOut })
                   .radialGradient({
                     center: [225, 225],
                     radius: 225,
                     colors: this.haloColors()
                   })
-                  .position({ x: -75, y: -131 })
-                  .opacity(this.glowStrength)
 
                 Stack({ alignContent: Alignment.BottomEnd }) {
                   if (this.trackCover !== '') {
@@ -890,10 +954,12 @@ export struct PlayerOverlay {
               }
               .width(300)
               .height(188)
-              .margin({ top: Constants.TOKEN_SPACE_XL }) // US10：原 8 过挤，展开态封面与状态栏留出呼吸感
+              .margin({ top: Constants.COVER_TOP_GAP })
               .alignSelf(ItemAlign.Center)
               .scale({ x: this.playIntent ? 1 : 0.94, y: this.playIntent ? 1 : 0.94 })
               .animation({ duration: 350, curve: Curve.FastOutSlowIn })
+              }
+              .width('100%')
 
               Row() {
                 Text(this.trackTitle)
@@ -1049,9 +1115,6 @@ export struct PlayerOverlay {
               }
               .width(44)
               .height(44)
-              .borderRadius(Constants.TOKEN_RADIUS_22)
-              .backgroundColor($r('app.color.btn_glass'))
-              .backdropBlur(20)
               .justifyContent(FlexAlign.Center)
               .scale({ x: this.prevBtnScale, y: this.prevBtnScale })
               .enabled(this.playlistCount > 0)
@@ -1068,9 +1131,6 @@ export struct PlayerOverlay {
               }
               .width(44)
               .height(44)
-              .borderRadius(Constants.TOKEN_RADIUS_22)
-              .backgroundColor($r('app.color.btn_glass'))
-              .backdropBlur(20)
               .justifyContent(FlexAlign.Center)
               .enabled(this.isPrepared)
               .opacity(this.isPrepared ? 1.0 : 0.4)
@@ -1078,30 +1138,29 @@ export struct PlayerOverlay {
                 this.controller.seekBy(-Constants.SEEK_STEP_MS);
               })
 
-              // 播放键（US1 尺寸同源）：意图先行（US1）——缓冲中且意图为播以系统 LoadingProgress
-              // 反馈加载状态（US4，跨 API 版本表现一致）；其余按意图显示暂停/播放图标
+              // 播放键（US1 尺寸同源 / round3 判定表）：三态由三个常驻节点 + opacity 互斥表达——
+              // 缓冲（isPreparing && playIntent）→ 加载圈；playIntent → 暂停键；否则播放键。
+              // 常驻节点无创建/销毁、无 symbol 资源切换：此前 if/else 换节点与单节点切资源在
+              // API 24/26 渲染管线残留旧图层（首次播放 glyph→圈→glyph 后播放/暂停同屏、转圈不可见），
+              // opacity 方案从根上消除残影来源
               Stack() {
-                if (this.isPreparing && this.playIntent) {
-                  LoadingProgress()
-                    .color(this.accentColor.value)
-                    .width(Constants.PLAY_BTN_DIAMETER * 0.5)
-                    .height(Constants.PLAY_BTN_DIAMETER * 0.5)
-                } else if (this.playIntent) {
-                  SymbolGlyph($r('sys.symbol.pause_fill'))
-                    .fontSize(32)
-                    .fontColor([$r('app.color.text_primary')])
-                } else {
-                  SymbolGlyph($r('sys.symbol.play_fill'))
-                    .fontSize(32)
-                    .fontColor([$r('app.color.text_primary')])
-                }
+                LoadingProgress()
+                  .color(this.accentColor.value)
+                  .width(Constants.PLAY_BTN_DIAMETER * 0.5)
+                  .height(Constants.PLAY_BTN_DIAMETER * 0.5)
+                  .opacity(this.isPreparing && this.playIntent ? 1 : 0)
+                SymbolGlyph($r('sys.symbol.play_fill'))
+                  .fontSize(Constants.PLAY_BTN_DIAMETER * 0.45)
+                  .fontColor([$r('app.color.text_primary')])
+                  .opacity(this.playIntent ? 0 : 1)
+                SymbolGlyph($r('sys.symbol.pause_fill'))
+                  .fontSize(Constants.PLAY_BTN_DIAMETER * 0.45)
+                  .fontColor([$r('app.color.text_primary')])
+                  .opacity(this.playIntent && !this.isPreparing ? 1 : 0)
               }
               .width(Constants.PLAY_BTN_DIAMETER)
               .height(Constants.PLAY_BTN_DIAMETER)
               .borderRadius(Constants.PLAY_BTN_DIAMETER / 2)
-              .backgroundColor(this.tintBg())
-              .backdropBlur(20)
-              .shadow({ radius: 18, color: this.playBtnShadowColor(), offsetY: 0 })
               .scale({ x: this.playBtnScale, y: this.playBtnScale })
               .enabled(this.isPrepared || this.trackIndex >= 0 || this.playlistCount > 0)
               .opacity(this.isPrepared || this.trackIndex >= 0 || this.playlistCount > 0 ? 1.0 : 0.4)
@@ -1117,9 +1176,6 @@ export struct PlayerOverlay {
               }
               .width(44)
               .height(44)
-              .borderRadius(Constants.TOKEN_RADIUS_22)
-              .backgroundColor($r('app.color.btn_glass'))
-              .backdropBlur(20)
               .justifyContent(FlexAlign.Center)
               .enabled(this.isPrepared)
               .opacity(this.isPrepared ? 1.0 : 0.4)
@@ -1134,9 +1190,6 @@ export struct PlayerOverlay {
               }
               .width(44)
               .height(44)
-              .borderRadius(Constants.TOKEN_RADIUS_22)
-              .backgroundColor($r('app.color.btn_glass'))
-              .backdropBlur(20)
               .justifyContent(FlexAlign.Center)
               .scale({ x: this.nextBtnScale, y: this.nextBtnScale })
               .enabled(this.playlistCount > 0)
@@ -1163,9 +1216,6 @@ export struct PlayerOverlay {
               }
               .height(36)
               .padding({ left: Constants.TOKEN_SPACE_14, right: Constants.TOKEN_SPACE_14 })
-              .backgroundColor($r('app.color.btn_glass'))
-              .backdropBlur(20)
-              .borderRadius(Constants.TOKEN_RADIUS_18)
               .onClick(() => {
                 this.showSpeed.value = true;
               })
@@ -1178,9 +1228,6 @@ export struct PlayerOverlay {
               }
               .height(36)
               .padding({ left: Constants.TOKEN_SPACE_14, right: Constants.TOKEN_SPACE_14 })
-              .backgroundColor($r('app.color.btn_glass'))
-              .backdropBlur(20)
-              .borderRadius(Constants.TOKEN_RADIUS_18)
               .onClick(() => {
                 this.showMode.value = true;
               })
@@ -1195,9 +1242,6 @@ export struct PlayerOverlay {
               }
               .height(36)
               .padding({ left: Constants.TOKEN_SPACE_14, right: Constants.TOKEN_SPACE_14 })
-              .backgroundColor($r('app.color.btn_glass'))
-              .backdropBlur(20)
-              .borderRadius(Constants.TOKEN_RADIUS_18)
               .onClick(() => {
                 this.showQuality = true;
               })
@@ -1214,9 +1258,6 @@ export struct PlayerOverlay {
               }
               .height(36)
               .padding({ left: Constants.TOKEN_SPACE_14, right: Constants.TOKEN_SPACE_14 })
-              .backgroundColor($r('app.color.btn_glass'))
-              .backdropBlur(20)
-              .borderRadius(Constants.TOKEN_RADIUS_18)
               .onClick(() => {
                 this.showSleepTimer.value = true;
               })
@@ -1228,9 +1269,6 @@ export struct PlayerOverlay {
               }
               .width(44)
               .height(44)
-              .borderRadius(Constants.TOKEN_RADIUS_22)
-              .backgroundColor($r('app.color.btn_glass'))
-              .backdropBlur(20)
               .justifyContent(FlexAlign.Center)
               .onClick(() => {
                 connectBool(Constants.AS_SHOW_QUEUE_SHEET, false).value = true;
@@ -1277,6 +1315,11 @@ export struct PlayerOverlay {
     .width('100%')
     .height('100%')
     .backgroundColor($r('app.color.page_background'))
+    // 背景衍生色渐变（palette-bg）：封面取色洗淡（压饱和/定明度）后铺顶部，影响幅度有限
+    .linearGradient({
+      angle: 180,
+      colors: this.bgStops()
+    })
     // 下滑退出播放层：仅在内容已滚到顶部时生效，避免与内容滚动冲突
     .parallelGesture(
       PanGesture({ direction: PanDirection.Vertical })

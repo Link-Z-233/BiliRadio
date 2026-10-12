@@ -7,7 +7,7 @@
 ## 重要提示
 
 - 请勿在公开 Issue、Pull Request 或评论中直接粘贴你的真实 B 站 Cookie（SESSDATA、bili_jct、DedeUserID 等）、签名口令或其他敏感凭据。
-- 本仓库不包含任何签名凭据（证书、口令、签名材料），构建所需的签名配置请参考 `build-profile.json5.example`，或使用 DevEco Studio 的自动 debug 签名。
+- 本仓库不包含任何签名凭据（证书、口令、签名材料），构建所需的签名配置参考下文「签名与证书隔离」的 `signing.local.json5` 格式，或使用 DevEco Studio 的自动 debug 签名。
 
 ## 签名与证书隔离
 

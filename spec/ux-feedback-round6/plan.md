@@ -114,7 +114,7 @@ PROJECT_NOTES.md                # 改：US8 规划登记 + endArmed 条目销项
 
 ### D8 文档调整与登记（US8，FR-021/022/024）
 
-- **Decision**: README 在「与 BiliMusic 的关系」之后新增「参考项目」小节：PiliPlus（Flutter 哔哩哔哩客户端）——音质档位与设置交互参考；项目 URL **以本地仓库 `D:/UsersFiles/Link_Z/Desktop/Code/PiliPlus` 的 git remote 或其 README 为准读取**，禁止凭记忆书写。README 移除版本号信息：**直接删除**「## 版本」整节（「当前版本：0.1.0…」与两条预览说明）及「与 BiliMusic 的关系」中的「版本号从 0.1.0 重新起版」条目，原位置不补写任何替代文案；`AppScope/app.json5` 版本号本轮不动（保持 0.1.0/1000）。PROJECT_NOTES「三、规划与预告」新增三条登记（订阅源导出导入、关于页文案优化、版本号更新——待播放列表重做完成后统一更新），并将「下轮候选清单 #1 删除 endArmed」销项（本轮完成）。
+- **Decision**: README 在「与 BiliMusic 的关系」之后新增「参考项目」小节：PiliPlus（Flutter 哔哩哔哩客户端）——音质档位与设置交互参考；项目 URL **以本地仓库 `../bili/PiliPlus` 的 git remote 或其 README 为准读取**，禁止凭记忆书写。README 移除版本号信息：**直接删除**「## 版本」整节（「当前版本：0.1.0…」与两条预览说明）及「与 BiliMusic 的关系」中的「版本号从 0.1.0 重新起版」条目，原位置不补写任何替代文案；`AppScope/app.json5` 版本号本轮不动（保持 0.1.0/1000）。PROJECT_NOTES「三、规划与预告」新增三条登记（订阅源导出导入、关于页文案优化、版本号更新——待播放列表重做完成后统一更新），并将「下轮候选清单 #1 删除 endArmed」销项（本轮完成）。
 - **Rationale**: URL 凭记忆生成有编造风险，本地参考仓库是唯一可信来源；版本号与播放列表重做绑定交付（用户指定，避免中途多次起版），README 不再维护版本信息可杜绝文档与应用版本双源不同步。
 
 ### D9 系统播控时长传递与回推（US9，FR-025/026）

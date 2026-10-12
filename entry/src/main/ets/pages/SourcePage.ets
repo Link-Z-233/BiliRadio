@@ -63,6 +63,7 @@ struct SourcePage {
   @Local canLoadOlder: boolean = false;
   @Local loadingOlder: boolean = false;
   @Local episodeCount: number = 0;
+  @Local pressedKey: string = '';
   private seenBefore: number = 0;         // 进入时的 lastSeenAt，NEW 徽标基准
   private olderPage: number = 1;          // 已加载的最大页号（sortReverse 语义）
   private olderFailAt: number = 0;        // 加载更早失败时间戳：冷却期内禁止重试（US2）
@@ -338,11 +339,6 @@ struct SourcePage {
     });
   }
 
-  @Styles
-  pressedStyle() {
-    .backgroundColor($r('app.color.item_pressed_background'))
-  }
-
   build() {
     NavDestination() {
       Column() {
@@ -453,8 +449,14 @@ struct SourcePage {
                 .alignItems(HorizontalAlign.Start)
                 .padding({ left: Constants.TOKEN_SPACE_M, right: Constants.TOKEN_SPACE_M, top: Constants.TOKEN_SPACE_10, bottom: Constants.TOKEN_SPACE_10 })
                 .borderRadius(Constants.TOKEN_RADIUS_14)
-                .backgroundColor($r('app.color.card_background'))
-                .stateStyles({ pressed: this.pressedStyle })
+                .backgroundColor(this.pressedKey === item.bvid ? $r('app.color.item_pressed_background') : $r('app.color.card_background'))
+                .onTouch((e: TouchEvent): void => {
+                  if (e.type === TouchType.Down) {
+                    this.pressedKey = item.bvid;
+                  } else if (e.type === TouchType.Up || e.type === TouchType.Cancel) {
+                    this.pressedKey = '';
+                  }
+                })
                 .onClick(() => {
                   this.playEpisode(index);
                 })

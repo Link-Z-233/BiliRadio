@@ -7,16 +7,6 @@
 - **静态检查**（`.ets` 快速预检）：`arkts_check` — 本轮编辑的所有 `.ets` 文件一次性传入，通过后再 `devecocli build`
 - **无测试套件**：devDependencies 有 `@ohos/hypium` / `@ohos/hamock` 但无测试文件
 
-## 签名（关键）
-
-签名材料**绝不入 git**，三层防护：
-
-1. `build-profile.json5` 基线 `signingConfigs: []`
-2. 签名放 `signing.local.json5`（`*.local.json5` 被 gitignore），构建时 `hvigorfile.ts` 动态加载
-3. `.githooks/pre-commit` 拦截含签名关键词的暂存内容
-
-钩子首次构建自动安装（`git config core.hooksPath .githooks`）。克隆后需先提交：`git config core.hooksPath .githooks`。DevEco 自动签名会写入 `build-profile.json5`，提交前须移至 `signing.local.json5`。详见 `SECURITY.md`。
-
 ## 架构
 
 单模块 HarmonyOS NEXT 应用（ArkTS/ArkUI），源码全在 `entry/src/main/ets/`：
@@ -65,6 +55,7 @@
 - **禁 `any`/`unknown`/`as` 类型断言**——ArkTS 严格模式
 - **B 站 API 坑**：APP 端点（`BILI_APP_ARCHIVE_URL`）须 BiliDroid UA（在 `Constants`），非浏览器 cookie；Web 端点须 WBI 签名（`WbiSigner`）；`@ohos.net.http` 的 `maxRedirects: 0` 是「零配额」而非「禁重定向」——短链解析用 `@kit.RemoteCommunicationKit` rcp + `autoRedirect`
 - **令牌/数值规范**（engineering-refactor 轮已落地，2026-10-11）：令牌替换**数值不变**（纯标准化不改观感）；色彩一律 `$r('app.color.*')`、数值一律 `Constants.TOKEN_*`，禁裸数字硬编码（豁免登记 `spec/engineering-refactor/token-exemptions.md`）；组件规范（列表行/卡片/弹窗/空态）跨页面一致
+- **文档引用一律相对路径**：文档中引用仓库内路径相对仓库根（如 `entry/src/main/ets/`），引用仓库外路径相对仓库根上级（如 `../bili/PiliPlus`），禁绝对路径
 
 ## 已知问题（PROJECT_NOTES.md）
 
@@ -80,12 +71,12 @@
 - **子代理行为规范**：`spec-implementation` 只实施已批准任务；`spec-verify` 只验证一次（失败不重调，报告由主代理处理并修复）；零代码轮次（规划轮）禁止触碰任何源码/配置
 - **验证范围默认值**：**默认仅构建验证（build-only）**——`tasks.md` Verification 阶段默认只含构建+部署（`<!-- verification_scope: build-only -->`）；需要 UI 验证（模拟器/真机）须在 Phase 3 Review Gate 前显式提出，并改标记为 `<!-- verification_scope: build+ui -->`
 - **Spec**：`spec/` 存放功能规格与 UX 反馈轮次，`spec/feature.json` 指向当前活跃目录；实现功能前先查阅对应 spec
-- **无人值守模式**（用户批准批次执行时的默认运行方式）：① 小问题（不影响行为/不返工）记录在案（提交信息/PROJECT_NOTES）继续执行；② 大问题（可能行为回归/数据丢失/需返工）立即暂停报告；③ 有争议的问题（多方案均合理/影响后续路线）停下解释选项交用户决策；④ 每单元/批次完成即构建验证、批次独立提交；⑤ 验证失败不无限重试——同一目标最多 3 次，仍失败即暂停报告
+- **无人值守模式**（用户批准批次执行时的默认运行方式）：① 小问题（不影响行为/不返工）记录在案（提交信息/PROJECT_NOTES）继续执行；② 大问题（可能行为回归/数据丢失/需返工）立即暂停报告；③ 有争议的问题（多方案均合理/影响后续路线）停下解释选项交用户决策；④ 验证失败不无限重试——同一目标最多 3 次，仍失败即暂停报告
 
 ## 参考项目
 
-- `D:/UsersFiles/Link_Z/Desktop/Code/PiliPlus` — Flutter 哔哩哔哩客户端（音质档位/设置交互参考）
-- `D:/UsersFiles/Link_Z/Desktop/Code/bili/biliRelay` — B 站 API 取流参考（QUALITY_MAP / fnval）
+- `../bili/PiliPlus` — Flutter 哔哩哔哩客户端（音质档位/设置交互参考）
+- `../bili/biliRelay` — B 站 API 取流参考（QUALITY_MAP / fnval）
 
 ## 沟通偏好
 
@@ -94,8 +85,6 @@
 - **类比解释**：技术概念用生活类比辅助理解
 - **输出零废话**：不加 emoji、不加前置/后置解释，写完即停（与编码原则一致）
 
-## Pre-commit
+## 签名
 
-`.githooks/pre-commit` 扫描暂存的 `build-profile.json5` 中签名关键词（`certpath`、`storeFile`、`storePassword`、`keyPassword`、`keyAlias`、`material`、`.ohos/config`），命中即拒绝提交。勿绕过。
-
-- **提交信息简洁**：一行主题概括本轮变更要点即可；验证过程、历史考据、异常排查细节落 PROJECT_NOTES.md / spec 文档，不写进提交信息。
+签名材料**绝不入 git**：三层防护、pre-commit 拦截、调试签名恢复，详见 `SECURITY.md`。

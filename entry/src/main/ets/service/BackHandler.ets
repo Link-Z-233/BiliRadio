@@ -40,10 +40,17 @@ export function dismissOverlaysForBack(): boolean {
   return false;
 }
 
-// 清空队列专用两层同收（R3 US4）：队列经注册句柄滑出（无句柄回退置 flag），
+// 清空队列专用两层同收（R3 US4 / R4 US1）：浮层内实例两标志同帧直复位随浮层一次性退出
+// （不调用滑出句柄、不起延时器）；首页层实例保持队列经注册句柄滑出（无句柄回退置 flag），
 // 播放浮层无条件立即收起，两层同帧无错峰
 export function closeBothLayersNow(): void {
   const showQueueSheet: BoolState = connectBool(Constants.AS_SHOW_QUEUE_SHEET, false);
+  const showPlayerOverlay: BoolState = connectBool(Constants.AS_SHOW_PLAYER_OVERLAY, false);
+  if (showPlayerOverlay.value) {
+    showQueueSheet.value = false;
+    showPlayerOverlay.value = false;
+    return;
+  }
   if (showQueueSheet.value) {
     if (queueCloseHandle !== undefined) {
       queueCloseHandle();
@@ -51,5 +58,5 @@ export function closeBothLayersNow(): void {
       showQueueSheet.value = false;
     }
   }
-  connectBool(Constants.AS_SHOW_PLAYER_OVERLAY, false).value = false;
+  showPlayerOverlay.value = false;
 }

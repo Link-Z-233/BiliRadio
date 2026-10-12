@@ -76,6 +76,7 @@ export struct HomePage {
   // @Local refreshing: boolean = false;
   @Local rowCount: number = 0;
   @Local showAddSheet: boolean = false;
+  @Local pressedKey: string = '';
   // 添加订阅面板的系统返回拦截句柄（onWillDismiss PRESS_BACK 时经其询问面板是否消费）
   private addSheetBack: AddSheetBackHandler = new AddSheetBackHandler();
   private subs: Subscription[] = [];
@@ -291,8 +292,14 @@ export struct HomePage {
     .width('100%')
     .padding({ left: Constants.TOKEN_SPACE_M, right: Constants.TOKEN_SPACE_M, top: Constants.TOKEN_SPACE_10, bottom: Constants.TOKEN_SPACE_10 })
     .borderRadius(Constants.TOKEN_RADIUS_14)
-    .backgroundColor($r('app.color.card_background'))
-    .stateStyles({ pressed: this.pressedStyle })
+    .backgroundColor(this.pressedKey === row.sub.id ? $r('app.color.item_pressed_background') : $r('app.color.card_background'))
+    .onTouch((e: TouchEvent): void => {
+      if (e.type === TouchType.Down) {
+        this.pressedKey = row.sub.id;
+      } else if (e.type === TouchType.Up || e.type === TouchType.Cancel) {
+        this.pressedKey = '';
+      }
+    })
     .onClick(() => {
       this.navPathStack.pushPathByName('sourcePage', row.sub.id);
     })
@@ -334,7 +341,7 @@ export struct HomePage {
     }
     .height('100%')
     .justifyContent(FlexAlign.Center)
-    .padding({ right: Constants.TOKEN_SPACE_M })
+    .padding({ left: Constants.TOKEN_SPACE_M, right: Constants.TOKEN_SPACE_M })
   }
 
   @Builder
@@ -356,11 +363,6 @@ export struct HomePage {
     .width('100%')
     .layoutWeight(1)
     .justifyContent(FlexAlign.Center)
-  }
-
-  @Styles
-  pressedStyle() {
-    .backgroundColor($r('app.color.item_pressed_background'))
   }
 
   build() {

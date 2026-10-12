@@ -175,8 +175,8 @@
 
 **Purpose**: 构建与部署验证（build-only，无 UI 验证任务）
 
-- [ ] T032 Build project and fix any compilation errors (invoke `devecocli build`; iterate fix → build until success)
-- [ ] T033 Deploy application to device/emulator (invoke `devecocli run --skip-build`)
+- [X] T032 Build project and fix any compilation errors (invoke `devecocli build`; iterate fix → build until success)
+- [X] T033 Deploy application to device/emulator (invoke `devecocli run --skip-build`)
 
 ---
 

@@ -18,7 +18,7 @@
 
 - 源码根：`entry/src/main/ets/`（pages/ 页面、service/ 服务、component/ 组件）
 - 文档：仓库根 `PROJECT_NOTES.md`
-- 源码根目录：`D:\UsersFiles\Link_Z\Desktop\Code\HMOS\BiliRadio`
+- 源码根目录：`.`（仓库根）
 
 **全局执行约束（实施轮适用）**：
 

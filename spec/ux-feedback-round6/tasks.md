@@ -145,7 +145,7 @@
 
 **Goal**: README 引用 PiliPlus 并硬删除版本信息；PROJECT_NOTES 登记三条规划
 **Independent Test**: README 检索无版本号信息；PROJECT_NOTES 三条登记齐全
-- [X] T032 [P] [US8] `README.md`：① 参考项目节引用 PiliPlus——项目 URL 必须从本地 `D:/UsersFiles/Link_Z/Desktop/Code/PiliPlus` 的 git remote 读取，禁止凭记忆编写；② 硬删除「版本」小节与「版本号从 0.1.0 重新起版」行，原位置不补任何替代文案（FR-024）
+- [X] T032 [P] [US8] `README.md`：① 参考项目节引用 PiliPlus——项目 URL 必须从本地 `../bili/PiliPlus` 的 git remote 读取，禁止凭记忆编写；② 硬删除「版本」小节与「版本号从 0.1.0 重新起版」行，原位置不补任何替代文案（FR-024）
 
 - [X] T033 [P] [US8] `PROJECT_NOTES.md`：登记三条规划（订阅源导出导入、关于页文案优化、版本号更新待播放列表重做完后统一执行）；「播放队列左滑删除（KI-3）」标注暂缓
 

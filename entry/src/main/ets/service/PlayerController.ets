@@ -873,6 +873,10 @@ export class PlayerController {
       this.currentTime = 0;
     }
     if (this.isPrepared) {
+      // 意图先行即时广播：就绪态点按瞬间图标即翻转，不等 AVPlayer 起播事件；
+      // 未就绪态不预广播——由 playIndex 同步前缀一次到位（play 图标 → 加载圈），
+      // 避免「暂停键中间帧」残影盖在加载圈上
+      this.emitUi();
       await this.player.play();
     } else if (this.currentIndex >= 0) {
       await this.playIndex(this.currentIndex, this.pendingSeekMs);
@@ -884,6 +888,8 @@ export class PlayerController {
   async pauseRequest(): Promise<void> {
     this.resumeAfterInterrupt = false;
     this.playIntent = false;
+    // 意图先行即时广播：点按瞬间图标即回播放键，不等 player.pause() 完成与状态事件
+    this.emitUi();
     if (this.isPreparing) {
       this.pausedByUser = true;
       await this.player.pause();

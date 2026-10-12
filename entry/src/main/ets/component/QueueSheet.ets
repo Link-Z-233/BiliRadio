@@ -91,6 +91,7 @@ export struct QueueSheet {
   @Local playlistVersion: number = -1;
   @Local selectMode: BoolState = connectBool(Constants.AS_PLAYLIST_SELECT_MODE, false);
   @Local selectedBvids: string[] = [];
+  @Local pressedKey: string = '';
   // 面板显隐同源（v0.3 US7）：与 QueueDrawer/Index 共享同键实例，关闭时驱动多选复位
   @Local showQueueSheet: BoolState = connectBool(Constants.AS_SHOW_QUEUE_SHEET, false);
 
@@ -399,12 +400,7 @@ export struct QueueSheet {
     }
     .height('100%')
     .justifyContent(FlexAlign.Center)
-    .padding({ right: Constants.TOKEN_SPACE_M })
-  }
-
-  @Styles
-  pressedStyle() {
-    .backgroundColor($r('app.color.item_pressed_background'))
+    .padding({ left: Constants.TOKEN_SPACE_M, right: Constants.TOKEN_SPACE_M })
   }
 
   build() {
@@ -615,9 +611,15 @@ export struct QueueSheet {
                 }
                 .width('100%')
                 .padding({ left: Constants.TOKEN_SPACE_L, right: Constants.TOKEN_SPACE_L, top: Constants.TOKEN_SPACE_M, bottom: Constants.TOKEN_SPACE_M })
-                .backgroundColor(Color.Transparent)
+                .backgroundColor(this.pressedKey === item.bvid ? $r('app.color.item_pressed_background') : Color.Transparent)
                 .borderRadius(Constants.TOKEN_RADIUS_M)
-                .stateStyles({ pressed: this.pressedStyle })
+                .onTouch((e: TouchEvent): void => {
+                  if (e.type === TouchType.Down) {
+                    this.pressedKey = item.bvid;
+                  } else if (e.type === TouchType.Up || e.type === TouchType.Cancel) {
+                    this.pressedKey = '';
+                  }
+                })
                 .onClick(() => {
                   if (this.selectMode.value) {
                     this.toggleSelect(item.bvid);

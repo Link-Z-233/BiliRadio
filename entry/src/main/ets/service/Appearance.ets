@@ -3,12 +3,13 @@ import { preferences } from '@kit.ArkData';
 import { window } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { BusinessError } from '@kit.BasicServicesKit';
+import { resourceManager } from '@kit.LocalizationKit';
 import { Constants } from './Constants';
 import { connectNum, connectStr } from './V2State';
 
 // 窗口层 API（setWindowBackgroundColor / SystemBarProperties）仅接受字符串色值，
 // 无法借 base/dark 资源目录自动匹配，需按当前生效外观手动映射，并在模式变化时重新设置。
-// 受限色值已集中到 Constants（WIN_BG_*/BAR_CONTENT_*/PROBE_DARK_RGB），此处不再重复声明。
+// 受限色值已集中到 Constants（WIN_BG_*/BAR_CONTENT_*），此处不再重复声明。
 
 /**
  * 外观三态（跟随系统/浅色/深色）管理：
@@ -230,12 +231,13 @@ export class Appearance {
     }
   }
 
-  // 跟随系统时按资源实际解析结果判定当前深浅（NOT_SET 下资源按系统模式匹配）
+  // 跟随系统时按资源解析生效配置判定当前深浅：getConfigurationSync 返回资源解析实际使用的配置，
+  // 为权威来源（原 getColorByNameSync 取色探测在深色模式运行时不可靠，曾致 palette 深色分支全部失效）
   private static refreshResolved(context: common.Context, initial: boolean): void {
     try {
       const rm = context.resourceManager;
-      const color: number = rm.getColorByNameSync('app.color.page_background');
-      Appearance.isDark = (color & 0xFFFFFF) === Constants.PROBE_DARK_RGB;
+      Appearance.isDark = rm.getConfigurationSync().colorMode === resourceManager.ColorMode.DARK;
+      hilog.info(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'appearance resolved dark=%{public}s', `${Appearance.isDark}`);
     } catch (err) {
       if (initial) {
         Appearance.isDark = false;

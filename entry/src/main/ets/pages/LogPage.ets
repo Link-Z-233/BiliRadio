@@ -54,6 +54,7 @@ struct LogPage {
   @Local accentColor: StrState =
     connectStr(Constants.AS_ACCENT_COLOR, Constants.ACCENT_DEFAULT);
   @Local navBarHeight: NumState = connectNum(Constants.AS_NAV_BAR_HEIGHT, 0);
+  @Local pressedKey: string = '';
   private source: LogDataSource = new LogDataSource();
   private navPathStack: NavPathStack = new NavPathStack();
 
@@ -121,11 +122,6 @@ struct LogPage {
       return '错误';
     }
     return '网络';
-  }
-
-  @Styles
-  pressedStyle() {
-    .backgroundColor($r('app.color.item_pressed_background'))
   }
 
   build() {
@@ -231,7 +227,14 @@ struct LogPage {
                 .alignItems(HorizontalAlign.Start)
                 .width('100%')
                 .padding({ left: Constants.TOKEN_SPACE_L, right: Constants.TOKEN_SPACE_L, top: Constants.TOKEN_SPACE_S, bottom: Constants.TOKEN_SPACE_S })
-                .stateStyles({ pressed: this.pressedStyle })
+                .backgroundColor(this.pressedKey === `${item.time}_${item.summary}` ? $r('app.color.item_pressed_background') : Color.Transparent)
+                .onTouch((e: TouchEvent): void => {
+                  if (e.type === TouchType.Down) {
+                    this.pressedKey = `${item.time}_${item.summary}`;
+                  } else if (e.type === TouchType.Up || e.type === TouchType.Cancel) {
+                    this.pressedKey = '';
+                  }
+                })
               }
             }, (item: LogEntry) => `${item.time}_${item.summary}`)
           }

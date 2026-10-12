@@ -68,7 +68,6 @@ export class Constants {
   static readonly WIN_BG_LIGHT: string = '#F6F6FA';
   static readonly BAR_CONTENT_DARK: string = '#FFFFFF';
   static readonly BAR_CONTENT_LIGHT: string = '#1A1A1A';
-  static readonly PROBE_DARK_RGB: number = 0x121214;
 
   // —— 主题色（accent）：预设色板，深浅两态下均已校验对比度；仅接受色板内取值 ——
   static readonly KEY_ACCENT_COLOR: string = 'accentColor';
@@ -116,6 +115,8 @@ export class Constants {
   static readonly DRAWER_CLOSE_DELAY_MS: number = 260;
   // 清空队列延时清数据（ms，v0.3-bugfix-round3 US4）：先关层后清数据，延时大于浮层 350ms 转场保证清数据时浮层已卸载
   static readonly CLEAR_QUEUE_DATA_DELAY_MS: number = 400;
+  // 设置页退场转场定值延时（v0.3-bugfix-round4 US2）：ponytail: 系统导航退场转场无公开完成回调，定值略长于默认转场，胶囊上浮始于转场结束后
+  static readonly NAV_EXIT_TRANSITION_MS: number = 400;
 
   // —— 左滑删除圆钮（v0.3-bugfix-round3 US6）：圆形红底垃圾桶，尺寸/圆角/图标字号唯一来源 ——
   static readonly SWIPE_DELETE_BTN_SIZE: number = 44;
@@ -134,7 +135,7 @@ export class Constants {
     'Mozilla/5.0 BiliDroid/8.43.0 (bbcallen@gmail.com) os/android model/android mobi_app/android build/8430300 channel/master innerVer/8430300 osVer/15 network/2';
 
   // —— 播放按钮尺寸同源（US1/US4）：按钮直径为唯一尺寸源，缓冲加载指示尺寸由此派生，调整不再脱节 ——
-  static readonly PLAY_BTN_DIAMETER: number = 72;   // 播放按钮直径
+  static readonly PLAY_BTN_DIAMETER: number = 80;   // 播放按钮直径
 
   // —— 加载更多失败冷却（US2）：失败后冷却期内禁用重试，防止弱网下反复请求 ——
   static readonly LOAD_OLDER_FAIL_COOLDOWN_MS: number = 3000;
@@ -165,6 +166,32 @@ export class Constants {
   static readonly DIALOG_REMOVE_SELECTED_MSG: string = '确定移除所选条目吗？';
   // —— 队列空态引导（queue-redesign US1） ——
   static readonly QUEUE_EMPTY_HINT: string = '到订阅源详情页播放节目，或在首页点「＋」添加订阅';
+
+  // —— 播放页封面取色（palette-glow/palette-bg）：取色与背景衍生色参数唯一来源 ——
+  // 取色缓存上限（条）：满则整体清空重新积累
+  static readonly PALETTE_CACHE_MAX: number = 24;
+  // 取色解码目标尺寸（px）：仅供 ColorPicker 采样，小图足够
+  static readonly PALETTE_DECODE_W: number = 48;
+  static readonly PALETTE_DECODE_H: number = 32;
+  // 取色封面拉取档：与列表缩略图同档（颜色采样无需大图）
+  static readonly PALETTE_FETCH_W: number = 240;
+  static readonly PALETTE_FETCH_H: number = 240;
+  // 主色择优阈值：占比色 RGB 通道极差低于该值视为灰（黑/白/灰底封面），改取最高饱和色
+  static readonly PALETTE_GRAY_SPREAD: number = 24;
+  // 占比色感知亮度低于该值视为过暗（黑边/暗部主导），改取最高饱和色
+  static readonly PALETTE_DARK_LUMA: number = 50;
+  // 播放页封面上边距（vp）：US10 基础上下移，给光晕上方留渲染空间（US5 顶栏截断缓解）
+  static readonly COVER_TOP_GAP: number = 40;
+  // 背景衍生色饱和度区间（0-1）：压至该区间保证柔和不抢眼
+  static readonly PALETTE_BG_SAT_MIN: number = 0.10;
+  static readonly PALETTE_BG_SAT_MAX: number = 0.20;
+  // 背景衍生色明度目标（0-1）：浅色外观近白 / 深色外观近黑
+  static readonly PALETTE_BG_L_LIGHT: number = 0.91;
+  static readonly PALETTE_BG_L_DARK: number = 0.11;
+  // 光晕基色深色外观明度目标（0-1）：保留色相/饱和度、压至暗调氛围光（纯灰白取色回退主题色见 glowTint）
+  static readonly PALETTE_GLOW_L_DARK: number = 0.25;
+  // 背景渐变首取色淡入时长（ms）
+  static readonly PALETTE_BG_REVEAL_MS: number = 500;
 
   // —— 封面尺寸档位（US6）：列表缩略图/播放页大封面/播控中心降档，尺寸只需在此调整 ——
   static readonly COVER_THUMB_W: number = 240;

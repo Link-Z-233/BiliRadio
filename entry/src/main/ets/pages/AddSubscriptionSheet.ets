@@ -52,6 +52,7 @@ export struct AddSubscriptionSheet {
   // seasons/series 两个请求是否已 settle（then/catch 均置 true），用于二级视图区分加载态与空态
   @Local seasonsLoaded: boolean = false;
   @Local seriesLoaded: boolean = false;
+  @Local pressedKey: string = '';
   @Param onSubscribed: (sub: Subscription) => void = (sub: Subscription) => {
   };
   @Param onDismiss: () => void = () => {
@@ -419,11 +420,6 @@ export struct AddSubscriptionSheet {
     return false;
   }
 
-  @Styles
-  pressedStyle() {
-    .backgroundColor($r('app.color.item_pressed_background'))
-  }
-
   // 二级视图标题行：返回图标外扩至 40vp 触控区（padding 10），负 margin 抵消布局位移保持视觉位置不变
   @Builder
   private secondaryHeader(title: string) {
@@ -483,7 +479,17 @@ export struct AddSubscriptionSheet {
       }
       .width('100%')
       .margin({ top: Constants.TOKEN_SPACE_M })
-      .stateStyles({ pressed: this.pressedStyle })
+      .backgroundColor(this.pressedKey === `up_${this.upInfo.mid}` ? $r('app.color.item_pressed_background') : Color.Transparent)
+      .onTouch((e: TouchEvent): void => {
+        const info: UpInfo | null = this.upInfo;
+        if (e.type === TouchType.Down) {
+          if (info !== null) {
+            this.pressedKey = `up_${info.mid}`;
+          }
+        } else if (e.type === TouchType.Up || e.type === TouchType.Cancel) {
+          this.pressedKey = '';
+        }
+      })
     }
   }
 
@@ -628,7 +634,14 @@ export struct AddSubscriptionSheet {
         }
         .width('100%')
         .padding({ top: Constants.TOKEN_SPACE_S, bottom: Constants.TOKEN_SPACE_S })
-        .stateStyles({ pressed: this.pressedStyle })
+        .backgroundColor(this.pressedKey === `folder_${f.mediaId}` ? $r('app.color.item_pressed_background') : Color.Transparent)
+        .onTouch((e: TouchEvent): void => {
+          if (e.type === TouchType.Down) {
+            this.pressedKey = `folder_${f.mediaId}`;
+          } else if (e.type === TouchType.Up || e.type === TouchType.Cancel) {
+            this.pressedKey = '';
+          }
+        })
       }, (f: FavFolder) => `fav_${f.mediaId}`)
     }
   }
@@ -686,7 +699,14 @@ export struct AddSubscriptionSheet {
         }
         .width('100%')
         .padding({ top: Constants.TOKEN_SPACE_S, bottom: Constants.TOKEN_SPACE_S })
-        .stateStyles({ pressed: this.pressedStyle })
+        .backgroundColor(this.pressedKey === `season_${s.seasonId}` ? $r('app.color.item_pressed_background') : Color.Transparent)
+        .onTouch((e: TouchEvent): void => {
+          if (e.type === TouchType.Down) {
+            this.pressedKey = `season_${s.seasonId}`;
+          } else if (e.type === TouchType.Up || e.type === TouchType.Cancel) {
+            this.pressedKey = '';
+          }
+        })
       }, (s: Season) => `season_${s.seasonId}`)
 
       if (this.series.length > 0) {
@@ -723,7 +743,14 @@ export struct AddSubscriptionSheet {
         }
         .width('100%')
         .padding({ top: Constants.TOKEN_SPACE_S, bottom: Constants.TOKEN_SPACE_S })
-        .stateStyles({ pressed: this.pressedStyle })
+        .backgroundColor(this.pressedKey === `series_${s.seasonId}` ? $r('app.color.item_pressed_background') : Color.Transparent)
+        .onTouch((e: TouchEvent): void => {
+          if (e.type === TouchType.Down) {
+            this.pressedKey = `series_${s.seasonId}`;
+          } else if (e.type === TouchType.Up || e.type === TouchType.Cancel) {
+            this.pressedKey = '';
+          }
+        })
       }, (s: Season) => `series_${s.seasonId}`)
     }
   }

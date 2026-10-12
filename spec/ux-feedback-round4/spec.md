@@ -203,7 +203,7 @@
 
 ## Assumptions
 
-- B 站未登录风控（352/412）的规避以 **PiliPlus 项目**（`D:\UsersFiles\Link_Z\Desktop\Code\PiliPlus`）为参考实现：其主路径为 APP 端点（无风控），Web 路径依赖 buvid3 本地生成 + ExClimbWuzhi 激活 + dm_img 指纹 + WBI 签名。本批优先采用 APP 端点方案，不承诺 Web 端点 100% 绕过；兜底为友好提示引导登录（用户已确认此方向）。
+- B 站未登录风控（352/412）的规避以 **PiliPlus 项目**（`../bili/PiliPlus`）为参考实现：其主路径为 APP 端点（无风控），Web 路径依赖 buvid3 本地生成 + ExClimbWuzhi 激活 + dm_img 指纹 + WBI 签名。本批优先采用 APP 端点方案，不承诺 Web 端点 100% 绕过；兜底为友好提示引导登录（用户已确认此方向）。
 - 加载指示采用"系统加载圈替换播放键图标"方案（用户已确认）；原"常驻低透明装饰圆环"与缓冲弧线一并废弃，播放键区域简化。
 - 胶囊左右边距采用与现有设计一致的约 16vp 量级。
 - 本批不重构导航/状态管理框架，仅在既有 V1 装饰器与 AppStorage 瞬态键体系内修复。

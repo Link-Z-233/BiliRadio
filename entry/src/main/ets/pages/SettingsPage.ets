@@ -101,6 +101,7 @@ struct SettingsPage {
 
   // —— 应用内日志（US9） ——
   @Local logCount: number = 0;
+  @Local pressedKey: string = '';
 
   @Local autoPlayOnStart: boolean = false;
   // —— 新增设置开关状态 ——
@@ -152,6 +153,7 @@ struct SettingsPage {
   private unsubscribePlayer: () => void = (): void => {};
   private tapCount: number = 0;
   private lastTapTs: number = 0;
+  private onSettingsPageTimer: number = -1;
 
   aboutToAppear(): void {
     this.refreshLoginState();
@@ -406,11 +408,6 @@ struct SettingsPage {
     });
   }
 
-  @Styles
-  pressedStyle() {
-    .backgroundColor($r('app.color.item_pressed_background'))
-  }
-
   // 左滑露出的红色垃圾桶删除钮（US1 双触发）：点击进确认弹窗，滑过阈值（onAction）同弹窗
   @Builder
   historyDeleteAction(item: PlayHistoryItem) {
@@ -431,7 +428,7 @@ struct SettingsPage {
     }
     .height('100%')
     .justifyContent(FlexAlign.Center)
-    .padding({ right: Constants.TOKEN_SPACE_M })
+    .padding({ left: Constants.TOKEN_SPACE_M, right: Constants.TOKEN_SPACE_M })
   }
 
   private confirmClearPlayHistory(): void {
@@ -1125,7 +1122,14 @@ struct SettingsPage {
               }
               .width('100%')
               .padding({ left: Constants.TOKEN_SPACE_L, right: Constants.TOKEN_SPACE_L, top: Constants.TOKEN_SPACE_10, bottom: Constants.TOKEN_SPACE_10 })
-              .stateStyles({ pressed: this.pressedStyle })
+              .backgroundColor(this.pressedKey === item.bvid ? $r('app.color.item_pressed_background') : Color.Transparent)
+              .onTouch((e: TouchEvent): void => {
+                if (e.type === TouchType.Down) {
+                  this.pressedKey = item.bvid;
+                } else if (e.type === TouchType.Up || e.type === TouchType.Cancel) {
+                  this.pressedKey = '';
+                }
+              })
               .onClick(() => {
                 this.replayHistory(item);
               })
@@ -1435,19 +1439,30 @@ struct SettingsPage {
     }
     .hideTitleBar(true)
     .onWillAppear(() => {
-      // US7/T021：设置页在台标志提前到转场开始时置位——驱动首页播放胶囊在本页隐藏
+      // US7/T021：设置页在台标志提前到转场开始时置位——驱动首页播放胶囊在本页隐藏；
+      // R4 US2：置位前先取消未触发的复位定时器（快速往返竞态消解）
+      if (this.onSettingsPageTimer >= 0) {
+        clearTimeout(this.onSettingsPageTimer);
+        this.onSettingsPageTimer = -1;
+      }
       connectBool(Constants.AS_ON_SETTINGS_PAGE, false).value = true;
     })
     .onShown(() => {
       // US5：日志页返回后刷新角标计数——pushPathByName 的 onPop 仅在 pop(result) 带 result 时触发，
       // 日志页返回按钮为无参 pop()，onPop 永不回调，须在设置页重新可见时主动重读
+      // R4 US2：同取消 pending 定时器并补置位 true——修复日志页返回后标志残留 false 的缺口
+      if (this.onSettingsPageTimer >= 0) {
+        clearTimeout(this.onSettingsPageTimer);
+        this.onSettingsPageTimer = -1;
+      }
+      connectBool(Constants.AS_ON_SETTINGS_PAGE, false).value = true;
       this.logCount = Logger.count();
     })
-    .onHidden(() => {
-      // US3（v0.3-bugfix-round3）：页面真正隐藏（退场转场播完）才复位在台标志——
-      // 返回首页时胶囊在设置页滑出动画结束后才出现，不再压在退场页面上层；
-      // 推入日志页时同触发，胶囊延后到转场后在日志页显示（现状行为仅时序后移）
-      connectBool(Constants.AS_ON_SETTINGS_PAGE, false).value = false;
+    .onWillDisappear(() => {
+      this.onSettingsPageTimer = setTimeout(() => {
+        this.onSettingsPageTimer = -1;
+        connectBool(Constants.AS_ON_SETTINGS_PAGE, false).value = false;
+      }, Constants.NAV_EXIT_TRANSITION_MS);
     })
     .onReady((ctx: NavDestinationContext) => {
       this.navPathStack = ctx.pathStack;
