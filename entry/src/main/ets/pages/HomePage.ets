@@ -2,7 +2,7 @@ import { Subscription } from '../model/Subscription';
 import { BiliVideo } from '../model/BiliVideo';
 import { SubscriptionStore } from '../service/SubscriptionStore';
 import { Constants } from '../service/Constants';
-import { connectBool, connectNum, connectStr, BoolState, NumState, StrState } from '../service/V2State';
+import { connectBool, connectNum, connectStr, NumState, StrState } from '../service/V2State';
 import { CoverThumb } from '../component/CoverThumb';
 import { AddSubscriptionSheet, AddSheetBackHandler } from './AddSubscriptionSheet';
 import { promptAction } from '@kit.ArkUI';
@@ -67,8 +67,6 @@ class SubDataSource implements IDataSource {
 export struct HomePage {
   @Local accentColor: StrState =
     connectStr(Constants.AS_ACCENT_COLOR, Constants.ACCENT_DEFAULT);
-  @Local miniPlayerVisible: BoolState =
-    connectBool(Constants.AS_MINI_PLAYER_VISIBLE, true);
   @Local navBarHeight: NumState = connectNum(Constants.AS_NAV_BAR_HEIGHT, 0);
   // 源页退出（onHidden）经全局键触发重算（US4 返回首页徽标清除）
   @Local homeRefreshTick: NumState = connectNum(Constants.AS_HOME_REFRESH_TICK, 0);
@@ -398,8 +396,8 @@ export struct HomePage {
         .justifyContent(FlexAlign.Center)
         .margin({ left: Constants.TOKEN_SPACE_S })
         .onClick(() => {
-          // 更多按钮直达设置页（US4）：播放历史/关于本就是设置页内入口，独立更多页已删除
-          this.navPathStack.pushPathByName('settingsPage', '');
+          // 更多按钮直达设置层（US4）：播放历史/关于本就是设置页内入口，独立更多页已删除
+          connectBool(Constants.AS_SHOW_SETTINGS_PAGE, false).value = true;
         })
       }
       .width('100%')
@@ -432,7 +430,7 @@ export struct HomePage {
           }
           .width('100%')
           .height('100%')
-          .padding({ left: Constants.TOKEN_SPACE_M, right: Constants.TOKEN_SPACE_M, top: Constants.TOKEN_SPACE_XS, bottom: (this.miniPlayerVisible.value ? Constants.MINI_PLAYER_CLEARANCE : 12) + this.navBarHeight.value })
+          .padding({ left: Constants.TOKEN_SPACE_M, right: Constants.TOKEN_SPACE_M, top: Constants.TOKEN_SPACE_XS, bottom: Constants.MINI_PLAYER_CLEARANCE + this.navBarHeight.value })
           // US9：内容不足一屏时 List 默认不开启边缘效果，须显式 alwaysEnabled 才有过冲物理回弹
           .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
         }

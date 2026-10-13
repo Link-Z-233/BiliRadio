@@ -14,6 +14,8 @@ export struct SettingsRow {
   @Param toggleOn: boolean = false;
   @Param showDivider: boolean = false;
   @Param danger: boolean = false;
+  // 大会员徽标（v0.4-Part2 T012）：true 时标题侧渲染「大会员」小标签
+  @Param vipBadge: boolean = false;
   @Local accentColor: StrState =
     connectStr(Constants.AS_ACCENT_COLOR, Constants.ACCENT_DEFAULT);
   @Param rowAction: () => void = (): void => {};
@@ -52,11 +54,22 @@ export struct SettingsRow {
       Row() {
         this.iconSlot(this.rowIcon)
         Column() {
-          Text(this.title)
-            .fontSize(Constants.TOKEN_FONT_TITLE)
-            .fontColor(this.danger ? $r('app.color.danger_red') : $r('app.color.text_primary'))
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
+          Row() {
+            Text(this.title)
+              .fontSize(Constants.TOKEN_FONT_TITLE)
+              .fontColor(this.danger ? $r('app.color.danger_red') : $r('app.color.text_primary'))
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+            if (this.vipBadge) {
+              Text('大会员')
+                .fontSize(Constants.TOKEN_FONT_BODY_S)
+                .fontColor($r('app.color.vip_badge_text'))
+                .backgroundColor($r('app.color.vip_badge_bg'))
+                .borderRadius(Constants.TOKEN_RADIUS_S)
+                .padding({ left: Constants.TOKEN_SPACE_6, right: Constants.TOKEN_SPACE_6, top: Constants.TOKEN_SPACE_XS, bottom: Constants.TOKEN_SPACE_XS })
+                .margin({ left: Constants.TOKEN_SPACE_6 })
+            }
+          }
           if (this.subtitle !== '') {
             Text(this.subtitle)
               .fontSize(Constants.TOKEN_FONT_BODY_S)

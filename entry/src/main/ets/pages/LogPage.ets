@@ -1,7 +1,6 @@
 import { Logger, LogEntry } from '../service/Logger';
 import { Constants } from '../service/Constants';
-import { dismissOverlaysForBack } from '../service/BackHandler';
-import { connectNum, connectStr, NumState, StrState } from '../service/V2State';
+import { connectBool, connectNum, connectStr, NumState, StrState } from '../service/V2State';
 import { picker, fileIo as fs } from '@kit.CoreFileKit';
 import { promptAction } from '@kit.ArkUI';
 
@@ -40,23 +39,17 @@ class LogDataSource implements IDataSource {
   }
 }
 
-@Builder
-export function LogPageBuilder() {
-  LogPage()
-}
-
 // US5 日志独立整页（FR-015）：大标题 + 操作按钮 + 满页列表，只读展示内存环形日志（最新在前）。
 // 纯文本条目：时间 / 类别标签（网络/错误）/ 摘要（host+path 或事件名）/ 结果码或错误摘要；
-// 页内清空仅清内存缓冲，不影响任何业务数据；底部为 miniPlayer 避让。
+// 页内清空仅清内存缓冲，不影响任何业务数据；Index 树内层级承载（日志层，设置层之上）。
 @ComponentV2
-struct LogPage {
+export struct LogPage {
   @Local entries: LogEntry[] = [];
   @Local accentColor: StrState =
     connectStr(Constants.AS_ACCENT_COLOR, Constants.ACCENT_DEFAULT);
   @Local navBarHeight: NumState = connectNum(Constants.AS_NAV_BAR_HEIGHT, 0);
   @Local pressedKey: string = '';
   private source: LogDataSource = new LogDataSource();
-  private navPathStack: NavPathStack = new NavPathStack();
 
   aboutToAppear(): void {
     this.reload();
@@ -125,7 +118,7 @@ struct LogPage {
   }
 
   build() {
-    NavDestination() {
+    Column() {
       Column() {
         Row() {
           Row() {
@@ -139,7 +132,7 @@ struct LogPage {
           .backgroundColor($r('app.color.card_background'))
           .justifyContent(FlexAlign.Center)
           .onClick(() => {
-            this.navPathStack.pop();
+            connectBool(Constants.AS_SHOW_LOG_PAGE, false).value = false;
           })
 
           Text('日志查询')
@@ -248,11 +241,7 @@ struct LogPage {
       .backgroundColor($r('app.color.page_background'))
       .padding({ bottom: this.navBarHeight.value })
     }
-    .hideTitleBar(true)
-    .onReady((ctx: NavDestinationContext) => {
-      this.navPathStack = ctx.pathStack;
-    })
-    // US5：系统返回先经 BackHandler 关队列/浮层，无浮层可关返回 false 放行默认 pop
-    .onBackPressed((): boolean => dismissOverlaysForBack())
+    .width('100%')
+    .height('100%')
   }
 }

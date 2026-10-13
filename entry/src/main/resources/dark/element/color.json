@@ -42,6 +42,8 @@
     { "name": "sheet_background", "value": "#E61E1E22" },
     { "name": "btn_border", "value": "#26FFFFFF" },
     { "name": "success_green", "value": "#30D158" },
-    { "name": "item_pressed_background", "value": "#14FFFFFF" }
+    { "name": "item_pressed_background", "value": "#14FFFFFF" },
+    { "name": "vip_badge_bg", "value": "#FB7299" },
+    { "name": "vip_badge_text", "value": "#FFFFFF" }
   ]
 }

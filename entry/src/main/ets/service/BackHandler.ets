@@ -1,17 +1,22 @@
 import { Constants } from './Constants';
 import { connectBool, BoolState } from './V2State';
 
-// 返回分层关闭序列（v0.3-bugfix-round2 US5）：四个返回处理点（Index/SettingsPage/SourcePage/LogPage）
-// 共用「先关队列（多选优先退出）→ 再关浮层」序列；队列滑出句柄模块级注册
-// （GlassSheet 挂载点有 Index 内容层与 PlayerOverlay 层两处，宿主成员无法跨 NavDestination 传递）。
+// 返回链统一入口（v0.4-Part2 z-layer-refactor）：去路由化后系统返回仅达 Index @Entry，
+// dismissOverlaysForBack 按层自上而下逐层关闭（队列→播放层附属面板→播放层→日志层→设置层句柄→设置层），
+// 层物理堆叠保证链命中的永远是当前最上层；队列滑出句柄与设置层内部句柄均模块级注册（宿主生命周期上报）。
 
 let queueCloseHandle: (() => void) | undefined = undefined;
+let settingsBackHandle: (() => boolean) | undefined = undefined;
 
 export function registerQueueClose(handle: (() => void) | undefined): void {
   queueCloseHandle = handle;
 }
 
-// true=已消化一次返回；false=无浮层可关，调用方走自身后续处理或默认 pop
+export function registerSettingsBack(handle: (() => boolean) | undefined): void {
+  settingsBackHandle = handle;
+}
+
+// true=已消化一次返回；false=无层可关，调用方走默认行为
 export function dismissOverlaysForBack(): boolean {
   const showQueueSheet: BoolState = connectBool(Constants.AS_SHOW_QUEUE_SHEET, false);
   if (showQueueSheet.value) {
@@ -27,14 +32,42 @@ export function dismissOverlaysForBack(): boolean {
     }
     return true;
   }
+  const showSpeed: BoolState = connectBool(Constants.AS_SHOW_SPEED, false);
+  if (showSpeed.value) {
+    showSpeed.value = false;
+    return true;
+  }
+  const showMode: BoolState = connectBool(Constants.AS_SHOW_MODE, false);
+  if (showMode.value) {
+    showMode.value = false;
+    return true;
+  }
+  const showSleepTimerPicker: BoolState = connectBool(Constants.AS_SHOW_SLEEP_TIMER_PICKER, false);
+  if (showSleepTimerPicker.value) {
+    showSleepTimerPicker.value = false;
+    return true;
+  }
+  const showSleepTimer: BoolState = connectBool(Constants.AS_SHOW_SLEEP_TIMER, false);
+  if (showSleepTimer.value) {
+    showSleepTimer.value = false;
+    return true;
+  }
   const showPlayerOverlay: BoolState = connectBool(Constants.AS_SHOW_PLAYER_OVERLAY, false);
   if (showPlayerOverlay.value) {
-    const playHistory: BoolState = connectBool(Constants.AS_SHOW_PLAY_HISTORY, false);
-    if (playHistory.value) {
-      playHistory.value = false;
-      return true;
-    }
     showPlayerOverlay.value = false;
+    return true;
+  }
+  const showLogPage: BoolState = connectBool(Constants.AS_SHOW_LOG_PAGE, false);
+  if (showLogPage.value) {
+    showLogPage.value = false;
+    return true;
+  }
+  if (settingsBackHandle !== undefined && settingsBackHandle()) {
+    return true;
+  }
+  const showSettingsPage: BoolState = connectBool(Constants.AS_SHOW_SETTINGS_PAGE, false);
+  if (showSettingsPage.value) {
+    showSettingsPage.value = false;
     return true;
   }
   return false;

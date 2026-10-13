@@ -4,16 +4,6 @@
       "name": "sourcePage",
       "pageSourceFile": "src/main/ets/pages/SourcePage.ets",
       "buildFunction": "SourcePageBuilder"
-    },
-    {
-      "name": "settingsPage",
-      "pageSourceFile": "src/main/ets/pages/SettingsPage.ets",
-      "buildFunction": "SettingsPageBuilder"
-    },
-    {
-      "name": "logPage",
-      "pageSourceFile": "src/main/ets/pages/LogPage.ets",
-      "buildFunction": "LogPageBuilder"
     }
   ]
 }

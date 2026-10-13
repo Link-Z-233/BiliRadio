@@ -21,9 +21,10 @@
 ### 导航
 
 - **唯一 `@Entry`**：`Index`（`main_pages.json` 注册）
-- 其余页面走 `Navigation` + `NavPathStack`；路由在 `router_map.json`（`sourcePage`、`settingsPage`）
+- **四层 z 序**（v0.4-Part2 层序契约，Index Stack 自下而上）：L1 导航+胶囊 → L2 设置层+日志层（去路由，Stack 条件渲染层级；历史面板留设置页树内）→ L3 播放浮层 → L4 队列面板；高层物理覆盖低层，返回链统一 `BackHandler.dismissOverlaysForBack` 逐层关闭
+- `Navigation` + `NavPathStack` 仅存 `sourcePage` 一条路由（`router_map.json`）；设置/日志不再走系统路由
 - 播放层是 **Stack 条件渲染**（非 `bindContentCover`——KI-5：ModalPage 渲染管线在 API 24 平板断裂）
-- 队列是底部弹出面板（Stack 条件渲染，非系统 sheet）
+- 队列是底部弹出面板（Index 单一挂载的 GlassSheet，非系统 sheet）
 
 ### 状态管理
 
@@ -61,7 +62,7 @@
 
 - **KI-7**：链接识别边缘情况（B3/B7/B8/C2 维持登记，B4/B5 已修复）——裸数字一律当 UID
 - **DIS-1**：首页下拉刷新已禁用（代码以注释保留，标记 `[DISABLED 2026-10]`）
-- **待真机验证**：PROJECT_NOTES.md §五集中登记（VR-1～VR-9）——后续轮次验证一律真机；含 KI-3（三处左滑已实现，复测销项）、KI-6（睡眠定时切后台校准）、R9/R10 反馈轮、v0.4-Part1 修复轮
+- **待真机验证**：PROJECT_NOTES.md §五集中登记（VR-1～VR-11）——后续轮次验证一律真机；含 KI-3（三处左滑已实现，复测销项）、KI-6（睡眠定时切后台校准）、R9/R10 反馈轮、v0.4-Part1 修复轮、v0.4-Part2 z 序重构
 
 ## 工作方式（SDD 五阶段）
 

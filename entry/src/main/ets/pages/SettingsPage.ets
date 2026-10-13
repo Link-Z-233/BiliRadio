@@ -16,7 +16,7 @@ import { SettingsGroup } from '../component/SettingsGroup';
 import { SettingsRow } from '../component/SettingsRow';
 import { GlassSheet } from '../component/GlassSheet';
 import { Constants } from '../service/Constants';
-import { dismissOverlaysForBack } from '../service/BackHandler';
+import { registerSettingsBack } from '../service/BackHandler';
 import { connectBool, connectNum, connectStr, BoolState, NumState, StrState } from '../service/V2State';
 import { Logger } from '../service/Logger';
 import { PlayHistoryItem } from '../model/PlayHistoryItem';
@@ -72,16 +72,11 @@ class HistoryDataSource implements IDataSource {
   }
 }
 
-@Builder
-export function SettingsPageBuilder() {
-  SettingsPage()
-}
-
-// 设置页（NavDestination，US8 HarmonyOS 系统风格重写）：大标题 + 分组卡片（SettingsGroup/SettingsRow），
+// 设置页（US8 HarmonyOS 系统风格重写）：大标题 + 分组卡片（SettingsGroup/SettingsRow），
 // 登录 / 播放设置 / 外观（含主题色板）/ 播放历史 / 日志 / 关于功能全保留；
-// pushPathByName('settingsPage', param) 可带 'playHistory' / 'about' 直开对应面板
+// Index 树内层级承载（设置层，导航+胶囊之上、播放浮层之下），历史面板留本页树内
 @ComponentV2
-struct SettingsPage {
+export struct SettingsPage {
   @Local showQr: boolean = false;
   @Local isLogged: boolean = false;
   @Local loginName: string = '未登录';
@@ -105,7 +100,6 @@ struct SettingsPage {
   @Local selectedHistoryIds: string[] = [];
 
   // —— 应用内日志（US9） ——
-  @Local logCount: number = 0;
   @Local pressedKey: string = '';
 
   @Local autoPlayOnStart: boolean = false;
@@ -123,8 +117,6 @@ struct SettingsPage {
 
   @Local accentColor: StrState =
     connectStr(Constants.AS_ACCENT_COLOR, Constants.ACCENT_DEFAULT);
-  @Local miniPlayerVisible: BoolState =
-    connectBool(Constants.AS_MINI_PLAYER_VISIBLE, true);
   @Local navBarHeight: NumState = connectNum(Constants.AS_NAV_BAR_HEIGHT, 0);
   private qrCanvas: CanvasRenderingContext2D =
     new CanvasRenderingContext2D(new RenderingContextSettings(true));
@@ -155,12 +147,10 @@ struct SettingsPage {
   // ListScroller（extends Scroller）：取消确认后经 closeAllSwipeActions 复位滑动行（US1）
   private historyScroller: ListScroller = new ListScroller();
   private settingsScroller: Scroller = new Scroller();
-  private navPathStack: NavPathStack = new NavPathStack();
   // 进度广播退订句柄（US2/KI-1）：aboutToDisappear 中调用，避免监听器累积
   private unsubscribePlayer: () => void = (): void => {};
   private tapCount: number = 0;
   private lastTapTs: number = 0;
-  private onSettingsPageTimer: number = -1;
 
   aboutToAppear(): void {
     this.refreshLoginState();
@@ -179,12 +169,31 @@ struct SettingsPage {
         this.playHistorySource.setItems(this.playHistoryItems);
       }
     }, 'SettingsPage');
-    this.logCount = Logger.count();
     // debugMode 开关显示：仅读 AppStore 供 UI；Logger 恢复与启动提醒已前移 Index 冷启动链路（v0.4-Part1-ux-fixes US10）
     this.debugModeOn = AppStore.getNumber(Constants.KEY_DEBUG_MODE, 0) === 1;
+    registerSettingsBack((): boolean => {
+      if (this.showQualitySheet) {
+        this.showQualitySheet = false;
+        return true;
+      }
+      if (this.showPlayHistory.value) {
+        if (this.historySelectMode) {
+          this.exitHistorySelectMode();
+          return true;
+        }
+        if (this.historyClose !== undefined) {
+          this.historyClose();
+        } else {
+          this.showPlayHistory.value = false;
+        }
+        return true;
+      }
+      return false;
+    });
   }
 
   aboutToDisappear(): void {
+    registerSettingsBack(undefined);
     this.unsubscribePlayer();
     this.unsubscribePlayer = (): void => {};
     this.stopPoll();
@@ -299,7 +308,7 @@ struct SettingsPage {
   }
 
   private openLogPage(): void {
-    this.navPathStack.pushPathByName('logPage', '');
+    connectBool(Constants.AS_SHOW_LOG_PAGE, false).value = true;
   }
 
   // viewAt 为秒级时间戳（play-history-progress 迁移后统一单位），内部转毫秒做相对时间计算
@@ -1259,7 +1268,7 @@ struct SettingsPage {
       Column() {
         if (!this.historySelectMode) {
           Row() {
-            Text(`播放历史 (${this.playHistoryItems.length})`)
+            Text('播放历史')
               .fontSize(17)
               .fontWeight(FontWeight.Bold)
               .fontColor($r('app.color.text_primary'))
@@ -1502,8 +1511,7 @@ struct SettingsPage {
   }
 
   build() {
-    NavDestination() {
-      Stack() {
+    Stack() {
       Column() {
         Row() {
           Row() {
@@ -1517,7 +1525,7 @@ struct SettingsPage {
           .backgroundColor($r('app.color.card_background'))
           .justifyContent(FlexAlign.Center)
           .onClick(() => {
-            this.navPathStack.pop();
+            connectBool(Constants.AS_SHOW_SETTINGS_PAGE, false).value = false;
           })
 
           Text('设置')
@@ -1540,6 +1548,7 @@ struct SettingsPage {
                     title: this.loginName,
                     rowIcon: $r('sys.symbol.person'),
                     avatarUrl: this.avatarUrl,
+                    vipBadge: BiliSession.getInstance().vipStatus === 1,
                     showDivider: true
                   })
                   SettingsRow({
@@ -1652,8 +1661,6 @@ struct SettingsPage {
                 SettingsRow({
                   title: '播放历史',
                   rowIcon: $r('sys.symbol.clock'),
-                  valueText: this.controller.playHistory.length > 0
-                    ? `${this.controller.playHistory.length} 条` : '',
                   showArrow: true,
                   showDivider: true,
                   rowAction: (): void => {
@@ -1663,7 +1670,6 @@ struct SettingsPage {
                 SettingsRow({
                   title: '日志查询',
                   rowIcon: $r('sys.symbol.doc_text'),
-                  valueText: this.logCount > 0 ? `${this.logCount} 条` : '',
                   showArrow: true,
                   showDivider: true,
                   rowAction: (): void => {
@@ -1691,7 +1697,7 @@ struct SettingsPage {
             .width('100%')
             .alignItems(HorizontalAlign.Start)
             .padding({ left: Constants.TOKEN_SPACE_L, right: Constants.TOKEN_SPACE_L, top: Constants.TOKEN_SPACE_XXS,
-              bottom: (this.miniPlayerVisible.value ? Constants.MINI_PLAYER_CLEARANCE : 24) + this.navBarHeight.value })
+              bottom: Constants.MINI_PLAYER_CLEARANCE + this.navBarHeight.value })
             // ponytail: about 的 bindSheet 挂外层根 Column 或内层链首位时在 API 24 平板打开即自动关闭；单挂内容容器（HEAD 版 logSheet 同款宿主）稳定
             .bindSheet(this.showAbout, this.aboutSheet(), {
               height: '75%',
@@ -1737,79 +1743,8 @@ struct SettingsPage {
           this.playHistoryPanel()
         }
       }
-      }
-      .width('100%')
-      .height('100%')
     }
-    .hideTitleBar(true)
-    .onWillAppear(() => {
-      // US7/T021：设置页在台标志提前到转场开始时置位——驱动首页播放胶囊在本页隐藏；
-      // R4 US2：置位前先取消未触发的复位定时器（快速往返竞态消解）
-      if (this.onSettingsPageTimer >= 0) {
-        clearTimeout(this.onSettingsPageTimer);
-        this.onSettingsPageTimer = -1;
-      }
-      connectBool(Constants.AS_ON_SETTINGS_PAGE, false).value = true;
-    })
-    .onShown(() => {
-      // US5：日志页返回后刷新角标计数——pushPathByName 的 onPop 仅在 pop(result) 带 result 时触发，
-      // 日志页返回按钮为无参 pop()，onPop 永不回调，须在设置页重新可见时主动重读
-      // R4 US2：同取消 pending 定时器并补置位 true——修复日志页返回后标志残留 false 的缺口
-      if (this.onSettingsPageTimer >= 0) {
-        clearTimeout(this.onSettingsPageTimer);
-        this.onSettingsPageTimer = -1;
-      }
-      connectBool(Constants.AS_ON_SETTINGS_PAGE, false).value = true;
-      this.logCount = Logger.count();
-    })
-    .onWillDisappear(() => {
-      // v0.4-Part1-ux-fixes US3：帧序列定位日志（调试模式开启时记录 pop 起点→标志翻转→Monitor 动画链路）
-      if (Logger.debugEnabled) {
-        Logger.log('player', 'miniChain popStart', `ts=${Date.now()}`);
-      }
-      this.onSettingsPageTimer = setTimeout(() => {
-        this.onSettingsPageTimer = -1;
-        if (Logger.debugEnabled) {
-          Logger.log('player', 'miniChain flagFlip', `ts=${Date.now()}`);
-        }
-        connectBool(Constants.AS_ON_SETTINGS_PAGE, false).value = false;
-      }, Constants.NAV_EXIT_TRANSITION_MS);
-    })
-    .onReady((ctx: NavDestinationContext) => {
-      this.navPathStack = ctx.pathStack;
-      if (ctx.pathInfo.param === undefined || ctx.pathInfo.param === null) {
-        return;
-      }
-      const p: string = ctx.pathInfo.param as string;
-      if (p === 'playHistory') {
-        this.openPlayHistory();
-      } else if (p === 'about') {
-        this.showAbout = true;
-      }
-    })
-    .onBackPressed((): boolean => {
-      // US5：浮层/队列统一交 BackHandler 分层关闭（含浮层与历史面板同开先关面板语义），
-      // 无可关走本页自身面板分支
-      if (dismissOverlaysForBack()) {
-        return true;
-      }
-      if (this.showQualitySheet) {
-        this.showQualitySheet = false;
-        return true;
-      }
-      if (this.showPlayHistory.value) {
-        if (this.historySelectMode) {
-          this.exitHistorySelectMode();
-          return true;
-        }
-        if (this.historyClose !== undefined) {
-          this.historyClose();
-        } else {
-          this.showPlayHistory.value = false;
-        }
-        return true;
-      }
-      return false;
-    })
+    .width('100%')
+    .height('100%')
   }
 }

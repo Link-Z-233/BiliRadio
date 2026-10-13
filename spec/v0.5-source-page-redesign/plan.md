@@ -1,6 +1,6 @@
-# Implementation Plan: 订阅详情页重写——B 站风格剧集行（v0.4-Part2）
+# Implementation Plan: 订阅详情页重写——B 站风格剧集行（v0.5）
 
-**Input**: Feature specification from `spec/v0.4-Part2-source-page-redesign/spec.md`
+**Input**: Feature specification from `spec/v0.5-source-page-redesign/spec.md`
 
 ## Summary
 
@@ -24,7 +24,7 @@
 ### Documentation (this feature)
 
 ```text
-spec/v0.4-Part2-source-page-redesign/
+spec/v0.5-source-page-redesign/
 ├── spec.md
 └── plan.md              # This file
 ```

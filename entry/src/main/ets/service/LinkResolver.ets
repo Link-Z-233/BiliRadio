@@ -2,15 +2,17 @@
 // 职责：
 //   ① 分享文案前置抽取（extractBiliUrl）：从混排文本中抽出第一个 B 站域名 http(s) 链接并清除尾随标点；
 //   ② 短链判定与裸域名归一化（isBiliShortLink / normalizeShortLinkUrl）；
-//   ③ 短链解析（resolveShortLink）：rcp 自动跟随重定向（autoRedirect:true，上限 5 跳）后取 effectiveUrl
-//      作为落地目标；目标须为 bilibili.com 域名且可被识别器分类；会话级 LRU 缓存仅存成功结果；短链路径含
-//      视频号时零网络短路；不用 @ohos.net.http：其 maxRedirects:0 在真机为「零配额」语义，首个 30x 即抛 2300047。
-//      引用：Bili23-Downloader（https://github.com/Scighosts/Bili23-Downloader）src/util/parse/parser/b23.py
-//      的 B23Parser——跟随重定向后取最终 URL（httpx follow_redirects=True + response.url），本文件方案与其对齐；
+//   ③ 短链解析（resolveShortLink）：rcp 逐跳读 Location（autoRedirect:false，上限 5 跳）——每跳先识别，
+//      第一个可识别 URL 即返回、不再请求（KI-10 修复：autoRedirect 全链跟随只暴露最终 effectiveUrl，
+//      空间分享链首跳 Location m.bilibili.com/space/{mid} 本可识别，链尾却是无 buvid cookie 被踢到的
+//      blackboard 风控中转页，全链跟随导致「目标无法识别」）；目标须为 bilibili.com 域名且可被识别器
+//      分类；会话级 LRU 缓存仅存成功结果；短链路径含视频号时零网络短路；不用 @ohos.net.http：其
+//      maxRedirects:0 在真机为「零配额」语义，首个 30x 即抛 2300047；
 //   ④ 目标识别（recognizeInput）：BV / av / 收藏夹 / 合集 / 系列 / UP 空间（含移动端形态），先命中先返回。
 // 纯函数 + 模块级缓存，无 UI 依赖；页面（AddSubscriptionSheet）仅做编排与分发。
 
 import { rcp } from '@kit.RemoteCommunicationKit';
+import { url } from '@kit.ArkTS';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { Logger } from './Logger';
 import { Constants } from './Constants';
@@ -279,20 +281,26 @@ function cachePut(key: string, result: ShortLinkResult): void {
   }
 }
 
-// 单次请求：走 rcp 自动跟随重定向（上限 SHORT_LINK_MAX_REDIRECTS 跳），从响应 effectiveUrl 取落地地址
-// ——引自 Bili23-Downloader src/util/parse/parser/b23.py 的 B23Parser：跟随重定向后取最终 URL
-//    （其 src/util/network/request.py 中 ResponseType.REDIRECT_URL → str(response.url)）。
-// 不用 @ohos.net.http：其响应不暴露最终 URL，而 maxRedirects:0 在真机上是「零配额」语义，首个 30x 即抛
-// 2300047「重定向次数达到上限」（2026-10-07 实机实测），Location 直读方案在该栈不可行；专用超时；主站同款 UA/Referer
-async function fetchShortLinkTarget(session: rcp.Session, url: string): Promise<rcp.Response> {
+// Location 补全（RFC 允许相对地址）：以当前 URL 为基解析；解析失败返回空串，视作无有效目标
+function resolveLocation(current: string, location: string): string {
+  try {
+    return new url.URL(location, current).toString();
+  } catch (error) {
+    return '';
+  }
+}
+
+// 单次请求：不自动跟随重定向——目标判定由 resolveShortLink 逐跳执行（见文件头 ③）；专用超时；主站同款
+// UA/Referer；不用 @ohos.net.http：其 maxRedirects:0 在真机为「零配额」语义，首个 30x 即抛 2300047
+// （2026-10-07 实机实测），Location 直读方案在该栈不可行
+async function fetchShortLinkTarget(session: rcp.Session, target: string): Promise<rcp.Response> {
   const headers: rcp.RequestHeaders = {
     'user-agent': USER_AGENT,
     'referer': REFERER
   };
   const configuration: rcp.Configuration = {
     transfer: {
-      autoRedirect: true,
-      maxAutoRedirects: SHORT_LINK_MAX_REDIRECTS,
+      autoRedirect: false,
       timeout: {
         connectMs: Constants.SHORT_LINK_CONNECT_MS,
         transferMs: Constants.SHORT_LINK_READ_MS
@@ -300,11 +308,12 @@ async function fetchShortLinkTarget(session: rcp.Session, url: string): Promise<
     }
   };
   const request: rcp.Request =
-    new rcp.Request(url, 'GET', headers, undefined, undefined, undefined, configuration);
+    new rcp.Request(target, 'GET', headers, undefined, undefined, undefined, configuration);
   return await session.fetch(request);
 }
 
-// 短链解析主链路：短路 → 缓存 → rcp 跟随重定向取 effectiveUrl → 识别；失败按分型返回，不抛异常
+// 短链解析主链路：短路 → 缓存 → 逐跳跟随 Location（每跳先识别，第一个可识别 URL 即返回、不再请求；
+// 上限 SHORT_LINK_MAX_REDIRECTS 跳防环）→ 失败按分型返回，不抛异常
 export async function resolveShortLink(shortUrl: string): Promise<ShortLinkResult> {
   const normalized: string = normalizeShortLinkUrl(shortUrl);
   if (!isBiliShortLink(normalized)) {
@@ -325,24 +334,39 @@ export async function resolveShortLink(shortUrl: string): Promise<ShortLinkResul
   }
   const session: rcp.Session = rcp.createSession();
   try {
-    const response: rcp.Response = await fetchShortLinkTarget(session, normalized);
-    const effective: string = response.effectiveUrl !== undefined ? response.effectiveUrl.toString() : '';
-    const targetSummary: string = effective !== '' ? ` → ${logSummary(effective)}` : '';
-    Logger.log('net', logSummary(normalized), `HTTP ${response.statusCode}${targetSummary}`);
-    // 未发生重定向或仍落在短链域名：短链无效或已过期（对齐 B23Parser 的 response==url 判定）
-    if (effective === '' || isBiliShortLink(effective)) {
-      return makeError(ShortLinkOutcome.NO_TARGET, '短链无效或已过期');
+    let current: string = normalized;
+    let followed: number = 0;
+    while (followed < SHORT_LINK_MAX_REDIRECTS) {
+      const response: rcp.Response = await fetchShortLinkTarget(session, current);
+      const location: string | undefined = response.headers.location;
+      Logger.log('net', logSummary(current), `HTTP ${response.statusCode}` +
+        (location !== undefined && location !== '' ? ` → ${logSummary(location)}` : ''));
+      // 终态响应（非 3xx）或重定向缺 Location：链路到此为止，走结尾分型
+      if (response.statusCode < 300 || response.statusCode >= 400 ||
+        location === undefined || location === '') {
+        break;
+      }
+      const next: string = resolveLocation(current, location);
+      if (next === '') {
+        return makeError(ShortLinkOutcome.NO_TARGET, '短链无效或已过期');
+      }
+      if (!isBiliShortLink(next) && !isBiliSiteUrl(next)) {
+        return makeError(ShortLinkOutcome.NO_TARGET, '短链未指向有效的 B 站页面');
+      }
+      const recognized: RecognizeResult = recognizeInput(next);
+      if (recognized.type !== '') {
+        const okResult: ShortLinkResult = makeOk(next);
+        cachePut(key, okResult);
+        return okResult;
+      }
+      current = next;
+      followed++;
     }
-    if (!isBiliSiteUrl(effective)) {
-      return makeError(ShortLinkOutcome.NO_TARGET, '短链未指向有效的 B 站页面');
-    }
-    const recognized: RecognizeResult = recognizeInput(effective);
-    if (recognized.type === '') {
+    // 跳转链走尽仍无可识别目标：B 站域名按「无法识别」分型，其余（短链域名/非法域）按「无效/过期」
+    if (isBiliSiteUrl(current)) {
       return makeError(ShortLinkOutcome.UNRECOGNIZED, '短链目标无法识别，暂不支持该类型页面');
     }
-    const okResult: ShortLinkResult = makeOk(effective);
-    cachePut(key, okResult);
-    return okResult;
+    return makeError(ShortLinkOutcome.NO_TARGET, '短链无效或已过期');
   } catch (error) {
     const err = error as BusinessError;
     Logger.log('error', logSummary(normalized), `短链解析网络失败: ${err.message}`);

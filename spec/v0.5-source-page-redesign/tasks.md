@@ -1,6 +1,6 @@
-# Tasks: 订阅详情页重写——B 站风格剧集行（v0.4-Part2）
+# Tasks: 订阅详情页重写——B 站风格剧集行（v0.5）
 
-**Input**: Design documents from `spec/v0.4-Part2-source-page-redesign/`  
+**Input**: Design documents from `spec/v0.5-source-page-redesign/`  
 **Prerequisites**: plan.md（R1-R5 决策）、spec.md（US1-US2）  
 **Tests**: 无测试套件（项目现状），纯 UI 特性，验证走构建 + 真机视觉检视
 
@@ -114,7 +114,7 @@ graph TD
 ### 实施轮次建议
 
 - **单轮完成**：T001-T008（改动面小、链路短，一轮做完）
-- 与 `v0.4-Part2-play-history-sync` 轮建议**同轮先后执行**（先 A 后 B，A 为 P1 核心闭环；唯一文件交集 Constants.ets，顺序执行天然错开）
+- 与 `v0.5-play-history-sync` 轮建议**同轮先后执行**（先 A 后 B，A 为 P1 核心闭环；唯一文件交集 Constants.ets，顺序执行天然错开）
 
 ## Notes
 

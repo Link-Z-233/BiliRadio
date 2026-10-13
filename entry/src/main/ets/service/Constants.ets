@@ -56,8 +56,8 @@ export class Constants {
   static readonly AS_SHOW_PLAY_HISTORY: string = 'showPlayHistory';
   static readonly AS_SHOW_PLAYER_OVERLAY: string = 'showPlayerOverlay';
   static readonly AS_SHOW_QUEUE_SHEET: string = 'showQueueSheet';
-  static readonly AS_MINI_PLAYER_VISIBLE: string = 'miniPlayerVisible';
-  static readonly AS_ON_SETTINGS_PAGE: string = 'onSettingsPage';
+  static readonly AS_SHOW_SETTINGS_PAGE: string = 'showSettingsPage';
+  static readonly AS_SHOW_LOG_PAGE: string = 'showLogPage';
   static readonly AS_HOME_REFRESH_TICK: string = 'homeRefreshTick';
 
   // —— 受限色值（窗口层 API / Canvas 2D 不接受颜色资源引用，只能写字面量） ——
@@ -115,10 +115,8 @@ export class Constants {
   static readonly DRAWER_CLOSE_DELAY_MS: number = 310;
   // 清空队列延时清数据（ms，v0.3-bugfix-round3 US4）：先关层后清数据，延时大于浮层 350ms 转场保证清数据时浮层已卸载
   static readonly CLEAR_QUEUE_DATA_DELAY_MS: number = 400;
-  // 设置页退场转场定值延时（v0.3-bugfix-round4 US2）：ponytail: 系统导航退场转场无公开完成回调，定值略长于默认转场，胶囊上浮始于转场结束后
-  static readonly NAV_EXIT_TRANSITION_MS: number = 400;
-  // 胶囊显隐动画时长（v0.4-Part1-ux-fixes US3）：opacity/translateY 过渡与消费方底部避让同步翻转
-  static readonly MINI_VISIBILITY_ANIM_MS: number = 250;
+  // 设置/日志层滑入时长（v0.4-Part2 z-layer-refactor）：x 轴 translate 转场，曲线 Friction，对齐原导航 push 手感
+  static readonly PAGE_LAYER_SLIDE_MS: number = 350;
 
   // —— 玻璃浮层（GlassSheet，v0.4-Part1 sheet-visual-redesign）：动画/渐隐/投影参数唯一来源 ——
   // 浮层滑入+渐显动画时长（ms）：遮罩 OPACITY 过渡同步此值

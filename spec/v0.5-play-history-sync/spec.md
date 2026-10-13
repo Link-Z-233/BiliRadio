@@ -1,4 +1,4 @@
-# Feature Specification: 播放进度云端同步（v0.4-Part2）
+# Feature Specification: 播放进度云端同步（v0.5）
 
 **Created**: 2026-10-13  
 **Status**: Draft  

@@ -21,7 +21,7 @@
 - **修复要点**（对应原六条缺陷）：
   1. **前置抽取**：`extractBiliUrl` 在任何识别判断前抽取第一个 B 站域名链接（b23.tv / bili2233.cn / bilibili.com 任意子域，须带 http(s)）并清尾随标点；未抽到回退 trim 原文。
   2. **判定修正**：`isBiliShortLink` 按 host 精确判定，补齐 bili2233.cn；裸短链自动补 `https://`。
-  3. **重定向解析**（2026-10-07 实机返修）：`@ohos.net.http` 的 `maxRedirects: 0` 实为「零配额」语义（首个 30x 抛 2300047），改 rcp（`@kit.RemoteCommunicationKit`）`autoRedirect` + `maxAutoRedirects: 5` 后读 `Response.effectiveUrl`——引用 Bili23-Downloader 同源链路；未重定向或仍落短链域名判「短链无效或已过期」。
+  3. **重定向解析**（2026-10-07 实机返修；2026-10-13 二次返修见 KI-10）：`@ohos.net.http` 的 `maxRedirects: 0` 实为「零配额」语义（首个 30x 抛 2300047），改 rcp（`@kit.RemoteCommunicationKit`）`autoRedirect: false` 逐跳读 `headers.location`，每跳先识别、第一个可识别 URL 即返回；未重定向或仍落短链域名判「短链无效或已过期」。
   4. **错误分型**：`ShortLinkResult` 区分网络失败 / 超出跳数 / 无有效目标 / 目标无法识别四类结局，各自携带互不重复的中文提示，不再静默降级。
   5. **目标覆盖**：`recognizeInput` 迁入 LinkResolver 并扩展 av 号 URL、`m.bilibili.com/space/{uid}`、lists/seriesdetail/collectiondetail host 放宽任意子域；短链 path 含视频号零网络短路直达。
   6. **缓存与专用超时**：会话级 LRU 缓存（容量 50，仅缓存成功，不持久化）；专用超时 `Constants.SHORT_LINK_CONNECT_MS / SHORT_LINK_READ_MS = 8000ms`。
@@ -66,11 +66,12 @@
 - **修复**：Web 链 `fetchUpVideosViaWeb` 请求 `ps` 降为 `Constants.UP_PAGE_SIZE=20`，翻页记账 `olderPageSize()` UP 分支统一引用常量（[BiliService.ets](entry/src/main/ets/service/BiliService.ets) / [SourcePage.ets](entry/src/main/ets/pages/SourcePage.ets)）。
 - **遗留**：降级衔接翻页走查移 §五 VR-3（US7 / engineering-refactor T013 同项）。
 
-### KI-10 屏幕常亮疑问（销项，v0.3-bugfix-round2 轮，2026-10-12）
+### KI-10 空间/收藏夹分享短链「目标无法识别」（已修复：shortlink-hop-fix 轮，2026-10-13）
 
-- **现象**：v0.3-bugfix-round1 修复后实机反馈「屏幕保持常亮」疑问（v0.3-bugfix-round2 E 项）。
-- **结论**：全代码库无 `keepScreenOn` 调用，无代码改动；实测常亮为系统层行为，最可能是开发者选项「不锁定屏幕」（USB 调试充电时保持唤醒）触发（plan.md D10）。
-- **验证方式**：拔掉 USB 线重测；若仍常亮再 reopen 本条目排查。
+- **现象**：app 内粘贴 B 站 app 分享文案（如「【UP 主名-哔哩哔哩】 https://b23.tv/xxx」）提示「短链目标无法识别，暂不支持该类型页面」。
+- **根因**（2026-10-13 curl 实测复现）：KI-4 返修（eb3f515）的 rcp `autoRedirect` 全链跟随只暴露最终 `effectiveUrl`——空间分享链首跳 302 落 `m.bilibili.com/space/{mid}?share_medium=harmony&...`（本可识别），该跳 Set-Cookie 的 `buvid3` 未续传到后续跳，`space.bilibili.com/{mid}` 无 cookie 被 302 到 `www.bilibili.com/blackboard/fe/activity-*.html` 风控中转页，最终 URL 零规则命中 → 误报「无法识别」。影响全部非 BV 短链分享（空间/收藏夹/合集/系列）；BV 分享路径短路零网络不受影响。
+- **修复**：[LinkResolver.ets](entry/src/main/ets/service/LinkResolver.ets) `resolveShortLink` 改逐跳迭代（`autoRedirect:false` + 读 `headers.location`），每跳 Location 先跑 `recognizeInput`，第一个可识别 URL 即返回、不再请求（风控中转页不再被触碰）；相对地址经 `url.URL(location, current)` 补全；跳数上限沿用 5 防环；错误分型语义不变。
+- **状态**：已修复；待真机复测（§五 VR-10）。
 
 ## 二、已移除与禁用功能
 
@@ -126,6 +127,8 @@
 > **✅ 已实现（9be0b01，随 R8 落地；本条为销项登记）：`Logger` 的 hilog 双写由 DEBUG 模式门控——默认关闭，绝不无条件向 hilog 总线写业务日志。** 开启入口 = 关于页图标三连击（tap 3 次触发，`Constants.DEBUG_TAP_WINDOW_MS = 2000`）；debug 模式开启期间 `Logger.log()` 才同步向 hilog 输出（`Constants.LOG_DOMAIN`/`LOG_TAG`，双写须用 info 级——API 24 设备 D 级被全局过滤不落缓冲，见 [Logger.ets](entry/src/main/ets/service/Logger.ets) L67-68 `ponytail:` 标注）；关闭或重启后恢复仅落盘+内存；持久化经 `Constants.KEY_DEBUG_MODE`。**任何后续改造不得绕过此门控。**
 
 - **v0.4-Part1 UX 修复轮（v0.4-Part1-ux-fixes，2026-10-13）——实施完成（T001–T023，arkts_check 预检清零），验证见 §五 VR-8**：12 项修复——①播放层收起按钮失效（裸 `SymbolGlyph` 点击被滚动区手势仲裁吞掉，外包 44×44 容器行扩大命中区，`Constants.CONTROL_BTN_SIZE`）；②MiniPlayer 返回闪现（根因：`AS_MINI_PLAYER_VISIBLE` 写在 animateTo 闭包外，t=400ms 翻转时消费方避让 padding 单帧瞬跳、胶囊 250ms 后才淡入；修复：该写入移入动画闭包与 `miniHidden` 同帧翻转，R4 竞态定时器逻辑保留，调试模式门控三点时序日志备验证轮取帧序列）；③音质档位与实际一致（nav 补解析 `vipStatus`/`face`，`AudioQuality.availableTiers`/`clampTier` 三档矩阵：64K 全员/132K 登录/192K 大会员，已存不可用档显示收敛不落盘）；④详情/关于 bindSheet 玻璃公式对齐（sheet_panel_background + backdropBlur(20) + 顶分隔线，bindSheet 底色转 Color.Transparent 使 blur 作用于下层内容）；⑤展开指示「▼」字符换 `sys.symbol.chevron_down`（旋转动画保留）；⑥历史面板多选（复制队列交互，头部「清空」按钮移除、能力由「全选+删除所选」承接）；⑦队列/历史多选态禁左滑（`swipeAction(cond ? {} : { end })` 条件挂载，退出恢复）；⑧按压态方角（SettingsGroup 卡片容器 `.clip(true)`，LogPage 行按压背景补 `TOKEN_RADIUS_M` 圆角——QueueSheet 既有同款）；⑨账号行头像（`face` 圆形裁切，onError/URL 空回退 person 图标）；⑩关于页重写（FR-009 确切文案 + 项目地址两行 + BiliMusic/PiliPlus 可点 Span，四链接 AlertDialog 二次确认 → `openLink(appLinkingOnly=false)` 拉系统浏览器，失败 toast）；⑪debug 冷启动恢复前移 Index（`controller.init().then()` 后读 `KEY_DEBUG_MODE` → `Logger.setDebugMode`，开启时 toast「调试模式运行中」；修复「不进设置页 debug 不生效」，SettingsPage 重复恢复移除、AppStore 读取仅供开关显示）；⑫关于页内容展示不全（真机反馈，T028）：aboutSheet 内层 Scroll `height('100%')` 被「完成」头行顶出 sheet 底界裁掉一段、滚到底仍缺尾段，改 `layoutWeight(1)` 占头部外剩余高度（与详情 sheet 同范式）。
+
+- **v0.4-Part2 四层 z 序重构（v0.4-Part2-z-layer-refactor，2026-10-14）——实施完成（T001–T015），模拟器实测完成（2026-10-14：8 项 PASS、⑦ 大会员正例 UNTESTABLE 待真机，含渲染冻结环境事故登记，见 §五 VR-11）**：设置页/日志页退出系统路由（`NavDestination`/router_map 摘除），改 Index Stack 树内层级条件渲染（设置层、日志层各一条件块，x 轴 translate 右滑入转场 `Constants.PAGE_LAYER_SLIDE_MS`，Friction 曲线），四层 z 序契约 L1 导航+胶囊 → L2 设置+日志（历史面板留设置页树内）→ L3 播放浮层 → L4 队列；队列收敛 Index 单一挂载（PlayerOverlay 内部队列渲染块与 `onRegisterClose` 参数删除）；返回链统一 `BackHandler.dismissOverlaysForBack` 全链分层序列（队列→倍速→模式→睡眠选择→睡眠→浮层→日志层→设置句柄→设置层），设置页句柄经 `registerSettingsBack` 生命周期注册（原 onBackPressed 迁移）；机制净删除：`AS_MINI_PLAYER_VISIBLE`/`AS_ON_SETTINGS_PAGE`/`NAV_EXIT_TRANSITION_MS`/`MINI_VISIBILITY_ANIM_MS` 四键/常量及胶囊显隐动画链（Monitor/animateTo/opacity/translate/hitTest）整体退役，三页底部 padding 静态恒取 `MINI_PLAYER_CLEARANCE`。**原「退出设置页胶囊突现」bug 由此销项**：根因是 z 序（路由 pop 后设置页让出的 400ms 转场窗口内胶囊已可见而页面未退完，视觉突兀），此前 R4/Part1 两轮均按时序修补（标志提前置位/动画闭包同帧翻转），治标不治本；本轮设置页物理覆盖胶囊、无显隐时序可错位，时序修补机制整体退役。附带三项批准变更：音质兜底显示「64K」+「登录后可选更高音质」（原「默认」+「当前内容未提供多音质选择」）；账号行大会员徽标（`vip_badge_bg` 品牌粉，`vipStatus === 1` 判定）；计数移除（历史面板标题/历史与日志入口行 valueText/logCount 成员/`Logger.count()` 方法）。
 
 - **源页刷新无反馈假象（产品决策待定）**：刷新前后内容相同无可视指示、易误判按钮失效（appsign-up-fetch 轮 US2 首验 FAIL 即此假象——刷新实际成功、cursor 已重建，但列表无可视变化）；候选：加载动画或轻提示。
 
@@ -192,3 +195,21 @@
 ### VR-9 KI-5 遗留观察：封面光晕呼吸效果
 
 - `updateGlow`（3200ms 往复）从未被用户观察到，亮色模式可能不显眼；真机确认是否可见、是否需调整，确认后销项。
+
+### VR-10 空间分享文案粘贴订阅复测（KI-10 修复验证）
+
+- 真机粘贴 B 站 app 空间分享文案（含 `share_medium=harmony` 短链）→ 应识别为 UP 并进入订阅确认；顺带复测收藏夹/合集分享文案，日志页 net 分类应见逐跳记录（`HTTP 302 → host+path`，首跳即返回、无后续请求）。
+
+### VR-11 v0.4-Part2 四层 z 序重构实测（v0.4-Part2-z-layer-refactor）
+
+- **模拟器实测完成（2026-10-14，Mate 90 Pro / HarmonyOS 7.0.0，T016-T019 build+ui 验证轮；逐项对应原①-⑧）**：
+  - ① 设置层右滑入转场 PASS——转场中间帧像素实证（设置层仍在屏 (1200,1000)=30,29,34，同时首页胶囊已揭示 (100,2650)=142,129,112、玻璃 (640/1000,2650)=29,29,31）；verify_ui id dbcc06b7 全场景 PASS；滑出经 verify_ui 整体判定 PASS（像素中间帧未单独取）。
+  - ② 返回链分层 PASS——三次系统返回逐层关闭（浮层→历史面板→设置层→首页）；四层同树树证（Slider 播放中浮层盖历史面板盖设置层）；verify_ui id 7682926e。
+  - ③ 队列面板盖播放浮层 PASS——浮层按钮/胶囊按钮两入口开同一 GlassSheet（Column backdrop [0,137,1280,2832]+「播放队列 (13)」树末位）；verify_ui id 3ff7334f。
+  - ④ 历史点播覆盖序 PASS——设置层开历史面板点播条目→浮层开、面板同树保持；收浮层后面板仍在、状态保持。
+  - ⑤ 三页静态 padding 空态 PASS——清空队列后首页/源页/冷启动「暂无播放内容」占位条恒同坐标 [280,2573,575,2630]；设置页底部内容止于「关于」行（y≤2426）无遮挡。
+  - ⑥ 未登录音质兜底 PASS——未起播兜底面板「音质选择」+「64K」+「登录后可选更高音质」；入口标签「64K」；起播后 192K/132K/64K 实际三档；verify_ui id b9de8149。
+  - ⑦ 大会员徽标：负例 PASS（未登录账号区无昵称行/无徽标节点，仅「B站一键登录」「扫码登录」按钮+「未登录时最高 64K」提示）；**正例 UNTESTABLE（模拟器无法完成大会员登录）→ 真机待验**。
+  - ⑧ 计数移除 PASS——历史面板标题「播放历史」无计数；设置「通用」组播放历史/日志查询入口行无 valueText；日志页标题「日志查询」无计数；logCount 全仓零命中。历史面板多选选中数「0」为多选功能计数（v0.4-Part1 设计），非内容计数。
+- **验证环境事故登记（2026-10-14）**：验证中段模拟器渲染合成输出冻结——应用逻辑/输入/a11y 树全程存活正常（树实况双 dump 证播放剩时推进），帧缓冲（snapshot_display/devecocli 截图）与 verify_ui agent 截图停在冻结帧（US7 四帧逐像素相同）；系统设置应用启动后帧缓冲同样不变，证实为模拟器环境问题、非应用缺陷。发生点在 US5 verify_ui 成功之后、US6 verify_ui 尝试之前——US1-US5 像素/verify_ui 证据均在冻结前采集、有效；US6-US8 改 a11y 树驱动验证。本机 faultlogger 当日早些时候有 cppcrash-render_service 多次 + sysfreeze-render_service 历史（先于本轮会话），本轮冻结未及落 faultlog。后续若再用模拟器：先验截图新鲜度（连续两帧应不同）再信像素证据；本事故佐证 §五 2026-10-11「后续验证一律真机」决策。
+- **真机待验**：⑦ 正例（大会员粉标显示）；① 滑出转场像素级中间帧；z 序关键行为真机抽测（② ③ ④ ⑧）。

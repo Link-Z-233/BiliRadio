@@ -9,7 +9,7 @@ import { PlayHistoryItem } from '../model/PlayHistoryItem';
 import { PlayerController, EnqueueResult } from '../service/PlayerController';
 import { Constants } from '../service/Constants';
 import { dismissOverlaysForBack } from '../service/BackHandler';
-import { connectBool, connectNum, connectStr, BoolState, NumState, StrState } from '../service/V2State';
+import { connectNum, connectStr, NumState, StrState } from '../service/V2State';
 import { CoverThumb } from '../component/CoverThumb';
 
 function formatDuration(sec: number): string {
@@ -54,8 +54,6 @@ export function SourcePageBuilder() {
 struct SourcePage {
   @Local accentColor: StrState =
     connectStr(Constants.AS_ACCENT_COLOR, Constants.ACCENT_DEFAULT);
-  @Local miniPlayerVisible: BoolState =
-    connectBool(Constants.AS_MINI_PLAYER_VISIBLE, true);
   @Local navBarHeight: NumState = connectNum(Constants.AS_NAV_BAR_HEIGHT, 0);
   @Local navTitle: string = '';
   @Local episodes: BiliVideo[] = [];      // 展示序：倒序（新在上，与缓存一致）
@@ -492,7 +490,7 @@ struct SourcePage {
             }
             .width('100%')
             .height('100%')
-            .padding({ left: Constants.TOKEN_SPACE_M, right: Constants.TOKEN_SPACE_M, top: Constants.TOKEN_SPACE_XS, bottom: (this.miniPlayerVisible.value ? Constants.MINI_PLAYER_CLEARANCE : 12) + this.navBarHeight.value })
+            .padding({ left: Constants.TOKEN_SPACE_M, right: Constants.TOKEN_SPACE_M, top: Constants.TOKEN_SPACE_XS, bottom: Constants.MINI_PLAYER_CLEARANCE + this.navBarHeight.value })
             .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
             .onReachEnd(() => {
               this.loadOlder();

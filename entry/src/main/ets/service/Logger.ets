@@ -81,10 +81,6 @@ export class Logger {
     }
   }
 
-  static count(): number {
-    return Logger.entries.length;
-  }
-
   static clear(): void {
     Logger.entries = [];
   }

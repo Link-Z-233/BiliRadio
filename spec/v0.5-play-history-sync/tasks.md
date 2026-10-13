@@ -1,6 +1,6 @@
-# Tasks: 播放进度云端同步（v0.4-Part2）
+# Tasks: 播放进度云端同步（v0.5）
 
-**Input**: Design documents from `spec/v0.4-Part2-play-history-sync/`  
+**Input**: Design documents from `spec/v0.5-play-history-sync/`  
 **Prerequisites**: plan.md（R1-R8 决策）、spec.md（US1-US4）  
 **Tests**: 无测试套件（项目现状），验证走构建 + 真机（VR 项登记 PROJECT_NOTES.md）
 
@@ -152,7 +152,7 @@ graph TD
 
 - **轮次 1（MVP）**：T001-T007 + T012/T013 构建部署
 - **轮次 2**：T008-T011 + 构建部署
-- 与 `v0.4-Part2-source-page-redesign` 轮文件交集仅 `Constants.ets`（T001 vs B 轮 T001）——两轮并行须错开该文件提交，建议同轮先后执行（先 A 后 B）
+- 与 `v0.5-source-page-redesign` 轮文件交集仅 `Constants.ets`（T001 vs B 轮 T001）——两轮并行须错开该文件提交，建议同轮先后执行（先 A 后 B）
 
 ## Notes
 

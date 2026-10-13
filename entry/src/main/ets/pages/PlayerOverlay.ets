@@ -9,8 +9,6 @@ import { CoverUrl } from '../service/CoverUrl';
 import { Appearance } from '../service/Appearance';
 import { CoverPalette } from '../service/CoverPalette';
 import { SleepTimerController } from '../service/SleepTimerController';
-import { GlassSheet } from '../component/GlassSheet';
-import { QueueSheet } from '../component/QueueSheet';
 import { AudioTrack, AudioQuality } from '../model/AudioQuality';
 import { connectBool, connectNum, connectStr, BoolState, NumState, StrState } from '../service/V2State';
 
@@ -87,10 +85,6 @@ export struct PlayerOverlay {
   @Local availableTracks: AudioTrack[] = [];
   @Local currentQualityCode: number = 0;
   @Local currentTrackSource: string = '';
-  // 队列抽屉关闭句柄上抛（v0.3 US5）：Index 统一持有，系统返回走滑出动画（与首页实例一致）
-  @Param onRegisterClose: (close: (() => void) | undefined) => void =
-    (close: (() => void) | undefined): void => {
-    };
   private trackBvid: string = '';
   private wasPlayIntent: boolean = false;
   // 取色防抖键（palette-glow）：当前已请求取色的 bvid，防重复请求
@@ -461,12 +455,12 @@ export struct PlayerOverlay {
   }
 
   // 音质入口按钮短名（T017，替代波形图标）：dash 流式 → 当前音轨码精确档名
-  // （trackLabel 可显示 Hi-Res/杜比，比按档位归并的 label 更精确）；其余（未起播/未知）→「默认」
+  // （trackLabel 可显示 Hi-Res/杜比，比按档位归并的 label 更精确）；其余（未起播/未知）→「64K」
   private qualityEntryLabel(): string {
     if (this.currentTrackSource === 'dash') {
       return AudioQuality.trackLabel(this.currentQualityCode);
     }
-    return '默认';
+    return '64K';
   }
 
   @Builder
@@ -660,8 +654,7 @@ export struct PlayerOverlay {
   }
 
   // 音质面板（audio-quality-settings FR-005）：dash 源列出实际下发音轨（当前档高亮，点选换档并写回默认）；
-  // durl/空闲源显示默认占位，无可选项；
-  // 未登录时高档位由服务端决定是否下发，面板天然只显示实际可用音轨（US4 不额外提示）
+  // durl/空闲源按 64K 兜底显示；未登录时高档位由服务端决定是否下发，面板天然只显示实际可用音轨
   @Builder
   qualityPanel() {
     Column() {
@@ -692,11 +685,11 @@ export struct PlayerOverlay {
           }
           .width('100%')
         } else {
-          Text('默认')
+          Text('64K')
             .fontSize(Constants.TOKEN_FONT_BODY_L)
             .fontColor($r('app.color.text_primary'))
             .margin({ bottom: Constants.TOKEN_SPACE_6 })
-          Text('当前内容未提供多音质选择')
+          Text('登录后可选更高音质')
             .fontSize(Constants.TOKEN_FONT_BODY)
             .fontColor(this.textSecondary())
             .textAlign(TextAlign.Center)
@@ -1314,23 +1307,6 @@ export struct PlayerOverlay {
 
       if (this.showQuality) {
         this.qualityPanel()
-      }
-
-      // 播放队列浮层：渲染在播放层内；显式最高 zIndex（US1）压过倍速/模式/睡眠面板与内容层，
-      // 修复 API 24 平板 zIndex 失效导致浮层被遮挡的问题（全平台行为一致）
-      if (this.showQueueSheet.value) {
-        Column() {
-          GlassSheet({
-            openState: this.showQueueSheet,
-            panelHeight: '65%',
-            onRegisterClose: this.onRegisterClose
-          }) {
-            QueueSheet()
-          }
-        }
-          .width('100%')
-          .height('100%')
-          .zIndex(100)
       }
     }
     .width('100%')

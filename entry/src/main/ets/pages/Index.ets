@@ -4,6 +4,8 @@ import { GripDetector } from '../service/GripDetector';
 
 import { HomePage } from './HomePage';
 import { PlayerOverlay } from './PlayerOverlay';
+import { SettingsPage } from './SettingsPage';
+import { LogPage } from './LogPage';
 import { GlassSheet } from '../component/GlassSheet';
 import { QueueSheet } from '../component/QueueSheet';
 import { MiniPlayer } from '../component/MiniPlayer';
@@ -21,10 +23,9 @@ struct Index {
   @Local navBarHeight: NumState = connectNum(Constants.AS_NAV_BAR_HEIGHT, 0);
   @Local showPlayerOverlay: BoolState = connectBool(Constants.AS_SHOW_PLAYER_OVERLAY, false);
   @Local showQueueSheet: BoolState = connectBool(Constants.AS_SHOW_QUEUE_SHEET, false);
-  @Local onSettingsPage: BoolState = connectBool(Constants.AS_ON_SETTINGS_PAGE, false);
+  @Local showSettingsPage: BoolState = connectBool(Constants.AS_SHOW_SETTINGS_PAGE, false);
+  @Local showLogPage: BoolState = connectBool(Constants.AS_SHOW_LOG_PAGE, false);
   @Local isWideScreen: BoolState = connectBool(Constants.AS_IS_WIDE_SCREEN, false);
-  // US6/T022：胶囊显隐动画态——由显隐条件翻转驱动，animateTo 属性动画（Visibility 不参与 transition 机制故弃用）
-  @Local miniHidden: boolean = false;
   private navPathStack: NavPathStack = new NavPathStack();
   private pageWidth: number = 0;
   private wideListener: mediaquery.MediaQueryListener | undefined = undefined;
@@ -103,59 +104,10 @@ struct Index {
     GripDetector.stop();
   }
 
-  // US6/T022：胶囊显隐条件（浮层展开或设置页在台）翻转时，以属性动画过渡 opacity/translateY；
-  // T021 已把 onSettingsPage 置位提前到导航转场开始，胶囊随之即时平滑出现/隐藏
-  // v0.4-Part1-ux-fixes US3：AS_MINI_PLAYER_VISIBLE（消费方底部避让 padding 源）移入动画闭包与 miniHidden 同帧翻转——
-  // 原先闭包外单帧瞬跳使返回首页时列表先跳位、胶囊后突现（「消失-突现」根因）
-  @Monitor('showPlayerOverlay.value', 'onSettingsPage.value')
-  onMiniVisibilityChanged(): void {
-    const hidden: boolean = this.showPlayerOverlay.value || this.onSettingsPage.value;
-    if (Logger.debugEnabled) {
-      Logger.log('player', 'miniChain monitor', `hidden=${hidden} ts=${Date.now()}`);
-    }
-    this.getUIContext().animateTo({ duration: Constants.MINI_VISIBILITY_ANIM_MS, curve: Curve.EaseOut }, (): void => {
-      this.miniHidden = hidden;
-      connectBool(Constants.AS_MINI_PLAYER_VISIBLE, true).value = !hidden;
-    });
-  }
-
-  // 拦截系统返回键：队列/浮层经 BackHandler 统一「先关队列（多选优先退出）→ 再关浮层」序列（US5），
-  // 其余弹层逐层关闭，而不是直接退出应用
+  // 拦截系统返回键：BackHandler 全链分层关闭（队列→倍速→模式→睡眠选择→睡眠→浮层→日志层→设置句柄→设置层），
+  // 无层可关返回 false 放行默认行为
   onBackPress(): boolean {
-    if (dismissOverlaysForBack()) {
-      return true;
-    }
-    const playHistory: BoolState = connectBool(Constants.AS_SHOW_PLAY_HISTORY, false);
-    if (playHistory.value) {
-      playHistory.value = false;
-      return true;
-    }
-    const showSpeed: BoolState = connectBool(Constants.AS_SHOW_SPEED, false);
-    if (showSpeed.value) {
-      showSpeed.value = false;
-      return true;
-    }
-    const showMode: BoolState = connectBool(Constants.AS_SHOW_MODE, false);
-    if (showMode.value) {
-      showMode.value = false;
-      return true;
-    }
-    const showSleepTimerPicker: BoolState = connectBool(Constants.AS_SHOW_SLEEP_TIMER_PICKER, false);
-    if (showSleepTimerPicker.value) {
-      showSleepTimerPicker.value = false;
-      return true;
-    }
-    const showSleepTimer: BoolState = connectBool(Constants.AS_SHOW_SLEEP_TIMER, false);
-    if (showSleepTimer.value) {
-      showSleepTimer.value = false;
-      return true;
-    }
-    const selectMode: BoolState = connectBool(Constants.AS_PLAYLIST_SELECT_MODE, false);
-    if (selectMode.value) {
-      selectMode.value = false;
-      return true;
-    }
-    return false;
+    return dismissOverlaysForBack();
   }
 
   build() {
@@ -181,26 +133,35 @@ struct Index {
 
       // 悬浮播放胶囊：底部对齐覆盖在内容之上，内容可从其后方滚过；
       // 恒挂载不卸载（避免 MiniPlayer 反复 mount 造成 PlayerController 订阅累积），
-      // 播放浮层展开或设置页在台时以 opacity/translateY 属性动画淡出（US6/T022），
-      // BLOCK_DESCENDANTS：自身+全部子孙退出命中测试，触摸落回下层
+      // 设置/日志/播放浮层在 Stack 中位于其上，物理覆盖替代原显隐动画
       Column() {
         MiniPlayer()
       }
       .width('100%')
       .padding({ left: Constants.TOKEN_SPACE_L, right: Constants.TOKEN_SPACE_L })
-      .opacity(this.miniHidden ? 0 : 1)
-      .translate({ y: this.miniHidden ? 24 : 0 })
-      .hitTestBehavior(this.miniHidden ? HitTestMode.BLOCK_DESCENDANTS : HitTestMode.Default)
 
-      // 队列浮层：仅内容层渲染；播放页展开时改由 PlayerOverlay 层渲染，避免被封面图层遮挡
-      if (this.showQueueSheet.value && !this.showPlayerOverlay.value) {
-        GlassSheet({
-          openState: this.showQueueSheet,
-          panelHeight: '65%',
-          onRegisterClose: registerQueueClose
-        }) {
-          QueueSheet()
+      // 设置层（L2）：自右侧滑入，覆盖胶囊；历史面板留设置页树内（层序契约）
+      if (this.showSettingsPage.value) {
+        Column() {
+          SettingsPage()
         }
+        .width('100%')
+        .height('100%')
+        .padding({ top: this.statusBarHeight.value })
+        .transition(TransitionEffect.translate({ x: '100%' })
+          .animation({ duration: Constants.PAGE_LAYER_SLIDE_MS, curve: Curve.Friction }))
+      }
+
+      // 日志层（L2）：设置层之上，同转场
+      if (this.showLogPage.value) {
+        Column() {
+          LogPage()
+        }
+        .width('100%')
+        .height('100%')
+        .padding({ top: this.statusBarHeight.value })
+        .transition(TransitionEffect.translate({ x: '100%' })
+          .animation({ duration: Constants.PAGE_LAYER_SLIDE_MS, curve: Curve.Friction }))
       }
 
       // 全屏播放层（KI-5 方案B）：API 24 上 bindContentCover(ModalPage) 挂载后渲染管线即断开
@@ -208,12 +169,21 @@ struct Index {
       // 生命周期与渲染管线回归常规路径；expandSafeArea 延伸系统栏区域复现 ModalPage 全窗口视觉，
       // 底部滑入/滑出转场近似原 ModalTransition.DEFAULT 手感
       if (this.showPlayerOverlay.value) {
-        PlayerOverlay({
-          onRegisterClose: registerQueueClose
-        })
+        PlayerOverlay()
           .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
           .transition(TransitionEffect.translate({ y: '100%' })
             .animation({ duration: 350, curve: Curve.Friction }))
+      }
+
+      // 队列浮层（L4 层序最高）：单一挂载点，展开态两入口（胶囊长按/播放浮层）共用
+      if (this.showQueueSheet.value) {
+        GlassSheet({
+          openState: this.showQueueSheet,
+          panelHeight: '65%',
+          onRegisterClose: registerQueueClose
+        }) {
+          QueueSheet()
+        }
       }
     }
     .width('100%')
