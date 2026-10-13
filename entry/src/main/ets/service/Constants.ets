@@ -111,12 +111,26 @@ export class Constants {
   // —— 删除补位动画与面板关闭时序（v0.3-bugfix-round2 US6/US8）——
   // 删除数据变更包 animateTo 的过渡时长（ms）：notifyDataDelete 落闭包内即补位动画
   static readonly TOKEN_DELETE_ANIM_MS: number = 250;
-  // 队列面板滑出动画结束后卸载/关浮层的延时（ms）：略长于 250ms 滑出动画保证完整播完
-  static readonly DRAWER_CLOSE_DELAY_MS: number = 260;
+  // 队列面板滑出动画结束后卸载/关浮层的延时（ms）：略长于 300ms 滑出动画保证完整播完
+  static readonly DRAWER_CLOSE_DELAY_MS: number = 310;
   // 清空队列延时清数据（ms，v0.3-bugfix-round3 US4）：先关层后清数据，延时大于浮层 350ms 转场保证清数据时浮层已卸载
   static readonly CLEAR_QUEUE_DATA_DELAY_MS: number = 400;
   // 设置页退场转场定值延时（v0.3-bugfix-round4 US2）：ponytail: 系统导航退场转场无公开完成回调，定值略长于默认转场，胶囊上浮始于转场结束后
   static readonly NAV_EXIT_TRANSITION_MS: number = 400;
+  // 胶囊显隐动画时长（v0.4-Part1-ux-fixes US3）：opacity/translateY 过渡与消费方底部避让同步翻转
+  static readonly MINI_VISIBILITY_ANIM_MS: number = 250;
+
+  // —— 玻璃浮层（GlassSheet，v0.4-Part1 sheet-visual-redesign）：动画/渐隐/投影参数唯一来源 ——
+  // 浮层滑入+渐显动画时长（ms）：遮罩 OPACITY 过渡同步此值
+  static readonly SHEET_SLIDE_MS: number = 300;
+  // 列表底部渐隐带高度（px）
+  static readonly SHEET_FADE_HEIGHT: number = 80;
+  // 浮层向上投影（浅色）：radius/offsetY（px）
+  static readonly SHEET_SHADOW_RADIUS_LIGHT: number = 16;
+  static readonly SHEET_SHADOW_OFFSET_LIGHT: number = -4;
+  // 浮层向上投影（深色）：radius/offsetY（px）
+  static readonly SHEET_SHADOW_RADIUS_DARK: number = 24;
+  static readonly SHEET_SHADOW_OFFSET_DARK: number = -8;
 
   // —— 左滑删除圆钮（v0.3-bugfix-round3 US6）：圆形红底垃圾桶，尺寸/圆角/图标字号唯一来源 ——
   static readonly SWIPE_DELETE_BTN_SIZE: number = 44;
@@ -136,6 +150,18 @@ export class Constants {
 
   // —— 播放按钮尺寸同源（US1/US4）：按钮直径为唯一尺寸源，缓冲加载指示尺寸由此派生，调整不再脱节 ——
   static readonly PLAY_BTN_DIAMETER: number = 80;   // 播放按钮直径
+  // 控制按钮命中区边长（v0.4-Part1-ux-fixes US1）：顶栏收起键容器化点击目标，与控制栏四键同尺寸
+  static readonly CONTROL_BTN_SIZE: number = 44;
+
+  // —— 玻璃图标按钮（v0.4-Part1-ux-fixes US4）：队列/历史面板头部 36×36 图标按钮公式唯一来源 ——
+  static readonly GLASS_ICON_BTN_SIZE: number = 36;
+  static readonly GLASS_ICON_BTN_BLUR: number = 20;
+  static readonly GLASS_ICON_BTN_BORDER: number = 1;
+  // 多选行首 Checkbox 尺寸
+  static readonly SELECT_CHECKBOX_SIZE: number = 20;
+
+  // —— 账号行头像（v0.4-Part1-ux-fixes US9）：圆形裁切边长唯一来源 ——
+  static readonly ACCOUNT_AVATAR_SIZE: number = 32;
 
   // —— 加载更多失败冷却（US2）：失败后冷却期内禁用重试，防止弱网下反复请求 ——
   static readonly LOAD_OLDER_FAIL_COOLDOWN_MS: number = 3000;
@@ -164,6 +190,8 @@ export class Constants {
   static readonly DIALOG_DELETE_SUB_MSG: string = '确定删除该订阅吗？';
   static readonly DIALOG_REMOVE_SELECTED_TITLE: string = '移除所选';
   static readonly DIALOG_REMOVE_SELECTED_MSG: string = '确定移除所选条目吗？';
+  // —— 关于页外链二次确认（v0.4-Part1-ux-fixes US7）：确认后 openLink 拉起系统浏览器 ——
+  static readonly DIALOG_OPEN_LINK_TITLE: string = '跳转到外部浏览器？';
   // —— 队列空态引导（queue-redesign US1） ——
   static readonly QUEUE_EMPTY_HINT: string = '到订阅源详情页播放节目，或在首页点「＋」添加订阅';
 
@@ -200,6 +228,12 @@ export class Constants {
   static readonly COVER_BIG_H: number = 378;
   static readonly COVER_SAVER_W: number = 480;
   static readonly COVER_SAVER_H: number = 270;
+
+  // —— 关于页链接（v0.4-Part1-ux-fixes US7）：项目双托管地址 + 参考项目仓库，统一二次确认跳转 ——
+  static readonly LINK_PROJECT_GITCODE: string = 'https://gitcode.com/Link-Z-233/BiliRadio';
+  static readonly LINK_PROJECT_GITHUB: string = 'https://github.com/Link-Z-233/BiliRadio';
+  static readonly LINK_BILIMUSIC_REPO: string = 'https://github.com/taotie256/BiliMusic';
+  static readonly LINK_PILIPLUS_REPO: string = 'https://github.com/bggRGjQaUbCoE/PiliPlus';
 
   // —— UI 令牌档位（US2，plan.md R2）：数值不变仅统一来源，观感收敛列远期 ——
   // 字号：基础档（plan）+ 实测扩展档（数值后缀命名）

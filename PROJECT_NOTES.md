@@ -1,18 +1,18 @@
 # 项目备忘
 
-四章登记：① 已知问题与技术债；② 已移除与禁用功能（含恢复线索）；③ 规划与预告；④ API 26 基线化。
+五章登记：① 已知问题与技术债；② 已移除与禁用功能（含恢复线索）；③ 规划与预告；④ API 26 基线化；⑤ 待真机验证。
 本文件由 `KNOWN_ISSUES.md` 更名而来（git 历史保留），登记范围自 2026-10 实机反馈批次起扩展。
 
 ## 一、已知问题
 
-### KI-3 列表「左滑删除」（三处全部完成）
+### KI-3 列表「左滑删除」（已实现，真机复测见 §五 VR-5）
 
 - **交互约定**：左滑露出「删除」按钮，**点击**执行删除（`ListItem.swipeAction({ end: { builder } })`），不做「滑过阈值直接删」。
 - **完成记录**：
   1. **播放历史** [SettingsPage.ets](entry/src/main/ets/pages/SettingsPage.ets) `playHistoryPanel`（play-history-progress 轮，2026-10-06）：`HistoryDataSource.notifyDataDelete` 增量同步；单条删除 `PlayerController.removePlayHistoryItem(bvid)`。
   2. **播放队列** [QueueSheet.ets](entry/src/main/ets/component/QueueSheet.ets)（queue-redesign 轮，2026-10-10）：`ListItem` 挂 `swipeAction`（样式对齐 `historyDeleteAction`），删除调 `removeSelectedFromPlaylist([bvid])`（删除当前条目时既有自动切播语义保留）；与多选长按手势经平台仲裁共存（横向 swipe 与竖向连选不同轴）。
   3. **首页订阅列表** [HomePage.ets](entry/src/main/ets/pages/HomePage.ets)（debt-cleanup 轮，2026-10-11）：新增 `subDeleteAction` builder（样式逐字段对齐 `historyDeleteAction`）+ `ListItem.swipeAction({ end })`，点击复用 `removeSub(row)`（含清剧集缓存、持久化、刷新列表）；模拟器验证 PASS（T017）。
-- **状态**：三处全部完成；真机复测通过后关闭本条目（T024 待办）。
+- **状态**：已实现（三处全部完成 + 双触发二次确认升级）；真机复测通过后销项（§五 VR-5）。
 - **升级（v0.3-bugfix-round2，2026-10-12）**：三处左滑统一升级 `SwipeActionItem` 双触发——点垃圾桶/滑过阈值均进二次确认弹窗，取消经 `ListScroller.closeAllSwipeActions()` 复位收起；交互约定由「点击直删」演进为「双触发 + 二次确认」。
 
 ### KI-4 短链识别与解析（已修复：bili-link-recognize 轮，2026-10-07）
@@ -34,15 +34,12 @@
 - **现象**：播放层（`PlayerOverlay`）标题/进度/播放图标停留在打开时快照，按钮功能正常但 UI 无变化。
 - **根因**（2026-10-06，MatePad Pro 真机 API 24 定位）：`bindContentCover`（ModalPage）内容组件在该设备**挂载后渲染管线即断开**——挂载后 10-21ms 收到伪 `aboutToDisappear`、真关闭时反而不触发、@State/animateTo 正常执行但仅渲染首帧。自研引入（@efbc92f，2026-10-03 播放层改造），非上游继承。其余设备未见。
 - **修复（方案 B）**：`Index.ets` 放弃 `bindContentCover`，改 **Stack 内条件渲染**——`if (showPlayerOverlay) PlayerOverlay().expandSafeArea(SYSTEM, TOP+BOTTOM).transition(TransitionEffect.translate({y:'100%'}).animation(350ms Friction))`。**配套防御保留**：① PlayerOverlay `aboutToDisappear` 可见性守卫；② PlayerController/SleepTimerController `subscribe` 同 owner 单槽覆盖（防漏退订累积）；③ `updateGlow` 延后一拍（消除构建期 animateTo 告警）。
-- **遗留观察**：封面光晕呼吸效果（`updateGlow`，3200ms 往复）用户从未观察到，可能亮色模式下不显眼，登记后续单独检查。
-- **状态**：已修复（方案 B 全平台生效）；API 26 基线化后 API 24/25 设备已不受支持。
+- **遗留观察**：封面光晕呼吸效果（`updateGlow`，3200ms 往复）用户从未观察到——移 §五 VR-9 单独检查。
+- **状态**：已关闭——实现方法由 `bindContentCover` 换 Stack 条件渲染（方案 B 全平台生效）；API 26 基线化后 API 24/25 设备已不受支持。
 
-### KI-6 定时播放 / 睡眠定时「部分验证」
+### KI-6 定时播放 / 睡眠定时「部分验证」（移 §五 VR-1）
 
-- **范围**：睡眠定时（倒计时归零暂停 + queue-redesign 轮新增「播完暂停」模式），实机验证欠账。
-- **位置**：入口为播放层 timer 按钮（`PlayerOverlay` 定时面板）；控制器为 [SleepTimerController.ets](entry/src/main/ets/service/SleepTimerController.ets)（单例、墙钟零漂移倒计时、内存态不持久化；`SleepTimerMode` 三态 NONE / COUNTDOWN / PLAY_TO_EOF）。
-- **待验证点**：倒计时显示与归零暂停、后台/锁屏节流后切回校准、入口按钮状态联动；播完暂停三步（面板选「播完暂停」→ 当前条目播完停原条目暂停不切歌 → 手动续播从头重播/手动切歌恢复正常）、与倒计时单选互斥（后选取代先选）、触发时不弹「计时已结束」弹窗。
-- **状态**：debt-cleanup 轮模拟器验证（T020）——倒计时归零（60.1s 精确）/播完暂停/模式互斥/取消定时 PASS；**切后台校准环境受限未验**（devecocli 无 home 键/后台化模拟）。真机复测（[verification-report.md](spec/debt-cleanup/verification-report.md) §4 US5）通过后关闭本条目并移除 `SleepTimerController.ets` 文件头 `[UNVERIFIED 2026-10]` 标注。
+- 本条目整体移至 §五待真机验证 VR-1（与 debt-cleanup US5 同项）；范围、已验/未验点与关闭条件以该处为准。
 
 ### KI-7 链接识别链路遗留问题
 
@@ -67,7 +64,7 @@
 
 - **现象**：APP 签名链 20 条/页（服务端钳制）vs Web 退避链 30 条/页，链路切换（降级/回切）时页界不对齐可能漏条目；现有 bvid 去重兜底。
 - **修复**：Web 链 `fetchUpVideosViaWeb` 请求 `ps` 降为 `Constants.UP_PAGE_SIZE=20`，翻页记账 `olderPageSize()` UP 分支统一引用常量（[BiliService.ets](entry/src/main/ets/service/BiliService.ets) / [SourcePage.ets](entry/src/main/ets/pages/SourcePage.ets)）。
-- **遗留**：降级衔接翻页走查待真机（[verification-report.md](spec/debt-cleanup/verification-report.md) §4 US7）。
+- **遗留**：降级衔接翻页走查移 §五 VR-3（US7 / engineering-refactor T013 同项）。
 
 ### KI-10 屏幕常亮疑问（销项，v0.3-bugfix-round2 轮，2026-10-12）
 
@@ -122,11 +119,13 @@
 
 ## 三、规划与预告
 
-- **R9 反馈轮（ux-feedback-round9，2026-10-10）——debt-cleanup 轮模拟器全场景 PASS（T019），真机复核后销项**：四项修复——①队列容器由右侧抽屉改底部弹出面板（QueueDrawer 全宽 65% 高、Y 轴 translate，仍为 Stack 条件渲染非系统 sheet，KI-5 规避不变）；②面板背景近实底（base `#F2FFFFFF` / dark `#F01E1E22`）；③队列列表 `alwaysEnabled` 过冲 + 双向 EdgeHint；④时长未知条目（duration=0）第二行只显示 UP 主名不渲染 00:00。queue-redesign 欠账：T031 部署已销（T015）、T032 US2/US4/US6 模拟器 PASS、US7 版本号项过时关闭。
+- **R9 反馈轮（ux-feedback-round9，2026-10-10）——debt-cleanup 轮模拟器全场景 PASS（T019），真机复核销项见 §五 VR-6**：四项修复——①队列容器由右侧抽屉改底部弹出面板（QueueDrawer 全宽 65% 高、Y 轴 translate，仍为 Stack 条件渲染非系统 sheet，KI-5 规避不变）；②面板背景近实底（base `#F2FFFFFF` / dark `#F01E1E22`）；③队列列表 `alwaysEnabled` 过冲 + 双向 EdgeHint；④时长未知条目（duration=0）第二行只显示 UP 主名不渲染 00:00。queue-redesign 欠账：T031 部署已销（T015）、T032 US2/US4/US6 模拟器 PASS、US7 版本号项过时关闭。
 
-- **R10 反馈轮（ux-feedback-round10，2026-10-10）——debt-cleanup 轮模拟器五场景 PASS（T021），真机复核后销项**：三项修复——①小白条沉浸（Index Navigation 包裹层去掉 `bottom: navBarHeight` padding，设置页/日志页/首页/订阅页内容延伸绘制至小白条后方并各自补偿避让，四页补 `@StorageProp navBarHeight`）；②隐藏迷你播放条穿透修复（Index 命中测试 `HitTestMode.None`→`BLOCK_DESCENDANTS`——SDK 实测 None 不阻止子节点命中是原 bug 根因）；③日志页底部空白（`AS_MINI_PLAYER_VISIBLE` 上报移交 Index，消费方避让随真实显隐变化）。顺带销项：R8 hilog DEBUG 门控（9be0b01，见下）。
+- **R10 反馈轮（ux-feedback-round10，2026-10-10）——debt-cleanup 轮模拟器五场景 PASS（T021），真机复核销项见 §五 VR-7**：三项修复——①小白条沉浸（Index Navigation 包裹层去掉 `bottom: navBarHeight` padding，设置页/日志页/首页/订阅页内容延伸绘制至小白条后方并各自补偿避让，四页补 `@StorageProp navBarHeight`）；②隐藏迷你播放条穿透修复（Index 命中测试 `HitTestMode.None`→`BLOCK_DESCENDANTS`——SDK 实测 None 不阻止子节点命中是原 bug 根因）；③日志页底部空白（`AS_MINI_PLAYER_VISIBLE` 上报移交 Index，消费方避让随真实显隐变化）。顺带销项：R8 hilog DEBUG 门控（9be0b01，见下）。
 
 > **✅ 已实现（9be0b01，随 R8 落地；本条为销项登记）：`Logger` 的 hilog 双写由 DEBUG 模式门控——默认关闭，绝不无条件向 hilog 总线写业务日志。** 开启入口 = 关于页图标三连击（tap 3 次触发，`Constants.DEBUG_TAP_WINDOW_MS = 2000`）；debug 模式开启期间 `Logger.log()` 才同步向 hilog 输出（`Constants.LOG_DOMAIN`/`LOG_TAG`，双写须用 info 级——API 24 设备 D 级被全局过滤不落缓冲，见 [Logger.ets](entry/src/main/ets/service/Logger.ets) L67-68 `ponytail:` 标注）；关闭或重启后恢复仅落盘+内存；持久化经 `Constants.KEY_DEBUG_MODE`。**任何后续改造不得绕过此门控。**
+
+- **v0.4-Part1 UX 修复轮（v0.4-Part1-ux-fixes，2026-10-13）——实施完成（T001–T023，arkts_check 预检清零），验证见 §五 VR-8**：12 项修复——①播放层收起按钮失效（裸 `SymbolGlyph` 点击被滚动区手势仲裁吞掉，外包 44×44 容器行扩大命中区，`Constants.CONTROL_BTN_SIZE`）；②MiniPlayer 返回闪现（根因：`AS_MINI_PLAYER_VISIBLE` 写在 animateTo 闭包外，t=400ms 翻转时消费方避让 padding 单帧瞬跳、胶囊 250ms 后才淡入；修复：该写入移入动画闭包与 `miniHidden` 同帧翻转，R4 竞态定时器逻辑保留，调试模式门控三点时序日志备验证轮取帧序列）；③音质档位与实际一致（nav 补解析 `vipStatus`/`face`，`AudioQuality.availableTiers`/`clampTier` 三档矩阵：64K 全员/132K 登录/192K 大会员，已存不可用档显示收敛不落盘）；④详情/关于 bindSheet 玻璃公式对齐（sheet_panel_background + backdropBlur(20) + 顶分隔线，bindSheet 底色转 Color.Transparent 使 blur 作用于下层内容）；⑤展开指示「▼」字符换 `sys.symbol.chevron_down`（旋转动画保留）；⑥历史面板多选（复制队列交互，头部「清空」按钮移除、能力由「全选+删除所选」承接）；⑦队列/历史多选态禁左滑（`swipeAction(cond ? {} : { end })` 条件挂载，退出恢复）；⑧按压态方角（SettingsGroup 卡片容器 `.clip(true)`，LogPage 行按压背景补 `TOKEN_RADIUS_M` 圆角——QueueSheet 既有同款）；⑨账号行头像（`face` 圆形裁切，onError/URL 空回退 person 图标）；⑩关于页重写（FR-009 确切文案 + 项目地址两行 + BiliMusic/PiliPlus 可点 Span，四链接 AlertDialog 二次确认 → `openLink(appLinkingOnly=false)` 拉系统浏览器，失败 toast）；⑪debug 冷启动恢复前移 Index（`controller.init().then()` 后读 `KEY_DEBUG_MODE` → `Logger.setDebugMode`，开启时 toast「调试模式运行中」；修复「不进设置页 debug 不生效」，SettingsPage 重复恢复移除、AppStore 读取仅供开关显示）；⑫关于页内容展示不全（真机反馈，T028）：aboutSheet 内层 Scroll `height('100%')` 被「完成」头行顶出 sheet 底界裁掉一段、滚到底仍缺尾段，改 `layoutWeight(1)` 占头部外剩余高度（与详情 sheet 同范式）。
 
 - **源页刷新无反馈假象（产品决策待定）**：刷新前后内容相同无可视指示、易误判按钮失效（appsign-up-fetch 轮 US2 首验 FAIL 即此假象——刷新实际成功、cursor 已重建，但列表无可视变化）；候选：加载动画或轻提示。
 
@@ -140,9 +139,9 @@
 - **订阅源导出导入**（ux-feedback-round6 轮登记，2026-10-09）：导出载体（本地 JSON 文件 / 分享文本）与去重合并策略待产品决策。
 - **关于页文案优化**（ux-feedback-round6 轮登记，2026-10-09）：方向待定。
 
-- **模拟器验证终止与 debt-cleanup 验证状态（2026-10-11）**：debt-cleanup 轮验证轮（T014-T025）在 T022/US7 即将开始时模拟器卡死（无响应）；用户决策：**不再进行模拟器验证，改为用户真机实测后反馈**（后续轮次验证一律真机）。模拟器已验项 PASS 记录（US2/US3/US4/US6 全过、US5 大部、US1 部分）与 **37 条真机复测清单**见 [verification-report.md](spec/debt-cleanup/verification-report.md)；未完成项（US1 播放层大封面、US5 切后台校准、US7 降级走查、US8 深浅色走查、T024 销项、T025 关机）在真机复测通过前不销项。
+- **模拟器验证终止与 debt-cleanup 验证状态（2026-10-11）**：整体移至 §五待真机验证（决策、PASS 记录与 37 条复测清单见该章节）。
 
-- **工程重构（engineering-refactor，2026-10-11）US1-US3 已落地、US4 产出路线图**：①**US1 翻页页界对齐**——KI-9 销项（见 §一 KI-9；降级衔接走查欠真机）；②**US2 UI 令牌化**——14 个 UI 文件 555 处圆角/字号/间距/色彩字面量归一为 `Constants.TOKEN_*`（数值不变），覆盖率 97%，豁免登记 [token-exemptions.md](spec/engineering-refactor/token-exemptions.md)；结构组件化（T023）因「数值不变」下空态字号 14/15/16 并存不可归一，与观感收敛一并列远期待产品确认；③**US3 模块边界契约化**——契约落盘 [architecture-boundary.md](spec/engineering-refactor/architecture-boundary.md)，依赖审计零违规（service→model、pages→service/model、Constants 零业务依赖）；上帝对象（PlayerController/BiliService/SettingsPage）登记不拆分；④**US4 V2 迁移路线图**——逐文件清单与批次拆解落盘 [v2-migration-roadmap.md](spec/engineering-refactor/v2-migration-roadmap.md)，批次 1（模型层）已实施（2026-10-11：BiliVideo/PlayHistoryItem/Subscription/Season/FavFolder/AudioTrack 六类 `@ObservedV2`+`@Trace`，AudioQuality/ResolvedAudio/QualityTier 无可观察实体不迁），批次 2-4 待续；⑤API 26 基线化见 §四。版本 0.3.0/3000；欠账：T013 降级走查、深浅色/主题色全页走查——均待真机。
+- **工程重构（engineering-refactor，2026-10-11）US1-US3 已落地、US4 产出路线图**：①**US1 翻页页界对齐**——KI-9 销项（见 §一 KI-9；降级衔接走查见 §五 VR-3）；②**US2 UI 令牌化**——14 个 UI 文件 555 处圆角/字号/间距/色彩字面量归一为 `Constants.TOKEN_*`（数值不变），覆盖率 97%，豁免登记 [token-exemptions.md](spec/v0.3-engineering-refactor/token-exemptions.md)；结构组件化（T023）因「数值不变」下空态字号 14/15/16 并存不可归一，与观感收敛一并列远期待产品确认；③**US3 模块边界契约化**——契约落盘 [architecture-boundary.md](spec/v0.3-engineering-refactor/architecture-boundary.md)，依赖审计零违规（service→model、pages→service/model、Constants 零业务依赖）；上帝对象（PlayerController/BiliService/SettingsPage）登记不拆分；④**US4 V2 迁移路线图**——逐文件清单与批次拆解落盘 [v2-migration-roadmap.md](spec/v0.3-engineering-refactor/v2-migration-roadmap.md)，批次 1（模型层）已实施（2026-10-11：BiliVideo/PlayHistoryItem/Subscription/Season/FavFolder/AudioTrack 六类 `@ObservedV2`+`@Trace`，AudioQuality/ResolvedAudio/QualityTier 无可观察实体不迁），批次 2-4 待续；⑤API 26 基线化见 §四。版本 0.3.0/3000；欠账（T013 降级走查、深浅色/主题色全页走查）并入 §五 VR-3/VR-4。
 
 - **V2 迁移整体完结（2026-10-11）**：批次 3（七页面）+ 批次 4（全局键/挂键组件）合并一次变更实施——新建 `V2State.ets` 包装类（BoolState/NumState/StrState + connect helpers）承接 `AS_*` 键，`KEY_*`（AppStore preferences）保留不动；**顺带修复既有 crash**：`PlayerOverlay.ets:1336` `currentOffset()` 浮层刚挂载时运行时返回 undefined（类型上不可空）→ pan 下滑关闭手势崩溃，防御判空（批次 1 与本轮部署各复现一次，修复后回归无复现）。批次 2 组件并入或免迁；**4.5 审计纠错**：PlayerController 为零装饰器纯类（手动 `subscribe`/`emitUi` 广播 + 版本计数，四个消费方 `syncFrom` 拷贝 `@Local`），git 全历史 `-S` 检索零命中「@Observed+@Track」，经用户确认按 YAGNI 关闭无需迁移；**V2 迁移路线图整体完结**。
 
@@ -150,3 +149,46 @@
 
 - **✅ 已完成（engineering-refactor 实施轮 1，2026-10-11）**：`compatibleSdkVersion` 升至 `26.0.0`（T004）；`[API24-COMPAT]` 守卫标记全局清零（T005，唯一处 [MediaSession.ets](entry/src/main/ets/service/MediaSession.ets) 已移除，`setMediaCenterControlType` 防御性 try/catch 保留）；版本号升至 0.3.0/3000（T006）。API 24/25 设备自本轮起不再受支持。
 - **守卫清单已清空**（基线化完成，源码全局检索 `[API24-COMPAT]` 零命中）；新增守卫须同步登记到此。
+
+## 五、待真机验证
+
+2026-10-11 决策：debt-cleanup 验证轮模拟器卡死后终止模拟器验证，**后续轮次验证一律真机**（debt-cleanup T025「关闭模拟器」随之失效）。本章节集中登记全部欠真机验证项，通过后逐项销项；全部通过后执行收尾销项（debt-cleanup T024）。已验 PASS 记录与 **37 条真机复测清单**见 [verification-report.md](spec/v0.3-debt-cleanup/verification-report.md)。
+
+### VR-1 睡眠定时切后台校准（KI-6 / debt-cleanup US5）
+
+- **范围**：睡眠定时（倒计时归零暂停 + queue-redesign 轮新增「播完暂停」模式）；入口为播放层 timer 按钮（`PlayerOverlay` 定时面板）；控制器为 [SleepTimerController.ets](entry/src/main/ets/service/SleepTimerController.ets)（单例、墙钟零漂移倒计时、内存态不持久化；`SleepTimerMode` 三态 NONE / COUNTDOWN / PLAY_TO_EOF）。
+- **已验（模拟器 T020 PASS）**：倒计时归零（60.1s 精确）、播完暂停、模式互斥（后选取代先选）、取消定时。
+- **未验**：后台/锁屏节流后切回校准（模拟器环境受限无法验）、入口按钮状态联动、播完暂停三步、触发时不弹「计时已结束」弹窗。
+- **关闭条件**：真机复测（[verification-report.md](spec/v0.3-debt-cleanup/verification-report.md) §4 US5）通过后关闭原 KI-6 条目，并移除 `SleepTimerController.ets` 文件头 `[UNVERIFIED 2026-10]` 标注。
+
+### VR-2 播放层大封面走查（debt-cleanup US1）
+
+- 模拟器卡死中断处，未起验；真机检查播放层大封面渲染与曲目切换更新。
+
+### VR-3 降级衔接翻页走查（KI-9 遗留 / debt-cleanup US7 / engineering-refactor T013）
+
+- APP 签名链 ↔ Web 退避链降级/回切时的页界衔接（页界已对齐 20 条/页，bvid 去重兜底）；真机触底翻页走查无漏条目、无重复。
+
+### VR-4 深浅色/主题色全页走查（debt-cleanup US8 / engineering-refactor 欠账）
+
+- 全页面深浅色切换与主题色一致性走查（UI 令牌化后观感确认）。
+
+### VR-5 三处左滑删除真机复测（KI-3 / debt-cleanup T024 依赖项）
+
+- 播放历史/播放队列/首页订阅三处左滑（含 v0.3-bugfix-round2 双触发二次确认升级）；模拟器已验（T017），真机复测通过后销项 §一 KI-3。
+
+### VR-6 R9 反馈轮真机复核（ux-feedback-round9）
+
+- 四项修复（队列底部弹出面板/面板背景近实底/过冲双向 EdgeHint/时长未知条目第二行）；模拟器 T019 全场景 PASS，真机复核后销项 §三 R9 条目。
+
+### VR-7 R10 反馈轮真机复核（ux-feedback-round10）
+
+- 三项修复（小白条沉浸/迷你条命中穿透/日志页底部空白）；模拟器 T021 五场景 PASS，真机复核后销项 §三 R10 条目。
+
+### VR-8 v0.4-Part1 UX 修复轮验证（v0.4-Part1-ux-fixes）
+
+- 12 项修复（T001–T023）已实施、arkts_check 预检清零，明细见 §三 v0.4-Part1 条目；模拟器 build+ui 验证 10/10 PASS（2026-10-13，验证中补修 US1 光晕命中穿透：450×450 Column `hitTestBehavior(None)`）；真机全项验证待做，重点：MiniPlayer 返回闪现时序（调试模式三点时序日志取帧序列）、播放层收起按钮、音质档位三档矩阵、关于页链接跳转、关于页内容完整展示（T028 layoutWeight 修复后滚到底可见尾段）。
+
+### VR-9 KI-5 遗留观察：封面光晕呼吸效果
+
+- `updateGlow`（3200ms 往复）从未被用户观察到，亮色模式可能不显眼；真机确认是否可见、是否需调整，确认后销项。

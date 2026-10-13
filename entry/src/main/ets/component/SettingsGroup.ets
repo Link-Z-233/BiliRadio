@@ -23,6 +23,7 @@ export struct SettingsGroup {
       .width('100%')
       .borderRadius(Constants.TOKEN_RADIUS_L)
       .backgroundColor($r('app.color.card_background'))
+      .clip(true)
     }
     .width('100%')
     .alignItems(HorizontalAlign.Start)

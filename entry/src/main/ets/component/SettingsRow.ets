@@ -7,6 +7,8 @@ export struct SettingsRow {
   @Param subtitle: string = '';
   @Param valueText: string = '';
   @Param rowIcon: Resource | undefined = undefined;
+  // 账号行头像（v0.4-Part1-ux-fixes US9）：非空时圆形头像替代图标，加载失败回退 rowIcon
+  @Param avatarUrl: string = '';
   @Param showArrow: boolean = false;
   @Param showToggle: boolean = false;
   @Param toggleOn: boolean = false;
@@ -17,10 +19,27 @@ export struct SettingsRow {
   @Param rowAction: () => void = (): void => {};
   @Param toggleChange: (on: boolean) => void = (_on: boolean): void => {};
   @Local isPressed: boolean = false;
+  @Local avatarBroken: boolean = false;
+
+  // 头像 URL 更换时重置失败标记，允许新 URL 重新尝试加载
+  @Monitor('avatarUrl')
+  onAvatarUrlChanged(): void {
+    this.avatarBroken = false;
+  }
 
   @Builder
   private iconSlot(icon: Resource | undefined) {
-    if (icon !== undefined) {
+    if (this.avatarUrl !== '' && !this.avatarBroken) {
+      Image(this.avatarUrl)
+        .width(Constants.ACCOUNT_AVATAR_SIZE)
+        .height(Constants.ACCOUNT_AVATAR_SIZE)
+        .borderRadius(Constants.ACCOUNT_AVATAR_SIZE / 2)
+        .objectFit(ImageFit.Cover)
+        .margin({ right: Constants.TOKEN_SPACE_M })
+        .onError(() => {
+          this.avatarBroken = true;
+        })
+    } else if (icon !== undefined) {
       SymbolGlyph(icon)
         .fontSize(Constants.TOKEN_FONT_TITLE_L)
         .fontColor([$r('app.color.text_secondary')])

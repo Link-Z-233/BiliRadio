@@ -1385,6 +1385,27 @@ export class PlayerController {
     this.savePlayHistoryFileAsync();
   }
 
+  // 批量删除所选历史（v0.4-Part1-ux-fixes US4）：多选删除所用，单次版本计数+单次异步写盘；未命中静默
+  removeSelectedHistory(bvids: string[]): void {
+    if (bvids.length === 0) {
+      return;
+    }
+    let removed: number = 0;
+    for (let k = 0; k < bvids.length; k++) {
+      const idx: number = this.indexOfPlayHistory(bvids[k]);
+      if (idx >= 0) {
+        this.playHistory.splice(idx, 1);
+        removed++;
+      }
+    }
+    if (removed === 0) {
+      return;
+    }
+    this.playHistoryVersion++;
+    Logger.log('player', 'history removeSelected', `count=${removed} left=${this.playHistory.length}`);
+    this.savePlayHistoryFileAsync();
+  }
+
   async removeSelectedFromPlaylist(bvids: string[]): Promise<void> {    if (bvids.length === 0) {
       return;
     }

@@ -228,6 +228,7 @@ struct LogPage {
                 .width('100%')
                 .padding({ left: Constants.TOKEN_SPACE_L, right: Constants.TOKEN_SPACE_L, top: Constants.TOKEN_SPACE_S, bottom: Constants.TOKEN_SPACE_S })
                 .backgroundColor(this.pressedKey === `${item.time}_${item.summary}` ? $r('app.color.item_pressed_background') : Color.Transparent)
+                .borderRadius(Constants.TOKEN_RADIUS_M)
                 .onTouch((e: TouchEvent): void => {
                   if (e.type === TouchType.Down) {
                     this.pressedKey = `${item.time}_${item.summary}`;

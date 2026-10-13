@@ -14,9 +14,9 @@
 - **pages/** — `Index.ets`（唯一 `@Entry`、单页壳）、`HomePage`、`PlayerOverlay`、`SourcePage`、`SettingsPage`、`AddSubscriptionSheet`
 - **service/** — 业务单例：`PlayerController`（播控）、`BiliService`（B 站 API）、`BiliSession`（登录）、`MediaSession`（锁屏/控中心）、`AudioPlayer`、`LinkResolver`、`WbiSigner`、`SleepTimerController`、`AppStore`（持久化）、`SecureStore`、`SubscriptionStore`、`Constants`
 - **model/** — 数据类：`BiliVideo`、`AudioQuality`（音质档位）、`PlayHistoryItem`、`Subscription`、`Season`、`FavFolder`
-- **component/** — 共用 UI：`MiniPlayer`、`QueueDrawer`、`QueueSheet`、`CoverThumb`、`SettingsRow`、`SettingsGroup`、`EdgeHint`
+- **component/** — 共用 UI：`MiniPlayer`、`GlassSheet`（通用玻璃浮层容器，队列/历史共用）、`QueueSheet`、`CoverThumb`、`SettingsRow`、`SettingsGroup`、`EdgeHint`
 
-- **模块边界契约**：`spec/engineering-refactor/architecture-boundary.md`（依赖单向：service→model、pages→service/model、Constants 零业务依赖；上帝对象 PlayerController/BiliService/SettingsPage 只登记不拆分）
+- **模块边界契约**：`spec/v0.3-engineering-refactor/architecture-boundary.md`（依赖单向：service→model、pages→service/model、Constants 零业务依赖；上帝对象 PlayerController/BiliService/SettingsPage 只登记不拆分）
 
 ### 导航
 
@@ -38,7 +38,7 @@
 ## 版本基线（API 26 前提）
 
 - **compatibleSdkVersion = 26.0.0**（已落地，2026-10-11 实施轮 T004；`targetSdkVersion` 已为 26.0.0）
-- 规划整体基于 **API 26**，**不考虑任何 API<26 兼容设计/守卫**（全局前提详见 `spec/engineering-refactor/spec.md`）
+- 规划整体基于 **API 26**，**不考虑任何 API<26 兼容设计/守卫**（全局前提详见 `spec/v0.3-engineering-refactor/spec.md`）
 - **`[API24-COMPAT]` 守卫已全部移除**（2026-10-11 实施轮 T005；`setMediaCenterControlType` 防御性 try/catch 保留、无标记），不再新增守卫
 
 ## 编码原则（Ponytail）
@@ -54,15 +54,14 @@
 - **Constants.ets 是唯一真相源**：所有魔法数字、存储键、AppStorage 键、色值、超时值只在此定义，禁止他处重复
 - **禁 `any`/`unknown`/`as` 类型断言**——ArkTS 严格模式
 - **B 站 API 坑**：APP 端点（`BILI_APP_ARCHIVE_URL`）须 BiliDroid UA（在 `Constants`），非浏览器 cookie；Web 端点须 WBI 签名（`WbiSigner`）；`@ohos.net.http` 的 `maxRedirects: 0` 是「零配额」而非「禁重定向」——短链解析用 `@kit.RemoteCommunicationKit` rcp + `autoRedirect`
-- **令牌/数值规范**（engineering-refactor 轮已落地，2026-10-11）：令牌替换**数值不变**（纯标准化不改观感）；色彩一律 `$r('app.color.*')`、数值一律 `Constants.TOKEN_*`，禁裸数字硬编码（豁免登记 `spec/engineering-refactor/token-exemptions.md`）；组件规范（列表行/卡片/弹窗/空态）跨页面一致
+- **令牌/数值规范**（engineering-refactor 轮已落地，2026-10-11）：令牌替换**数值不变**（纯标准化不改观感）；色彩一律 `$r('app.color.*')`、数值一律 `Constants.TOKEN_*`，禁裸数字硬编码（豁免登记 `spec/v0.3-engineering-refactor/token-exemptions.md`）；组件规范（列表行/卡片/弹窗/空态）跨页面一致
 - **文档引用一律相对路径**：文档中引用仓库内路径相对仓库根（如 `entry/src/main/ets/`），引用仓库外路径相对仓库根上级（如 `../bili/PiliPlus`），禁绝对路径
 
 ## 已知问题（PROJECT_NOTES.md）
 
-- **KI-3**：首页订阅列表左滑删除未实现（播放历史/播放队列已完成）
-- **KI-6**：睡眠定时未经真机验证
-- **KI-7**：链接识别边缘情况（B3–B8）——BV 优先级遮蔽复合 URL，裸数字一律当 UID
+- **KI-7**：链接识别边缘情况（B3/B7/B8/C2 维持登记，B4/B5 已修复）——裸数字一律当 UID
 - **DIS-1**：首页下拉刷新已禁用（代码以注释保留，标记 `[DISABLED 2026-10]`）
+- **待真机验证**：PROJECT_NOTES.md §五集中登记（VR-1～VR-9）——后续轮次验证一律真机；含 KI-3（三处左滑已实现，复测销项）、KI-6（睡眠定时切后台校准）、R9/R10 反馈轮、v0.4-Part1 修复轮
 
 ## 工作方式（SDD 五阶段）
 
@@ -72,6 +71,21 @@
 - **验证范围默认值**：**默认仅构建验证（build-only）**——`tasks.md` Verification 阶段默认只含构建+部署（`<!-- verification_scope: build-only -->`）；需要 UI 验证（模拟器/真机）须在 Phase 3 Review Gate 前显式提出，并改标记为 `<!-- verification_scope: build+ui -->`
 - **Spec**：`spec/` 存放功能规格与 UX 反馈轮次，`spec/feature.json` 指向当前活跃目录；实现功能前先查阅对应 spec
 - **无人值守模式**（用户批准批次执行时的默认运行方式）：① 小问题（不影响行为/不返工）记录在案（提交信息/PROJECT_NOTES）继续执行；② 大问题（可能行为回归/数据丢失/需返工）立即暂停报告；③ 有争议的问题（多方案均合理/影响后续路线）停下解释选项交用户决策；④ 验证失败不无限重试——同一目标最多 3 次，仍失败即暂停报告
+
+## Git 提交
+
+- **标题行**：`<type>: <版本-轮次>（<主题>）`，如 `feat: v0.4.0-Part1（浮层视觉重设计 + UX 修复轮）`
+- **正文**：要点列表，每块改动一行，写清「做了什么 + 关键机制/根因」，不罗列文件路径清单；同类小项合并一行以「等」收尾
+- **不入提交信息**：验证结论与待验登记（记 PROJECT_NOTES §五）、文件级明细（git diff 自查）
+- **范例**（v0.4.0-Part1 提交信息）：
+
+```
+feat: v0.4.0-Part1（浮层视觉重设计 + UX 修复轮）
+
+- QueueDrawer 泛化为 GlassSheet 通用玻璃浮层容器，队列/历史共用，历史面板迁离系统 bindSheet
+- UX 修复 12 项：收起键命中区、MiniPlayer 返回闪现、音质三档矩阵、历史多选、账号头像、关于页重写（含内容截断修复）等
+- debug 冷启动恢复前移 Index；spec 目录归档重命名，附 Part1 工件与 Part2 双轮规划
+```
 
 ## 参考项目
 

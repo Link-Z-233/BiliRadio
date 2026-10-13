@@ -55,6 +55,28 @@ export class AudioQuality {
     return QualityTier.MAX;
   }
 
+  // 档位可用矩阵（v0.4-Part1-ux-fixes FR-014）：64K 全员 / 132K 登录 / 192K 大会员 / 最高语义档恒可选
+  static availableTiers(isLogged: boolean, vipStatus: number): QualityTier[] {
+    if (isLogged && vipStatus === 1) {
+      return [QualityTier.MAX, QualityTier.Q192K, QualityTier.Q132K, QualityTier.Q64K];
+    }
+    if (isLogged) {
+      return [QualityTier.MAX, QualityTier.Q132K, QualityTier.Q64K];
+    }
+    return [QualityTier.MAX, QualityTier.Q64K];
+  }
+
+  // 已存档位收敛（US2 场景 4）：不可用档位逐级回落至下方最高可用档（192K→132K→64K），仅显示层收敛不落盘
+  static clampTier(tier: QualityTier, isLogged: boolean, vipStatus: number): QualityTier {
+    if (tier === QualityTier.Q192K && !(isLogged && vipStatus === 1)) {
+      tier = QualityTier.Q132K;
+    }
+    if (tier === QualityTier.Q132K && !isLogged) {
+      tier = QualityTier.Q64K;
+    }
+    return tier;
+  }
+
   // 档位显示名
   static label(tier: QualityTier): string {
     if (tier === QualityTier.Q192K) {

@@ -9,7 +9,8 @@ import { CoverUrl } from '../service/CoverUrl';
 import { Appearance } from '../service/Appearance';
 import { CoverPalette } from '../service/CoverPalette';
 import { SleepTimerController } from '../service/SleepTimerController';
-import { QueueDrawer } from '../component/QueueDrawer';
+import { GlassSheet } from '../component/GlassSheet';
+import { QueueSheet } from '../component/QueueSheet';
 import { AudioTrack, AudioQuality } from '../model/AudioQuality';
 import { connectBool, connectNum, connectStr, BoolState, NumState, StrState } from '../service/V2State';
 
@@ -860,8 +861,10 @@ export struct PlayerOverlay {
     .width('100%')
     .height('100%')
     .padding({ left: Constants.TOKEN_SPACE_XL, right: Constants.TOKEN_SPACE_XL, top: Constants.TOKEN_SPACE_XS, bottom: Constants.TOKEN_SPACE_XL })
-    .backgroundColor($r('app.color.sheet_background'))
+    // 玻璃公式（v0.4-Part1-ux-fixes US6）：与队列面板同款面板色+顶部分隔线，blur 作用于 sheet 底色已转透明的下层内容
+    .backgroundColor($r('app.color.sheet_panel_background'))
     .backdropBlur(20)
+    .border({ width: { top: 1 }, color: $r('app.color.sheet_top_separator') })
   }
 
   build() {
@@ -873,13 +876,17 @@ export struct PlayerOverlay {
             Column() {
               Column() {
                 Row() {
-                  SymbolGlyph($r('sys.symbol.chevron_down'))
-                    .fontSize(Constants.TOKEN_FONT_TITLE_L)
-                    .fontColor([$r('app.color.text_primary')])
-                    .padding(Constants.TOKEN_SPACE_6)
-                    .onClick(() => {
-                      connectBool(Constants.AS_SHOW_PLAYER_OVERLAY, false).value = false;
-                    })
+                  Row() {
+                    SymbolGlyph($r('sys.symbol.chevron_down'))
+                      .fontSize(Constants.TOKEN_FONT_TITLE_L)
+                      .fontColor([$r('app.color.text_primary')])
+                  }
+                  .width(Constants.CONTROL_BTN_SIZE)
+                  .height(Constants.CONTROL_BTN_SIZE)
+                  .justifyContent(FlexAlign.Center)
+                  .onClick(() => {
+                    connectBool(Constants.AS_SHOW_PLAYER_OVERLAY, false).value = false;
+                  })
                   Blank()
                 }
                 .width('100%')
@@ -892,6 +899,9 @@ export struct PlayerOverlay {
                   .height(450)
                   .borderRadius(225)
                   .position({ x: -75, y: -131 })
+                  // v0.4-Part1-ux-fixes US1：光晕 450vp 超出封面 Stack 覆盖上半滚动区，Default 命中拦截顶栏/标题行点击
+                  // （hilog 证据：chevron 点击零 miniChain 链路），None 使纯装饰节点退出命中测试
+                  .hitTestBehavior(HitTestMode.None)
                   .opacity(this.glowStrength)
                   // 节点级属性动画（animation 仅对其前面的属性生效）：光晕淡入/淡出不产生
                   // 同帧动画作用域，不会波及播放键图标的透明度翻转；radialGradient 在其后，色彩切换即时
@@ -972,9 +982,10 @@ export struct PlayerOverlay {
                   .layoutWeight(1)
 
                 if (this.trackIndex >= 0) {
-                  Text('▼')
+                  // 展开指示（v0.4-Part1-ux-fixes US6）：系统图标替换裸「▼」字符，旋转动画保留
+                  SymbolGlyph($r('sys.symbol.chevron_down'))
                     .fontSize(Constants.TOKEN_FONT_TITLE)
-                    .fontColor(this.textSecondary())
+                    .fontColor([this.textSecondary()])
                     .margin({ left: Constants.TOKEN_SPACE_XXS })
                     .padding(Constants.TOKEN_SPACE_M)
                     .rotate({ angle: this.detailArrowUp ? 180 : 0 })
@@ -1305,10 +1316,20 @@ export struct PlayerOverlay {
         this.qualityPanel()
       }
 
-      // 播放队列抽屉：渲染在播放层内；显式最高 zIndex（US1）压过倍速/模式/睡眠面板与内容层，
-      // 修复 API 24 平板 zIndex 失效导致抽屉被遮挡的问题（全平台行为一致）
+      // 播放队列浮层：渲染在播放层内；显式最高 zIndex（US1）压过倍速/模式/睡眠面板与内容层，
+      // 修复 API 24 平板 zIndex 失效导致浮层被遮挡的问题（全平台行为一致）
       if (this.showQueueSheet.value) {
-        QueueDrawer({ onRegisterClose: this.onRegisterClose })
+        Column() {
+          GlassSheet({
+            openState: this.showQueueSheet,
+            panelHeight: '65%',
+            onRegisterClose: this.onRegisterClose
+          }) {
+            QueueSheet()
+          }
+        }
+          .width('100%')
+          .height('100%')
           .zIndex(100)
       }
     }
@@ -1338,7 +1359,7 @@ export struct PlayerOverlay {
       height: '62%',
       dragBar: true,
       showClose: false,
-      backgroundColor: $r('app.color.sheet_background'),
+      backgroundColor: Color.Transparent,
       preferType: SheetType.BOTTOM,
       // 手势下滑/遮罩关闭判定通过时：先即时翻转箭头再真正关闭（T011）
       shouldDismiss: (sheetDismiss: SheetDismiss) => {

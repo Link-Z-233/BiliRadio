@@ -13,6 +13,8 @@ export class BiliSession {
   biliJct: string = '';
   mid: number = 0;
   uname: string = '';
+  vipStatus: number = 0;
+  face: string = '';
   buvid3: string = '';
   buvid4: string = '';
   // b_nut（风控指纹辅助字段，US3）：由响应 Set-Cookie 被动收集，随 Cookie 一并携带
@@ -52,6 +54,8 @@ export class BiliSession {
     this.biliJct = '';
     this.mid = 0;
     this.uname = '';
+    this.vipStatus = 0;
+    this.face = '';
   }
 
   resetBuvid(): void {

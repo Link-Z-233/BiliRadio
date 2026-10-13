@@ -360,6 +360,10 @@ export class BiliService {
     const session: BiliSession = BiliSession.getInstance();
     session.mid = payload['mid'] as number;
     session.uname = payload['uname'] as string;
+    const vipRaw: Object = payload['vipStatus'];
+    session.vipStatus = (vipRaw !== undefined && vipRaw !== null) ? vipRaw as number : 0;
+    const faceRaw: Object = payload['face'];
+    session.face = (faceRaw !== undefined && faceRaw !== null) ? faceRaw as string : '';
   }
 
 

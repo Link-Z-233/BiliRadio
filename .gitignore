@@ -11,6 +11,7 @@
 /.deveco/*
 !/.deveco/skills/
 /.appanalyzer
+/.uittest/
 /.merkle-snapshot.json
 .cxx
 /.clangd

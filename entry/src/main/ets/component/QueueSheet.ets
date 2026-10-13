@@ -92,7 +92,7 @@ export struct QueueSheet {
   @Local selectMode: BoolState = connectBool(Constants.AS_PLAYLIST_SELECT_MODE, false);
   @Local selectedBvids: string[] = [];
   @Local pressedKey: string = '';
-  // 面板显隐同源（v0.3 US7）：与 QueueDrawer/Index 共享同键实例，关闭时驱动多选复位
+  // 面板显隐同源（v0.3 US7）：与 GlassSheet/Index 共享同键实例，关闭时驱动多选复位
   @Local showQueueSheet: BoolState = connectBool(Constants.AS_SHOW_QUEUE_SHEET, false);
 
   @Local pageHeight: number = 0;
@@ -148,6 +148,9 @@ export struct QueueSheet {
   onSelectModeChanged(): void {
     if (!this.selectMode.value) {
       this.selectedBvids = [];
+    } else {
+      // 进入多选即收起已滑出的行（v0.4-Part1-ux-fixes US5）：多选态不再挂载左滑删除动作
+      this.listScroller.closeAllSwipeActions();
     }
   }
 
@@ -650,7 +653,8 @@ export struct QueueSheet {
                   )
                 )
               }
-              .swipeAction({
+              // 多选态不挂载删除动作（v0.4-Part1-ux-fixes US5）：左滑手势随 end 缺失整体禁用，退出多选恢复
+              .swipeAction(this.selectMode.value ? {} : {
                 end: {
                   builder: (): void => {
                     this.queueDeleteAction(item);

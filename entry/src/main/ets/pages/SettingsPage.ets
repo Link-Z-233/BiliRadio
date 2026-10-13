@@ -14,6 +14,7 @@ import { fileIo as fs } from '@kit.CoreFileKit';
 import { CoverThumb } from '../component/CoverThumb';
 import { SettingsGroup } from '../component/SettingsGroup';
 import { SettingsRow } from '../component/SettingsRow';
+import { GlassSheet } from '../component/GlassSheet';
 import { Constants } from '../service/Constants';
 import { dismissOverlaysForBack } from '../service/BackHandler';
 import { connectBool, connectNum, connectStr, BoolState, NumState, StrState } from '../service/V2State';
@@ -84,6 +85,7 @@ struct SettingsPage {
   @Local showQr: boolean = false;
   @Local isLogged: boolean = false;
   @Local loginName: string = '未登录';
+  @Local avatarUrl: string = '';
   @Local cookieInput: string = '';
   @Local statusMsg: string = '';
   @Local qrStatus: string = '';
@@ -98,6 +100,9 @@ struct SettingsPage {
   @Local showPlayHistory: BoolState = connectBool(Constants.AS_SHOW_PLAY_HISTORY, false);
   @Local playHistoryItems: PlayHistoryItem[] = [];
   @Local playHistoryVersion: number = -1;
+  // 多选管理（v0.4-Part1-ux-fixes US4）：面板关闭/退出多选时清空，交互对齐队列
+  @Local historySelectMode: boolean = false;
+  @Local selectedHistoryIds: string[] = [];
 
   // —— 应用内日志（US9） ——
   @Local logCount: number = 0;
@@ -145,6 +150,8 @@ struct SettingsPage {
   private pollGeneration: number = 0;
   private controller: PlayerController = PlayerController.getInstance();
   private playHistorySource: HistoryDataSource = new HistoryDataSource();
+  // 播放历史浮层动画关闭句柄（GlassSheet onRegisterClose 注册，系统返回复用滑出动画）
+  private historyClose: (() => void) | undefined = undefined;
   // ListScroller（extends Scroller）：取消确认后经 closeAllSwipeActions 复位滑动行（US1）
   private historyScroller: ListScroller = new ListScroller();
   private settingsScroller: Scroller = new Scroller();
@@ -173,10 +180,8 @@ struct SettingsPage {
       }
     }, 'SettingsPage');
     this.logCount = Logger.count();
-    // debugMode 恢复：经 AppStore 读（Logger.init 的 getPreferencesSync 在 onCreate 阶段不可靠，已移除）
-    const storedDebug: boolean = AppStore.getNumber(Constants.KEY_DEBUG_MODE, 0) === 1;
-    Logger.setDebugMode(storedDebug);
-    this.debugModeOn = storedDebug;
+    // debugMode 开关显示：仅读 AppStore 供 UI；Logger 恢复与启动提醒已前移 Index 冷启动链路（v0.4-Part1-ux-fixes US10）
+    this.debugModeOn = AppStore.getNumber(Constants.KEY_DEBUG_MODE, 0) === 1;
   }
 
   aboutToDisappear(): void {
@@ -190,8 +195,10 @@ struct SettingsPage {
     this.isLogged = session.isLogged();
     if (session.isLogged()) {
       this.loginName = session.uname !== '' ? session.uname : `已登录 (UID ${session.mid})`;
+      this.avatarUrl = session.face;
     } else {
       this.loginName = '未登录';
+      this.avatarUrl = '';
     }
   }
 
@@ -206,17 +213,15 @@ struct SettingsPage {
     return AudioQuality.fromStored(stored);
   }
 
-  // 档位选择器可选项（FR-009）：未登录仅「最高」「64K」，登录后四档全显（已存高档值不改动）
+  // 档位选择器可选项（v0.4-Part1-ux-fixes FR-014）：按登录+会员态过滤；nav 失败时 vipStatus 保持 0 按非会员
   private qualityOptions(): QualityTier[] {
-    if (this.isLogged) {
-      return [QualityTier.MAX, QualityTier.Q192K, QualityTier.Q132K, QualityTier.Q64K];
-    }
-    return [QualityTier.MAX, QualityTier.Q64K];
+    return AudioQuality.availableTiers(this.isLogged, BiliSession.getInstance().vipStatus);
   }
 
-  // 当前编辑项的已存档位（选择器 ✓ 高亮依据）
+  // 当前编辑项的已存档位（选择器 ✓ 高亮依据）：不可用档位显示层收敛（US2 场景 4）
   private currentEditTier(): QualityTier {
-    return this.qualityEditTarget === 'wifi' ? this.wifiQuality : this.cellularQuality;
+    const stored: QualityTier = this.qualityEditTarget === 'wifi' ? this.wifiQuality : this.cellularQuality;
+    return AudioQuality.clampTier(stored, this.isLogged, BiliSession.getInstance().vipStatus);
   }
 
   private openQualitySheet(target: string): void {
@@ -450,6 +455,123 @@ struct SettingsPage {
           this.playHistoryVersion = this.controller.playHistoryVersion;
           this.playHistoryItems = [];
           this.playHistorySource.setItems(this.playHistoryItems);
+        }
+      }
+    });
+  }
+
+  // 面板关闭（遮罩/返回/滑出）自动退出多选并清选中（US4，对齐队列面板关闭复位语义）
+  @Monitor('showPlayHistory.value')
+  onPlayHistoryVisibilityChanged(): void {
+    if (!this.showPlayHistory.value) {
+      this.exitHistorySelectMode();
+    }
+  }
+
+  // 进入多选即收起已滑出的行（v0.4-Part1-ux-fixes US5）：多选态不再挂载左滑删除动作
+  @Monitor('historySelectMode')
+  onHistorySelectModeChanged(): void {
+    if (this.historySelectMode) {
+      this.historyScroller.closeAllSwipeActions();
+    }
+  }
+
+  private toggleHistorySelect(bvid: string): void {
+    const idx: number = this.selectedHistoryIds.indexOf(bvid);
+    if (idx >= 0) {
+      this.selectedHistoryIds.splice(idx, 1);
+    } else {
+      this.selectedHistoryIds.push(bvid);
+    }
+    this.selectedHistoryIds = this.selectedHistoryIds.slice(0);
+  }
+
+  private isAllHistorySelected(): boolean {
+    return this.playHistoryItems.length > 0 && this.selectedHistoryIds.length === this.playHistoryItems.length;
+  }
+
+  private toggleHistorySelectAll(): void {
+    if (this.isAllHistorySelected()) {
+      this.selectedHistoryIds = [];
+    } else {
+      const all: string[] = [];
+      for (let i = 0; i < this.playHistoryItems.length; i++) {
+        all.push(this.playHistoryItems[i].bvid);
+      }
+      this.selectedHistoryIds = all;
+    }
+  }
+
+  private exitHistorySelectMode(): void {
+    this.historySelectMode = false;
+    this.selectedHistoryIds = [];
+  }
+
+  // 删除所选（US4）：二次确认后批量删除，先退多选再高→低增量补位动画，交互对齐队列
+  private removeSelectedHistory(): void {
+    const count: number = this.selectedHistoryIds.length;
+    if (count === 0) {
+      return;
+    }
+    AlertDialog.show({
+      title: Constants.DIALOG_REMOVE_SELECTED_TITLE,
+      message: Constants.DIALOG_REMOVE_SELECTED_MSG,
+      autoCancel: true,
+      alignment: DialogAlignment.Center,
+      primaryButton: {
+        value: '删除',
+        fontColor: $r('app.color.danger_red'),
+        action: (): void => {
+          const ids: string[] = this.selectedHistoryIds.slice(0);
+          this.exitHistorySelectMode();
+          this.controller.removeSelectedHistory(ids);
+          this.playHistoryVersion = this.controller.playHistoryVersion;
+          this.getUIContext().animateTo({ duration: Constants.TOKEN_DELETE_ANIM_MS, curve: Curve.EaseOut }, (): void => {
+            const idxList: number[] = [];
+            for (let i = 0; i < this.playHistoryItems.length; i++) {
+              if (ids.indexOf(this.playHistoryItems[i].bvid) >= 0) {
+                idxList.push(i);
+              }
+            }
+            for (let k = idxList.length - 1; k >= 0; k--) {
+              this.playHistoryItems.splice(idxList[k], 1);
+              this.playHistorySource.notifyDataDelete(idxList[k]);
+            }
+            if (this.playHistoryItems.length === 0) {
+              this.exitHistorySelectMode();
+            }
+          });
+        }
+      },
+      secondaryButton: {
+        value: '取消',
+        action: (): void => {
+        }
+      }
+    });
+  }
+
+  // 外链统一跳转（US7）：四链接复用——二次确认后 openLink 拉起系统浏览器，失败 toast
+  private confirmOpenLink(url: string): void {
+    const ctx = getContext(this) as common.UIAbilityContext;
+    AlertDialog.show({
+      title: Constants.DIALOG_OPEN_LINK_TITLE,
+      message: url,
+      autoCancel: true,
+      alignment: DialogAlignment.Center,
+      primaryButton: {
+        value: '打开',
+        fontColor: this.accentColor.value,
+        action: (): void => {
+          const opts: OpenLinkOptions = { appLinkingOnly: false };
+          ctx.openLink(url, opts).catch((error: BusinessError) => {
+            promptAction.showToast({ message: '打开链接失败' });
+          });
+        }
+      },
+      secondaryButton: {
+        value: '取消',
+        action: (): void => {
         }
       }
     });
@@ -956,7 +1078,7 @@ struct SettingsPage {
     .alignItems(VerticalAlign.Top)
   }
 
-  // 「关于」弹窗：应用图标/名称 + 简介 + 核心功能
+  // 「关于」弹窗（v0.4-Part1-ux-fixes US7 重写）：FR-009 确切文案，四链接二次确认跳浏览器
   @Builder
   aboutSheet() {
     Column() {
@@ -1013,7 +1135,7 @@ struct SettingsPage {
             .fontColor(this.textSecondary())
             .margin({ top: Constants.TOKEN_SPACE_XS })
 
-          Text('BiliRadio 是一款 B 站音频播放器，把 B 站视频当作纯音乐来听：支持后台播放、进度记忆、锁屏控制。基于 taotie256 的 BiliMusic（Apache 2.0）开发。')
+          Text('把 B 站视频当播客听的鸿蒙音频应用：只取声音，不亮屏幕。订阅 UP 主、收藏夹、合集、系列，新视频自动标 NEW，一键入队；亦可通过粘贴链接或 BV 号手动添加。')
             .fontSize(Constants.TOKEN_FONT_BODY)
             .fontColor(this.textSecondary())
             .lineHeight(20)
@@ -1034,10 +1156,58 @@ struct SettingsPage {
             .textAlign(TextAlign.Start)
 
           Column({ space: Constants.TOKEN_SPACE_10 }) {
-            this.aboutFeature('订阅收听：UP 主 / 收藏夹 / 合集 / 系列，新集自动标 NEW')
-            this.aboutFeature('队列播放：整源入队、搜索、多选管理')
-            this.aboutFeature('播放控制：倍速、播放模式、睡眠定时、进度续播')
-            this.aboutFeature('外观：深浅色三态 + 六色主题色板')
+            this.aboutFeature('订阅追更：UP 主 / 收藏夹 / 合集 / 系列四类源，新视频自动标 NEW')
+            this.aboutFeature('即点即听：粘贴链接或 BV 号，立即播放音频')
+            this.aboutFeature('随心播控：倍速、随机循环、睡眠定时、断点续播')
+            this.aboutFeature('后台不断：锁屏、控制中心、实况窗都能控制播放')
+            this.aboutFeature('听得讲究：四档音质可选，深浅色主题随心换')
+          }
+          .width('100%')
+          .margin({ top: Constants.TOKEN_SPACE_M })
+
+          Text('关于本项目')
+            .fontSize(Constants.TOKEN_FONT_BODY_L)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(this.textPrimary())
+            .width('100%')
+            .textAlign(TextAlign.Start)
+            .margin({ top: Constants.TOKEN_SPACE_L })
+
+          Text() {
+            Span('代码完全由 AI 生成（Vibecoding 作品），参考开源项目 ')
+              .fontColor(this.textSecondary())
+            Span('BiliMusic')
+              .fontColor(this.accentColor.value)
+              .onClick(() => {
+                this.confirmOpenLink(Constants.LINK_BILIMUSIC_REPO);
+              })
+            Span('（Apache 2.0）、')
+              .fontColor(this.textSecondary())
+            Span('PiliPlus')
+              .fontColor(this.accentColor.value)
+              .onClick(() => {
+                this.confirmOpenLink(Constants.LINK_PILIPLUS_REPO);
+              })
+            Span('（GPL-3.0）开发。个人学习自用作品，与哔哩哔哩官方无关。')
+              .fontColor(this.textSecondary())
+          }
+          .fontSize(Constants.TOKEN_FONT_BODY)
+          .lineHeight(20)
+          .width('100%')
+          .textAlign(TextAlign.Start)
+          .margin({ top: Constants.TOKEN_SPACE_M })
+
+          Text('项目地址')
+            .fontSize(Constants.TOKEN_FONT_BODY_L)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(this.textPrimary())
+            .width('100%')
+            .textAlign(TextAlign.Start)
+            .margin({ top: Constants.TOKEN_SPACE_L })
+
+          Column({ space: Constants.TOKEN_SPACE_10 }) {
+            this.aboutLinkRow('GitCode', Constants.LINK_PROJECT_GITCODE)
+            this.aboutLinkRow('GitHub', Constants.LINK_PROJECT_GITHUB)
           }
           .width('100%')
           .margin({ top: Constants.TOKEN_SPACE_M })
@@ -1048,40 +1218,133 @@ struct SettingsPage {
         .alignItems(HorizontalAlign.Center)
       }
       .width('100%')
-      .height('100%')
+      .layoutWeight(1)
       .scrollBar(BarState.Auto)
       .edgeEffect(EdgeEffect.Spring)
       .align(Alignment.Top)
     }
     .width('100%')
     .height('100%')
-    .backgroundColor($r('app.color.sheet_background'))
+    .backgroundColor($r('app.color.sheet_panel_background'))
     .backdropBlur(20)
+    .border({ width: { top: 1 }, color: $r('app.color.sheet_top_separator') })
   }
 
-  // 播放历史面板（bindSheet 呈现）：最近播放倒序，点击回放，清空需二次确认；
-  // US6：背景与设置页统一（page_background），下拉关闭已被 onWillDismiss 拦截
+  // 关于页项目地址行（US7）：label + URL 一行，点击走统一外链确认
+  @Builder
+  aboutLinkRow(label: string, url: string) {
+    Row({ space: Constants.TOKEN_SPACE_S }) {
+      Text(label)
+        .fontSize(Constants.TOKEN_FONT_BODY)
+        .fontColor(this.textPrimary())
+      Text(url)
+        .fontSize(Constants.TOKEN_FONT_BODY)
+        .fontColor(this.accentColor.value)
+        .layoutWeight(1)
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+        .textAlign(TextAlign.Start)
+    }
+    .width('100%')
+    .onClick(() => {
+      this.confirmOpenLink(url);
+    })
+  }
+
+  // 播放历史面板（GlassSheet 承载）：最近播放倒序，点击回放，清空需二次确认；
+  // 背景由容器提供（sheet_panel_background），关闭经容器动画滑出
   @Builder
   playHistoryPanel() {
     Column() {
-      Row() {
-        Text(`播放历史 (${this.playHistoryItems.length})`)
-          .fontSize(17)
-          .fontWeight(FontWeight.Bold)
-          .fontColor($r('app.color.text_primary'))
-          .layoutWeight(1)
+      Column() {
+        if (!this.historySelectMode) {
+          Row() {
+            Text(`播放历史 (${this.playHistoryItems.length})`)
+              .fontSize(17)
+              .fontWeight(FontWeight.Bold)
+              .fontColor($r('app.color.text_primary'))
+              .layoutWeight(1)
 
-        if (this.playHistoryItems.length > 0) {
-          Button('清空')
-            .height(32)
-            .padding({ left: Constants.TOKEN_SPACE_M, right: Constants.TOKEN_SPACE_M })
-            .backgroundColor($r('app.color.card_background'))
-            .fontColor($r('app.color.danger_red'))
-            .borderRadius(Constants.TOKEN_RADIUS_L)
-            .fontSize(Constants.TOKEN_FONT_BODY_S)
+            if (this.playHistoryItems.length > 0) {
+              Row() {
+                SymbolGlyph($r('sys.symbol.list_checkmark'))
+                  .fontSize(Constants.TOKEN_FONT_18)
+                  .fontColor([$r('app.color.text_primary')])
+              }
+              .width(Constants.GLASS_ICON_BTN_SIZE)
+              .height(Constants.GLASS_ICON_BTN_SIZE)
+              .justifyContent(FlexAlign.Center)
+              .backgroundColor($r('app.color.btn_glass'))
+              .backdropBlur(Constants.GLASS_ICON_BTN_BLUR)
+              .border({ width: Constants.GLASS_ICON_BTN_BORDER, color: $r('app.color.btn_border') })
+              .borderRadius(Constants.TOKEN_RADIUS_18)
+              .onClick(() => {
+                this.historySelectMode = true;
+                this.selectedHistoryIds = [];
+              })
+            }
+          }
+          .width('100%')
+        } else {
+          // 多选操作行（US4，对齐队列）：全选/删除所选(计数)/返回
+          Row() {
+            Row() {
+              SymbolGlyph($r('sys.symbol.checkmark_circle_on_circle'))
+                .fontSize(Constants.TOKEN_FONT_18)
+                .fontColor([this.isAllHistorySelected() ? this.accentColor.value : $r('app.color.text_primary')])
+            }
+            .width(Constants.GLASS_ICON_BTN_SIZE)
+            .height(Constants.GLASS_ICON_BTN_SIZE)
+            .justifyContent(FlexAlign.Center)
+            .backgroundColor($r('app.color.btn_glass'))
+            .backdropBlur(Constants.GLASS_ICON_BTN_BLUR)
+            .border({ width: Constants.GLASS_ICON_BTN_BORDER, color: $r('app.color.btn_border') })
+            .borderRadius(Constants.TOKEN_RADIUS_18)
             .onClick(() => {
-              this.confirmClearPlayHistory();
+              this.toggleHistorySelectAll();
             })
+
+            Blank()
+
+            Row({ space: Constants.TOKEN_SPACE_XS }) {
+              SymbolGlyph($r('sys.symbol.trash_fill'))
+                .fontSize(Constants.TOKEN_FONT_18)
+                .fontColor([$r('app.color.danger_red')])
+              Text(`${this.selectedHistoryIds.length}`)
+                .fontSize(Constants.TOKEN_FONT_BODY_S)
+                .fontColor($r('app.color.danger_red'))
+            }
+            .height(Constants.GLASS_ICON_BTN_SIZE)
+            .padding({ left: Constants.TOKEN_SPACE_10, right: Constants.TOKEN_SPACE_10 })
+            .justifyContent(FlexAlign.Center)
+            .alignItems(VerticalAlign.Center)
+            .backgroundColor($r('app.color.btn_glass'))
+            .backdropBlur(Constants.GLASS_ICON_BTN_BLUR)
+            .border({ width: Constants.GLASS_ICON_BTN_BORDER, color: $r('app.color.btn_border') })
+            .borderRadius(Constants.TOKEN_RADIUS_18)
+            .opacity(this.selectedHistoryIds.length > 0 ? 1 : 0.4)
+            .onClick(() => {
+              this.removeSelectedHistory();
+            })
+
+            Row() {
+              SymbolGlyph($r('sys.symbol.chevron_left'))
+                .fontSize(Constants.TOKEN_FONT_18)
+                .fontColor([$r('app.color.text_primary')])
+            }
+            .width(Constants.GLASS_ICON_BTN_SIZE)
+            .height(Constants.GLASS_ICON_BTN_SIZE)
+            .justifyContent(FlexAlign.Center)
+            .backgroundColor($r('app.color.btn_glass'))
+            .backdropBlur(Constants.GLASS_ICON_BTN_BLUR)
+            .border({ width: Constants.GLASS_ICON_BTN_BORDER, color: $r('app.color.btn_border') })
+            .borderRadius(Constants.TOKEN_RADIUS_18)
+            .margin({ left: Constants.TOKEN_SPACE_S })
+            .onClick(() => {
+              this.exitHistorySelectMode();
+            })
+          }
+          .width('100%')
         }
       }
       .width('100%')
@@ -1103,6 +1366,21 @@ struct SettingsPage {
             LazyForEach(this.playHistorySource, (item: PlayHistoryItem) => {
             ListItem() {
               Row() {
+                if (this.historySelectMode) {
+                  Checkbox()
+                    .select(this.selectedHistoryIds.indexOf(item.bvid) >= 0)
+                    .selectedColor(this.accentColor.value)
+                    .width(Constants.SELECT_CHECKBOX_SIZE)
+                    .height(Constants.SELECT_CHECKBOX_SIZE)
+                    .margin({ right: Constants.TOKEN_SPACE_S })
+                    .onChange((value: boolean) => {
+                      const inList: boolean = this.selectedHistoryIds.indexOf(item.bvid) >= 0;
+                      if (value !== inList) {
+                        this.toggleHistorySelect(item.bvid);
+                      }
+                    })
+                }
+
                 CoverThumb({ cover: item.cover })
 
                 Column() {
@@ -1131,11 +1409,25 @@ struct SettingsPage {
                 }
               })
               .onClick(() => {
-                this.replayHistory(item);
+                if (this.historySelectMode) {
+                  this.toggleHistorySelect(item.bvid);
+                } else {
+                  this.replayHistory(item);
+                }
               })
+              .gesture(
+                LongPressGesture()
+                  .onAction(() => {
+                    if (!this.historySelectMode) {
+                      this.historySelectMode = true;
+                      this.selectedHistoryIds = [item.bvid];
+                    }
+                  })
+              )
             }
-            // 左滑删除（US1 双触发）：SwipeActionItem——点垃圾桶/滑过阈值均进确认弹窗
-            .swipeAction({
+            // 左滑删除（US1 双触发）：SwipeActionItem——点垃圾桶/滑过阈值均进确认弹窗；
+            // 多选态不挂载删除动作（v0.4-Part1-ux-fixes US5），退出多选恢复
+            .swipeAction(this.historySelectMode ? {} : {
               end: {
                 builder: (): void => {
                   this.historyDeleteAction(item);
@@ -1154,10 +1446,9 @@ struct SettingsPage {
         .width('100%')
         .layoutWeight(1)
       }
-    }
-    .width('100%')
-    .height('100%')
-    .backgroundColor($r('app.color.page_background'))
+      }
+      .width('100%')
+      .height('100%')
   }
 
   // 音质档位选择面板（audio-quality-settings）：单 sheet + qualityEditTarget 标记当前编辑项；
@@ -1198,6 +1489,12 @@ struct SettingsPage {
           .fontColor(this.accentColor.value)
           .width('100%')
           .padding({ left: Constants.TOKEN_SPACE_L, right: Constants.TOKEN_SPACE_L, top: Constants.TOKEN_SPACE_S, bottom: Constants.TOKEN_SPACE_L })
+      } else if (BiliSession.getInstance().vipStatus !== 1) {
+        Text('192K 音质需大会员')
+          .fontSize(Constants.TOKEN_FONT_BODY_S)
+          .fontColor(this.accentColor.value)
+          .width('100%')
+          .padding({ left: Constants.TOKEN_SPACE_L, right: Constants.TOKEN_SPACE_L, top: Constants.TOKEN_SPACE_S, bottom: Constants.TOKEN_SPACE_L })
       }
     }
     .width('100%')
@@ -1206,6 +1503,7 @@ struct SettingsPage {
 
   build() {
     NavDestination() {
+      Stack() {
       Column() {
         Row() {
           Row() {
@@ -1241,6 +1539,7 @@ struct SettingsPage {
                   SettingsRow({
                     title: this.loginName,
                     rowIcon: $r('sys.symbol.person'),
+                    avatarUrl: this.avatarUrl,
                     showDivider: true
                   })
                   SettingsRow({
@@ -1284,7 +1583,7 @@ struct SettingsPage {
                 })
                 SettingsRow({
                   title: 'Wi-Fi 默认音质',
-                  valueText: AudioQuality.label(this.wifiQuality),
+                  valueText: AudioQuality.label(AudioQuality.clampTier(this.wifiQuality, this.isLogged, BiliSession.getInstance().vipStatus)),
                   showArrow: true,
                   showDivider: true,
                   rowAction: (): void => {
@@ -1293,7 +1592,7 @@ struct SettingsPage {
                 })
                 SettingsRow({
                   title: '移动网络默认音质',
-                  valueText: AudioQuality.label(this.cellularQuality),
+                  valueText: AudioQuality.label(AudioQuality.clampTier(this.cellularQuality, this.isLogged, BiliSession.getInstance().vipStatus)),
                   showArrow: true,
                   showDivider: true,
                   rowAction: (): void => {
@@ -1302,6 +1601,13 @@ struct SettingsPage {
                 })
                 if (!this.isLogged) {
                   Text('未登录时最高 64K，登录后可用更高音质')
+                    .fontSize(Constants.TOKEN_FONT_BODY_S)
+                    .fontColor(this.accentColor.value)
+                    .width('100%')
+                    .textAlign(TextAlign.Start)
+                    .padding({ left: Constants.TOKEN_SPACE_L, right: Constants.TOKEN_SPACE_L, top: Constants.TOKEN_SPACE_XS, bottom: Constants.TOKEN_SPACE_10 })
+                } else if (BiliSession.getInstance().vipStatus !== 1) {
+                  Text('192K 音质需大会员')
                     .fontSize(Constants.TOKEN_FONT_BODY_S)
                     .fontColor(this.accentColor.value)
                     .width('100%')
@@ -1391,7 +1697,7 @@ struct SettingsPage {
               height: '75%',
               dragBar: true,
               showClose: false,
-              backgroundColor: $r('app.color.page_background'),
+              backgroundColor: Color.Transparent,
               preferType: SheetType.BOTTOM,
               onDisappear: (): void => {
                 this.showAbout = false;
@@ -1419,23 +1725,21 @@ struct SettingsPage {
       .width('100%')
       .height('100%')
       .backgroundColor($r('app.color.page_background'))
-      .bindSheet(this.showPlayHistory.value, this.playHistoryPanel(), {
-        height: '62%',
-        dragBar: true,
-        showClose: false,
-        backgroundColor: $r('app.color.page_background'),
-        preferType: SheetType.BOTTOM,
-        onDisappear: (): void => {
-          this.showPlayHistory.value = false;
-        },
-        onWillDismiss: (dismiss: DismissSheetAction) => {
-          // US6：面板内下拉不关闭（只留蒙层点击/系统返回/清空按钮等其余关闭路径）
-          if (dismiss.reason === DismissReason.SLIDE_DOWN) {
-            return;
+
+      if (this.showPlayHistory.value) {
+        GlassSheet({
+          openState: this.showPlayHistory,
+          panelHeight: '62%',
+          onRegisterClose: (close: (() => void) | undefined): void => {
+            this.historyClose = close;
           }
-          dismiss.dismiss();
+        }) {
+          this.playHistoryPanel()
         }
-      })
+      }
+      }
+      .width('100%')
+      .height('100%')
     }
     .hideTitleBar(true)
     .onWillAppear(() => {
@@ -1459,8 +1763,15 @@ struct SettingsPage {
       this.logCount = Logger.count();
     })
     .onWillDisappear(() => {
+      // v0.4-Part1-ux-fixes US3：帧序列定位日志（调试模式开启时记录 pop 起点→标志翻转→Monitor 动画链路）
+      if (Logger.debugEnabled) {
+        Logger.log('player', 'miniChain popStart', `ts=${Date.now()}`);
+      }
       this.onSettingsPageTimer = setTimeout(() => {
         this.onSettingsPageTimer = -1;
+        if (Logger.debugEnabled) {
+          Logger.log('player', 'miniChain flagFlip', `ts=${Date.now()}`);
+        }
         connectBool(Constants.AS_ON_SETTINGS_PAGE, false).value = false;
       }, Constants.NAV_EXIT_TRANSITION_MS);
     })
@@ -1487,7 +1798,15 @@ struct SettingsPage {
         return true;
       }
       if (this.showPlayHistory.value) {
-        this.showPlayHistory.value = false;
+        if (this.historySelectMode) {
+          this.exitHistorySelectMode();
+          return true;
+        }
+        if (this.historyClose !== undefined) {
+          this.historyClose();
+        } else {
+          this.showPlayHistory.value = false;
+        }
         return true;
       }
       return false;

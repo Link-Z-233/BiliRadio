@@ -4,10 +4,13 @@ import { GripDetector } from '../service/GripDetector';
 
 import { HomePage } from './HomePage';
 import { PlayerOverlay } from './PlayerOverlay';
-import { QueueDrawer } from '../component/QueueDrawer';
+import { GlassSheet } from '../component/GlassSheet';
+import { QueueSheet } from '../component/QueueSheet';
 import { MiniPlayer } from '../component/MiniPlayer';
-import { mediaquery } from '@kit.ArkUI';
+import { mediaquery, promptAction } from '@kit.ArkUI';
 import { Constants } from '../service/Constants';
+import { Logger } from '../service/Logger';
+import { AppStore } from '../service/AppStore';
 import { connectBool, connectNum, BoolState, NumState } from '../service/V2State';
 import { registerQueueClose, dismissOverlaysForBack } from '../service/BackHandler';
 
@@ -62,7 +65,15 @@ struct Index {
         });
       });
     };
-    controller.init();
+    controller.init().then((): void => {
+      // debug 恢复前移冷启动（v0.4-Part1-ux-fixes US10）：AppStore 就绪后恢复 Logger 并提醒，
+      // 修复「不进设置页 debug 不生效」；开启时冷启动 toast 一次
+      const storedDebug: boolean = AppStore.getNumber(Constants.KEY_DEBUG_MODE, 0) === 1;
+      Logger.setDebugMode(storedDebug);
+      if (storedDebug) {
+        promptAction.showToast({ message: '调试模式运行中' });
+      }
+    });
     GripDetector.start();
     // 睡眠定时归零后的提醒弹窗：关闭仅收起弹窗，重置用刚才时长重新倒计时
     SleepTimerController.getInstance().onTimerExpired = (): void => {
@@ -94,12 +105,17 @@ struct Index {
 
   // US6/T022：胶囊显隐条件（浮层展开或设置页在台）翻转时，以属性动画过渡 opacity/translateY；
   // T021 已把 onSettingsPage 置位提前到导航转场开始，胶囊随之即时平滑出现/隐藏
+  // v0.4-Part1-ux-fixes US3：AS_MINI_PLAYER_VISIBLE（消费方底部避让 padding 源）移入动画闭包与 miniHidden 同帧翻转——
+  // 原先闭包外单帧瞬跳使返回首页时列表先跳位、胶囊后突现（「消失-突现」根因）
   @Monitor('showPlayerOverlay.value', 'onSettingsPage.value')
   onMiniVisibilityChanged(): void {
     const hidden: boolean = this.showPlayerOverlay.value || this.onSettingsPage.value;
-    connectBool(Constants.AS_MINI_PLAYER_VISIBLE, true).value = !hidden;
-    this.getUIContext().animateTo({ duration: 250, curve: Curve.EaseOut }, (): void => {
+    if (Logger.debugEnabled) {
+      Logger.log('player', 'miniChain monitor', `hidden=${hidden} ts=${Date.now()}`);
+    }
+    this.getUIContext().animateTo({ duration: Constants.MINI_VISIBILITY_ANIM_MS, curve: Curve.EaseOut }, (): void => {
       this.miniHidden = hidden;
+      connectBool(Constants.AS_MINI_PLAYER_VISIBLE, true).value = !hidden;
     });
   }
 
@@ -176,11 +192,15 @@ struct Index {
       .translate({ y: this.miniHidden ? 24 : 0 })
       .hitTestBehavior(this.miniHidden ? HitTestMode.BLOCK_DESCENDANTS : HitTestMode.Default)
 
-      // 队列抽屉：仅内容层渲染；播放页展开时改由 PlayerOverlay 层渲染，避免被封面图层遮挡
+      // 队列浮层：仅内容层渲染；播放页展开时改由 PlayerOverlay 层渲染，避免被封面图层遮挡
       if (this.showQueueSheet.value && !this.showPlayerOverlay.value) {
-        QueueDrawer({
+        GlassSheet({
+          openState: this.showQueueSheet,
+          panelHeight: '65%',
           onRegisterClose: registerQueueClose
-        })
+        }) {
+          QueueSheet()
+        }
       }
 
       // 全屏播放层（KI-5 方案B）：API 24 上 bindContentCover(ModalPage) 挂载后渲染管线即断开
