@@ -1,5 +1,5 @@
 import { AudioPlayer } from './AudioPlayer';
-import { BiliService } from './BiliService';
+import { BiliService, VideoDetail } from './BiliService';
 import { BiliSession } from './BiliSession';
 import { SecureStore } from './SecureStore';
 import { AppStore, PlaylistSnapshot } from './AppStore';
@@ -363,7 +363,7 @@ export class PlayerController {
       if (this.duration > 0 && this.currentIndex >= 0 && this.currentIndex < this.playlist.length) {
         const item: BiliVideo = this.playlist[this.currentIndex];
         if (item.duration <= 0) {
-          this.mediaSession.updateTrack(item.bvid, item.title, this.duration,
+          this.mediaSession.updateTrack(BiliVideo.itemKeyOf(item.bvid, item.page), item.title, this.duration,
             item.cover, item.ownerName, true);
         }
       }
@@ -544,11 +544,11 @@ export class PlayerController {
   }
 
   async loadPlaylistAndPlay(items: BiliVideo[], startIndex: number): Promise<EnqueueResult> {
-    // 追加去重：过滤掉 bvid 已在歌单中的项，避免重复
+    // 追加去重：按复合键（bvid+page，占位 0≡1）过滤掉已在歌单中的项，避免重复
     const toAdd: BiliVideo[] = [];
     let skipped: number = 0;
     for (let i = 0; i < items.length; i++) {
-      if (this.indexOfBvid(items[i].bvid) >= 0) {
+      if (this.indexOfItem(items[i].bvid, items[i].page) >= 0) {
         skipped++;
       } else {
         toAdd.push(items[i]);
@@ -594,11 +594,12 @@ export class PlayerController {
     return toAdd.length > 0 ? EnqueueResult.APPENDED : EnqueueResult.DUPLICATE;
   }
 
-  // 续播起点查询（plan R4 契约）：条目存在且 progress>0 且 ≠-1 且（duration>0 时
+  // 续播起点查询（plan R4 契约，复合键分P 粒度）：条目存在且 progress>0 且 ≠-1 且（duration>0 时
   // progress < duration×PLAY_COMPLETE_RATIO）→ progress×1000；否则 0。纯查询，无副作用
-  getResumeMsForBvid(bvid: string): number {
+  getResumeMsFor(bvid: string, page: number): number {
+    const key: string = BiliVideo.itemKeyOf(bvid, page);
     for (let i = 0; i < this.playHistory.length; i++) {
-      if (this.playHistory[i].bvid === bvid) {
+      if (BiliVideo.itemKeyOf(this.playHistory[i].bvid, this.playHistory[i].page) === key) {
         const entry: PlayHistoryItem = this.playHistory[i];
         if (entry.progress > 0 && entry.progress !== -1 &&
           (entry.duration <= 0 || entry.progress < entry.duration * Constants.PLAY_COMPLETE_RATIO)) {
@@ -645,7 +646,7 @@ export class PlayerController {
       }
     }
     this.currentIndex = index;
-    const item: BiliVideo = this.playlist[index];
+    let item: BiliVideo = this.playlist[index];
     // US2：切剧入口初始化——重置秒级节流计数并取消挂起的 seekBy 防抖，
     // 杜绝上一集残留的广播状态导致新剧集进度条冻结
     this.lastEmittedSec = -1;
@@ -663,7 +664,7 @@ export class PlayerController {
     // seekMs>0 的换音质保进度（setQualityTier resumePos）与全局断点恢复路径零变化
     let effectiveSeekMs: number = seekMs;
     if (seekMs <= 0) {
-      effectiveSeekMs = this.getResumeMsForBvid(item.bvid);
+      effectiveSeekMs = this.getResumeMsFor(item.bvid, item.page);
       if (effectiveSeekMs > 0) {
         Logger.log('player', 'resume from history', `bvid=${item.bvid} ms=${effectiveSeekMs}`);
       }
@@ -683,24 +684,39 @@ export class PlayerController {
     this.loadToken++;
     const token: number = this.loadToken;
     try {
-      // 流式边下边播（US2）：现取直链（不持久化），缓冲态文案取代整段下载百分比；
-      // 视频信息只拉一次——先回填元数据拿到 cid，再按网络默认档解析音轨（audio-quality-settings FR-002）
+      // 形态分叉（plan D3）：形态 A（page≥1 && cid>0，入队展开已回填）跳过 view 拉取直接取流——
+      // 修「永远只播 P1」根因；形态 B（占位）拉 view：多P 就地展开（D8）后播 P1，单P 直通回填
       this.statusMsg = '正在缓冲...';
       this.emitUi();
-      const video: BiliVideo = await BiliService.fetchVideoInfo(item.bvid);
-      if (token !== this.loadToken) {
-        return;
+      let cid: number = 0;
+      if (item.page >= 1 && item.cid > 0) {
+        cid = item.cid;
+      } else {
+        const detail: VideoDetail = await BiliService.fetchVideoDetail(item.bvid);
+        if (token !== this.loadToken) {
+          return;
+        }
+        if (detail.parts.length > 1) {
+          this.expandPlaceholderInPlace(index, detail);
+          item = this.playlist[this.currentIndex];
+          if (item.duration > 0) {
+            this.duration = item.duration * 1000;
+          }
+          this.emitUi();
+        } else {
+          this.applyTrackMeta(item, detail.video);
+        }
+        cid = item.cid;
       }
-      this.applyTrackMeta(item, video);
       const tier: QualityTier = await this.readDefaultTierForNetwork();
       if (token !== this.loadToken) {
         return;
       }
-      const result: ResolvedAudio = await BiliService.resolveAudioTrack(item.bvid, video.cid, tier);
+      const result: ResolvedAudio = await BiliService.resolveAudioTrack(item.bvid, cid, tier);
       if (token !== this.loadToken) {
         return;
       }
-      this.currentCid = video.cid;
+      this.currentCid = cid;
       this.availableTracks = result.tracks;
       this.currentQualityCode = result.id;
       this.currentTrackSource = result.source;
@@ -712,7 +728,7 @@ export class PlayerController {
       if (token !== this.loadToken) {
         return;
       }
-      this.mediaSession.updateTrack(item.bvid, item.title,
+      this.mediaSession.updateTrack(BiliVideo.itemKeyOf(item.bvid, item.page), item.title,
         item.duration > 0 ? item.duration * 1000 : 0, item.cover, item.ownerName);
       AppStore.savePlaylistFile(this.playlist, this.currentIndex, 0, this.currentQualityCode);
     } catch (err) {
@@ -741,20 +757,25 @@ export class PlayerController {
   private shuffleHistory: string[] = [];
   private forwardHistory: string[] = [];
 
-  private indexOfBvid(bvid: string): number {
+  // 复合键检索（D6：键经 BiliVideo.itemKeyOf 合成，占位 page 0≡1 归一化比较；禁各处手拼）
+  private indexOfKey(key: string): number {
     for (let i = 0; i < this.playlist.length; i++) {
-      if (this.playlist[i].bvid === bvid) {
+      if (BiliVideo.itemKeyOf(this.playlist[i].bvid, this.playlist[i].page) === key) {
         return i;
       }
     }
     return -1;
   }
 
+  private indexOfItem(bvid: string, page: number): number {
+    return this.indexOfKey(BiliVideo.itemKeyOf(bvid, page));
+  }
+
   private pushShuffleHistory(): void {
     if (this.currentIndex >= 0 && this.currentIndex < this.playlist.length) {
-      const bvid: string = this.playlist[this.currentIndex].bvid;
-      if (bvid !== '') {
-        this.shuffleHistory.push(bvid);
+      const item: BiliVideo = this.playlist[this.currentIndex];
+      if (item.bvid !== '') {
+        this.shuffleHistory.push(BiliVideo.itemKeyOf(item.bvid, item.page));
         if (this.shuffleHistory.length > Constants.HISTORY_MAX) {
           this.shuffleHistory.shift();
         }
@@ -764,9 +785,9 @@ export class PlayerController {
 
   private pushForwardHistory(): void {
     if (this.currentIndex >= 0 && this.currentIndex < this.playlist.length) {
-      const bvid: string = this.playlist[this.currentIndex].bvid;
-      if (bvid !== '') {
-        this.forwardHistory.push(bvid);
+      const item: BiliVideo = this.playlist[this.currentIndex];
+      if (item.bvid !== '') {
+        this.forwardHistory.push(BiliVideo.itemKeyOf(item.bvid, item.page));
         if (this.forwardHistory.length > Constants.HISTORY_MAX) {
           this.forwardHistory.shift();
         }
@@ -775,14 +796,15 @@ export class PlayerController {
   }
 
   private takeShufflePrevIndex(): number {
-    const currentBvid: string = this.currentIndex >= 0 && this.currentIndex < this.playlist.length
-      ? this.playlist[this.currentIndex].bvid : '';
+    const currentKey: string = this.currentIndex >= 0 && this.currentIndex < this.playlist.length
+      ? BiliVideo.itemKeyOf(this.playlist[this.currentIndex].bvid, this.playlist[this.currentIndex].page)
+      : '';
     while (this.shuffleHistory.length > 0) {
-      const bvid: string = this.shuffleHistory.pop() ?? '';
-      if (bvid === '' || bvid === currentBvid) {
+      const key: string = this.shuffleHistory.pop() ?? '';
+      if (key === '' || key === currentKey) {
         continue;
       }
-      const idx: number = this.indexOfBvid(bvid);
+      const idx: number = this.indexOfKey(key);
       if (idx >= 0) {
         return idx;
       }
@@ -792,11 +814,11 @@ export class PlayerController {
 
   private takeForwardIndex(): number {
     while (this.forwardHistory.length > 0) {
-      const bvid: string = this.forwardHistory.pop() ?? '';
-      if (bvid === '') {
+      const key: string = this.forwardHistory.pop() ?? '';
+      if (key === '') {
         continue;
       }
-      const idx: number = this.indexOfBvid(bvid);
+      const idx: number = this.indexOfKey(key);
       if (idx >= 0) {
         return idx;
       }
@@ -1136,7 +1158,7 @@ export class PlayerController {
       this.emitUi();
       return;
     }
-    const idx: number = this.indexOfBvid(video.bvid);
+    const idx: number = this.indexOfItem(video.bvid, video.page);
     if (idx >= 0) {
       await this.playIndex(idx, 0);
       return;
@@ -1154,9 +1176,10 @@ export class PlayerController {
     await this.playIndex(insertIdx, 0);
   }
 
-  // 单视频入队统一入口（queue-redesign US6）：取详情后委托 loadPlaylistAndPlay——
-  // 队列空则起播（STARTED），非空则追加不打断（APPENDED），重复返回 DUPLICATE
-  async addSingleVideo(bvid: string): Promise<EnqueueResult> {
+  // 单视频入队统一入口（queue-redesign US6）：取分P 详情后委托 loadPlaylistAndPlay——
+  // 队列空则起播（STARTED），非空则追加不打断（APPENDED），重复返回 DUPLICATE；
+  // page=0 全部分P 展开（US1），page≥1 只入队该分P，越界兜底 P1（US2）
+  async addSingleVideo(bvid: string, page: number = 0): Promise<EnqueueResult> {
     const trimmed: string = bvid.trim();
     if (trimmed === '') {
       this.statusMsg = '请输入BV号';
@@ -1166,14 +1189,40 @@ export class PlayerController {
     this.statusMsg = '正在解析...';
     this.emitUi();
     try {
-      const video: BiliVideo = await BiliService.fetchVideoInfo(trimmed);
-      return await this.loadPlaylistAndPlay([video], 0);
+      const detail: VideoDetail = await BiliService.fetchVideoDetail(trimmed);
+      if (page <= 0) {
+        return await this.loadPlaylistAndPlay(detail.parts, 0);
+      }
+      let target: BiliVideo = detail.parts[0];
+      for (let i = 0; i < detail.parts.length; i++) {
+        if (detail.parts[i].page === page) {
+          target = detail.parts[i];
+          break;
+        }
+      }
+      return await this.loadPlaylistAndPlay([target], 0);
     } catch (err) {
       const error = err as BusinessError;
       this.statusMsg = `解析失败: ${error.message}`;
       this.emitUi();
       return EnqueueResult.FAILED;
     }
+  }
+
+  // 形态 B 占位条目起播时就地展开（plan D8）：P1 原位替换本条目（currentIndex 不变），
+  // P2..Pn 按复合键跳过队列已有同页条目后插入其后，展开复用同一份 view 响应
+  private expandPlaceholderInPlace(index: number, detail: VideoDetail): void {
+    const parts: BiliVideo[] = detail.parts;
+    this.playlist.splice(index, 1, parts[0]);
+    let insertAt: number = index + 1;
+    for (let i = 1; i < parts.length; i++) {
+      if (this.indexOfItem(parts[i].bvid, parts[i].page) < 0) {
+        this.playlist.splice(insertAt, 0, parts[i]);
+        insertAt++;
+      }
+    }
+    this.playlistVersion++;
+    AppStore.savePlaylistFile(this.playlist, this.currentIndex, this.currentTime, this.currentQualityCode);
   }
 
   async unfavoriteCurrent(): Promise<void> {
@@ -1246,14 +1295,18 @@ export class PlayerController {
     return PlayHistoryItem.SOURCE_LOCAL;
   }
 
-  // 按历史条目主键检索（bvid 全局至多一条，upsert 保证）
-  private indexOfPlayHistory(bvid: string): number {
+  // 按历史条目复合键检索（同 (bvid,page) 至多一条，upsert 保证）
+  private indexOfPlayHistoryKey(key: string): number {
     for (let i = 0; i < this.playHistory.length; i++) {
-      if (this.playHistory[i].bvid === bvid) {
+      if (BiliVideo.itemKeyOf(this.playHistory[i].bvid, this.playHistory[i].page) === key) {
         return i;
       }
     }
     return -1;
+  }
+
+  private indexOfPlayHistory(bvid: string, page: number): number {
+    return this.indexOfPlayHistoryKey(BiliVideo.itemKeyOf(bvid, page));
   }
 
   // 历史文件异步写盘：沿用既有 setTimeout(0) 模式，进度节拍/切歌/完播/删除共用，不阻塞调用线程
@@ -1293,11 +1346,11 @@ export class PlayerController {
     if (this.currentIndex < 0 || this.currentIndex >= this.playlist.length) {
       return;
     }
-    const bvid: string = this.playlist[this.currentIndex].bvid;
-    if (bvid === '') {
+    const current: BiliVideo = this.playlist[this.currentIndex];
+    if (current.bvid === '') {
       return;
     }
-    const idx: number = this.indexOfPlayHistory(bvid);
+    const idx: number = this.indexOfPlayHistory(current.bvid, current.page);
     if (idx < 0) {
       return;
     }
@@ -1316,8 +1369,8 @@ export class PlayerController {
     if (this.currentIndex < 0 || this.currentIndex >= this.playlist.length) {
       return;
     }
-    const bvid: string = this.playlist[this.currentIndex].bvid;
-    const idx: number = this.indexOfPlayHistory(bvid);
+    const current: BiliVideo = this.playlist[this.currentIndex];
+    const idx: number = this.indexOfPlayHistory(current.bvid, current.page);
     if (idx < 0) {
       return;
     }
@@ -1328,24 +1381,24 @@ export class PlayerController {
     this.backfillHistoryMeta(entry);
     entry.progress = -1;
     this.playHistoryVersion++;
-    Logger.log('player', 'history complete', `bvid=${bvid}`);
+    Logger.log('player', 'history complete', `bvid=${current.bvid} page=${current.page}`);
     this.savePlayHistoryFileAsync();
   }
 
-  // 播放历史 upsert（plan R3，play-history-progress 最关键修正）：
-  // 命中同 bvid 旧条目时**保留** progress/duration/cid（续播进度不被清零），仅刷新
+  // 播放历史 upsert（plan R3，play-history-progress 最关键修正；复合键分P 粒度）：
+  // 命中同 (bvid,page) 旧条目时**保留** progress/duration/cid（续播进度不被清零），仅刷新
   // viewAt(秒)/title/cover/ownerName/sourceType 后置顶；未命中才新建（progress=0）。
   // 重播已听完条目时 -1 → 0（不变式①：-1 仅由完播写入，重播 upsert 重置）。
   // 仍仅在 playing 状态（AVPlayer 真实出声）触发
   private recordOnPlaying(video: BiliVideo): void {
     try {
+      const key: string = BiliVideo.itemKeyOf(video.bvid, video.page);
       let existing: PlayHistoryItem | undefined = undefined;
       for (let i = this.playHistory.length - 1; i >= 0; i--) {
-        if (this.playHistory[i].bvid === video.bvid) {
-          if (existing === undefined) {
-            existing = this.playHistory[i];
-          }
+        if (BiliVideo.itemKeyOf(this.playHistory[i].bvid, this.playHistory[i].page) === key) {
+          existing = this.playHistory[i];
           this.playHistory.splice(i, 1);
+          break;
         }
       }
       let item: PlayHistoryItem;
@@ -1355,6 +1408,11 @@ export class PlayerController {
         existing.cover = video.cover;
         existing.sourceType = this.resolveSourceType(video);
         existing.viewAt = Math.floor(Date.now() / 1000);
+        existing.videoTitle = video.videoTitle !== '' ? video.videoTitle : video.title;
+        existing.partTitle = video.partTitle;
+        if (video.page > 0) {
+          existing.page = video.page;
+        }
         if (video.cid > 0) {
           existing.cid = video.cid;
         }
@@ -1393,27 +1451,28 @@ export class PlayerController {
     this.emitUi();
   }
 
-  // 单条删除（US3 FR-009）：按 bvid 移除一条历史，异步写盘；未命中静默。
+  // 单条删除（US3 FR-009，复合键分P 粒度）：按 (bvid,page) 移除一条历史，异步写盘；未命中静默。
   // 面板条目自带左滑刷新，不在此处 emitUi（FR-014：clearPlayHistory 行为保持不变）
-  removePlayHistoryItem(bvid: string): void {
-    const idx: number = this.indexOfPlayHistory(bvid);
+  removePlayHistoryItem(bvid: string, page: number): void {
+    const idx: number = this.indexOfPlayHistory(bvid, page);
     if (idx < 0) {
       return;
     }
     this.playHistory.splice(idx, 1);
     this.playHistoryVersion++;
-    Logger.log('player', 'history remove', `bvid=${bvid} left=${this.playHistory.length}`);
+    Logger.log('player', 'history remove', `bvid=${bvid} page=${page} left=${this.playHistory.length}`);
     this.savePlayHistoryFileAsync();
   }
 
-  // 批量删除所选历史（v0.4-Part1-ux-fixes US4）：多选删除所用，单次版本计数+单次异步写盘；未命中静默
-  removeSelectedHistory(bvids: string[]): void {
-    if (bvids.length === 0) {
+  // 批量删除所选历史（v0.4-Part1-ux-fixes US4）：多选删除所用，入参为复合键（bvid:page，经
+  // BiliVideo.itemKeyOf 合成），单次版本计数+单次异步写盘；未命中静默
+  removeSelectedHistory(keys: string[]): void {
+    if (keys.length === 0) {
       return;
     }
     let removed: number = 0;
-    for (let k = 0; k < bvids.length; k++) {
-      const idx: number = this.indexOfPlayHistory(bvids[k]);
+    for (let k = 0; k < keys.length; k++) {
+      const idx: number = this.indexOfPlayHistoryKey(keys[k]);
       if (idx >= 0) {
         this.playHistory.splice(idx, 1);
         removed++;
@@ -1427,19 +1486,24 @@ export class PlayerController {
     this.savePlayHistoryFileAsync();
   }
 
-  async removeSelectedFromPlaylist(bvids: string[]): Promise<void> {    if (bvids.length === 0) {
+  // 入参为复合键（bvid:page，经 BiliVideo.itemKeyOf 合成）
+  async removeSelectedFromPlaylist(keys: string[]): Promise<void> {    if (keys.length === 0) {
       return;
     }
+    const currentKey: string = this.currentIndex >= 0 && this.currentIndex < this.playlist.length
+      ? BiliVideo.itemKeyOf(this.playlist[this.currentIndex].bvid, this.playlist[this.currentIndex].page)
+      : '';
     const removingCurrent: boolean = this.currentIndex >= 0 &&
       this.playlist.length > 0 &&
-      bvids.indexOf(this.playlist[this.currentIndex].bvid) >= 0;
+      keys.indexOf(currentKey) >= 0;
     let removedBeforeCurrent: number = 0;
     for (let i = 0; i < this.currentIndex && i < this.playlist.length; i++) {
-      if (bvids.indexOf(this.playlist[i].bvid) >= 0) {
+      if (keys.indexOf(BiliVideo.itemKeyOf(this.playlist[i].bvid, this.playlist[i].page)) >= 0) {
         removedBeforeCurrent++;
       }
     }
-    const kept: BiliVideo[] = this.playlist.filter((v: BiliVideo): boolean => bvids.indexOf(v.bvid) < 0);
+    const kept: BiliVideo[] = this.playlist.filter((v: BiliVideo): boolean =>
+      keys.indexOf(BiliVideo.itemKeyOf(v.bvid, v.page)) < 0);
     const removedCount: number = this.playlist.length - kept.length;
     if (removedCount === 0) {
       return;
@@ -1475,7 +1539,7 @@ export class PlayerController {
   }
 
   // 清空队列编排（R3 US4）：调用即停声（准备期同时收意图），CLEAR_QUEUE_DATA_DELAY_MS 后
-  // 经 removeSelectedFromPlaylist(全量 bvid) 复用清数据/停播/持久化链路
+  // 经 removeSelectedFromPlaylist(全量复合键) 复用清数据/停播/持久化链路
   clearAllWithExitDelay(): void {
     this.player.pause();
     if (this.isPreparing) {
@@ -1484,7 +1548,7 @@ export class PlayerController {
     setTimeout((): void => {
       const all: string[] = [];
       for (let i = 0; i < this.playlist.length; i++) {
-        all.push(this.playlist[i].bvid);
+        all.push(BiliVideo.itemKeyOf(this.playlist[i].bvid, this.playlist[i].page));
       }
       this.removeSelectedFromPlaylist(all).catch((): void => {});
     }, Constants.CLEAR_QUEUE_DATA_DELAY_MS);
@@ -1502,6 +1566,19 @@ export class PlayerController {
     await this.removeSelectedFromPlaylist(toRemove);
   }
 
+  // 该 bvid 全部分P 历史中 viewAt 最新的一条（US6 归并行状态源 / US7 组头点击两段判定①）；
+  // 纯只读查询，无写入无广播；无历史返回 null
+  latestHistoryOf(bvid: string): PlayHistoryItem | null {
+    let latest: PlayHistoryItem | null = null;
+    for (let i = 0; i < this.playHistory.length; i++) {
+      const entry: PlayHistoryItem = this.playHistory[i];
+      if (entry.bvid === bvid && (latest === null || entry.viewAt > latest.viewAt)) {
+        latest = entry;
+      }
+    }
+    return latest;
+  }
+
   // 已听完（playedSet 语义）：内存播放历史命中 bvid 且 progress===-1（markCurrentHistoryCompleted 写入）
   isPlayed(bvid: string): boolean {
     for (let i = 0; i < this.playHistory.length; i++) {
@@ -1512,15 +1589,17 @@ export class PlayerController {
     return false;
   }
 
-  // 可清理集合：playlist 中已听完且非当前播放的 bvid（当前条目永远保留，spec FR-003）
+  // 可清理集合：playlist 中已听完且非当前播放的复合键（当前条目永远保留，spec FR-003）
   private collectPlayedRemovable(): string[] {
-    const currentBvid: string = this.currentIndex >= 0 && this.currentIndex < this.playlist.length
-      ? this.playlist[this.currentIndex].bvid : '';
+    const currentKey: string = this.currentIndex >= 0 && this.currentIndex < this.playlist.length
+      ? BiliVideo.itemKeyOf(this.playlist[this.currentIndex].bvid, this.playlist[this.currentIndex].page)
+      : '';
     const result: string[] = [];
     for (let i = 0; i < this.playlist.length; i++) {
-      const bvid: string = this.playlist[i].bvid;
-      if (bvid !== currentBvid && this.isPlayed(bvid)) {
-        result.push(bvid);
+      const item: BiliVideo = this.playlist[i];
+      const key: string = BiliVideo.itemKeyOf(item.bvid, item.page);
+      if (key !== currentKey && this.isPlayed(item.bvid)) {
+        result.push(key);
       }
     }
     return result;

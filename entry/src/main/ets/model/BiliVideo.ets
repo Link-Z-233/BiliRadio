@@ -14,6 +14,9 @@ export class BiliVideo {
   @Trace view: number = 0;
   @Trace pubdate: number = 0;
   @Trace desc: string = '';
+  @Trace page: number = 0;
+  @Trace partTitle: string = '';
+  @Trace videoTitle: string = '';
 
   static create(bvid: string, aid: number, cid: number, title: string, cover: string, duration: number): BiliVideo {
     const v = new BiliVideo();
@@ -42,6 +45,9 @@ export class BiliVideo {
       'view': this.view,
       'pubdate': this.pubdate,
       'desc': this.desc,
+      'page': this.page,
+      'partTitle': this.partTitle,
+      'videoTitle': this.videoTitle,
     };
     return rec;
   }
@@ -90,6 +96,21 @@ export class BiliVideo {
     if (rec['desc'] !== undefined) {
       v.desc = rec['desc'] as string;
     }
+    if (rec['page'] !== undefined) {
+      v.page = rec['page'] as number;
+    }
+    if (rec['partTitle'] !== undefined) {
+      v.partTitle = rec['partTitle'] as string;
+    }
+    if (rec['videoTitle'] !== undefined) {
+      v.videoTitle = rec['videoTitle'] as string;
+    }
+    if (v.videoTitle === '') {
+      v.videoTitle = v.title;
+    }
+    if (v.page <= 0 && v.cid > 0) {
+      v.page = 1;
+    }
     return v;
   }
 
@@ -117,5 +138,20 @@ export class BiliVideo {
 
   sourceLabel(): string {
     return BiliVideo.sourceLabelOf(this.sourceType());
+  }
+
+  static composePartTitle(videoTitle: string, page: number, partTitle: string, isMultiPart: boolean): string {
+    if (!isMultiPart) {
+      return videoTitle;
+    }
+    if (partTitle !== '' && partTitle !== videoTitle) {
+      return `${videoTitle} · P${page} ${partTitle}`;
+    }
+    return `${videoTitle} · P${page}`;
+  }
+
+  static itemKeyOf(bvid: string, page: number): string {
+    const normalized = page > 0 ? page : 1;
+    return `${bvid}:${normalized}`;
   }
 }

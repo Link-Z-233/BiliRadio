@@ -3,7 +3,7 @@ import { BusinessError } from '@kit.BasicServicesKit';
 import { Subscription } from '../model/Subscription';
 import { BiliVideo } from '../model/BiliVideo';
 import { SubscriptionStore } from '../service/SubscriptionStore';
-import { BiliService } from '../service/BiliService';
+import { BiliService, VideoDetail } from '../service/BiliService';
 import { AppStore } from '../service/AppStore';
 import { PlayHistoryItem } from '../model/PlayHistoryItem';
 import { PlayerController, EnqueueResult } from '../service/PlayerController';
@@ -296,15 +296,26 @@ struct SourcePage {
     this.controller.loadPlaylistAndPlay(this.episodes, 0);
   }
 
-  private playEpisode(index: number): void {
-    // US6：点单集仅把该集作为队列播放（与「全部播放」整季连播区分），避免误触发整季连播；
-    // queue-redesign：入队结果 toast 分型反馈（已加入队列/开始播放/已在队列中）
-    this.controller.loadPlaylistAndPlay([this.episodes[index]], 0)
+  // 入队 + toast 分型反馈（queue-redesign：已加入队列/开始播放/已在队列中）
+  private enqueueAndToast(items: BiliVideo[]): void {
+    this.controller.loadPlaylistAndPlay(items, 0)
       .then((result: EnqueueResult): void => {
         promptAction.showToast({ message: PlayerController.enqueueToast(result) });
       })
       .catch((): void => {
       });
+  }
+
+  private playEpisode(index: number): void {
+    // US6：点单集仅把该集作为队列播放（与「全部播放」整季连播区分），避免误触发整季连播；
+    // 多P 视频经 fetchVideoDetail 展开全部分P 入队（追加不打断，列表行保持视频级展示），
+    // 拉取失败回退占位条目（起播时惰性展开兜底）
+    const episode: BiliVideo = this.episodes[index];
+    BiliService.fetchVideoDetail(episode.bvid).then((detail: VideoDetail): void => {
+      this.enqueueAndToast(detail.parts);
+    }).catch((): void => {
+      this.enqueueAndToast([episode]);
+    });
   }
 
   private unsubscribe(): void {

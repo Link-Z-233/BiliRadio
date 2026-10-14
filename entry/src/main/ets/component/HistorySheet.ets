@@ -7,17 +7,24 @@ import { CoverThumb } from './CoverThumb';
 import { promptAction } from '@kit.ArkUI';
 import { BusinessError } from '@kit.BasicServicesKit';
 
+// 历史归并行（US6 纯展示层派生视图，不落盘）：bvid 聚合为一行，
+// latest = 该视频 viewAt 最新的分P 历史（行状态源，点行续播目标）
+class HistoryRow {
+  bvid: string = '';
+  latest: PlayHistoryItem = new PlayHistoryItem();
+}
+
 // 播放历史懒加载数据源：LazyForEach 只构建可视区域内的列表项，避免长历史一次性创建全部封面
 class HistoryDataSource implements IDataSource {
-  private items: PlayHistoryItem[] = [];
+  private rows: HistoryRow[] = [];
   private listeners: DataChangeListener[] = [];
 
   totalCount(): number {
-    return this.items.length;
+    return this.rows.length;
   }
 
-  getData(index: number): PlayHistoryItem {
-    return this.items[index];
+  getData(index: number): HistoryRow {
+    return this.rows[index];
   }
 
   registerDataChangeListener(listener: DataChangeListener): void {
@@ -33,32 +40,33 @@ class HistoryDataSource implements IDataSource {
     }
   }
 
-  setItems(next: PlayHistoryItem[]): void {
-    // 入参可能是 @State 数组的代理对象（重新赋值后代理会更换），拷贝成普通数组避免渲染源失联
-    this.items = next.slice(0);
+  setItems(next: HistoryRow[]): void {
+    // 入参可能是 @Local 数组的代理对象（重新赋值后代理会更换），拷贝成普通数组避免渲染源失联
+    this.rows = next.slice(0);
     for (let i = 0; i < this.listeners.length; i++) {
       this.listeners[i].onDataReloaded();
     }
   }
 
-  // 单条删除通知（US3 FR-009）：LazyForEach 增量删除指定下标；
+  // 归并行删除通知（US3 FR-009）：LazyForEach 增量删除指定下标；
   // 按 DataChangeListener 契约，先从自身数据删除对应下标再通知监听者
   notifyDataDelete(index: number): void {
-    if (index < 0 || index >= this.items.length) {
+    if (index < 0 || index >= this.rows.length) {
       return;
     }
-    this.items.splice(index, 1);
+    this.rows.splice(index, 1);
     for (let i = 0; i < this.listeners.length; i++) {
       this.listeners[i].onDataDelete(index);
     }
   }
 }
 
-// 播放历史面板（Index L4 独立层，GlassSheet 承载）：最近播放倒序，点击仅起播不收面板，
-// 左滑单删/多选批删/清空需二次确认；背景由容器提供（sheet_panel_background），关闭经容器动画滑出
+// 播放历史面板（Index L4 独立层，GlassSheet 承载）：US6 按视频归并——一视频一行（主行 videoTitle，
+// 副行「相对时间 · 看到Pn · 剩余/已听完」），点行续播最新分P，多选/左滑删除均 bvid 级；
+// 点击仅起播不收面板，清空需二次确认；背景由容器提供（sheet_panel_background），关闭经容器动画滑出
 @ComponentV2
 export struct HistorySheet {
-  @Local playHistoryItems: PlayHistoryItem[] = [];
+  @Local historyRows: HistoryRow[] = [];
   @Local playHistoryVersion: number = -1;
   // 多选管理：面板关闭/退出多选时清空，交互对齐队列
   @Local selectMode: BoolState = connectBool(Constants.AS_HISTORY_SELECT_MODE, false);
@@ -87,11 +95,33 @@ export struct HistorySheet {
     this.unsubscribePlayer = (): void => {};
   }
 
+  // US6 归并派生（D11）：按 bvid 聚合、viewAt 最新分P 为代表、按代表 viewAt 倒序；
+  // 纯展示层派生（FR-015），controller 存储仍分P 粒度，不落盘
+  private buildMergedRows(items: PlayHistoryItem[]): HistoryRow[] {
+    const rows: HistoryRow[] = [];
+    const byBvid: Map<string, HistoryRow> = new Map<string, HistoryRow>();
+    for (let i = 0; i < items.length; i++) {
+      const item: PlayHistoryItem = items[i];
+      let row: HistoryRow | undefined = byBvid.get(item.bvid);
+      if (row === undefined) {
+        row = new HistoryRow();
+        row.bvid = item.bvid;
+        row.latest = item;
+        byBvid.set(item.bvid, row);
+        rows.push(row);
+      } else if (item.viewAt > row.latest.viewAt) {
+        row.latest = item;
+      }
+    }
+    rows.sort((a: HistoryRow, b: HistoryRow): number => b.latest.viewAt - a.latest.viewAt);
+    return rows;
+  }
+
   private syncFrom(c: PlayerController): void {
     if (this.playHistoryVersion !== c.playHistoryVersion) {
       this.playHistoryVersion = c.playHistoryVersion;
-      this.playHistoryItems = c.playHistory.slice(0);
-      this.playHistorySource.setItems(this.playHistoryItems);
+      this.historyRows = this.buildMergedRows(c.playHistory);
+      this.playHistorySource.setItems(this.historyRows);
     }
   }
 
@@ -146,25 +176,37 @@ export struct HistorySheet {
     return `${minStr}:${secStr}`;
   }
 
-  // 历史条目第二行文案：已听完 → 「日期 · 已听完」；
-  // 有进度且时长已知 → 「日期 · 剩 mm:ss」；其余（未记录进度/时长未知）降级为仅日期
-  private historyMetaText(item: PlayHistoryItem): string {
-    const timeText: string = this.formatPlayedAt(item.viewAt);
-    if (item.progress === -1) {
-      return `${timeText} · 已听完`;
-    }
-    if (item.progress > 0 && item.duration > 0 && item.duration > item.progress) {
-      return `${timeText} · 剩 ${this.formatRemainingSec(item.duration - item.progress)}`;
-    }
-    return timeText;
+  // 归并行主行标题：纯视频标题（videoTitle，旧数据/空缺回退 title）
+  private rowTitle(row: HistoryRow): string {
+    return row.latest.videoTitle !== '' ? row.latest.videoTitle : row.latest.title;
   }
 
-  // 点历史条目：起播 + 唤起播放浮层；播放层（L3）物理在历史面板（L4）之下，
-  // 面板保持打开，收起面板即见播放页
+  // 归并行副行三段文案（D14，修订：分P 名不展示）：相对时间恒最前；代表分P page>1 时插「看到Pn」；
+  // 尾段沿用既有规则（progress===-1 已听完 / 有进度且时长已知 剩 mm:ss / 其余降级省略）。
+  // 单P 与仅 P1 历史的多P 无中段，形态与第一轮一致
+  private historyMetaText(item: PlayHistoryItem): string {
+    const segments: string[] = [this.formatPlayedAt(item.viewAt)];
+    if (item.page > 1) {
+      segments.push(`看到P${item.page}`);
+    }
+    if (item.progress === -1) {
+      segments.push('已听完');
+    } else if (item.progress > 0 && item.duration > 0 && item.duration > item.progress) {
+      segments.push(`剩 ${this.formatRemainingSec(item.duration - item.progress)}`);
+    }
+    return segments.join(' · ');
+  }
+
+  // 点归并行：以代表分P（viewAt 最新）走既有历史点播链路起播 + 唤起播放浮层；播放层（L3）物理在
+  // 历史面板（L4）之下，面板保持打开，收起面板即见播放页；page/cid/videoTitle/partTitle 透传
+  // 保证点播为分P 粒度条目且历史写入链自动携带新字段
   private async replayHistory(item: PlayHistoryItem): Promise<void> {
     try {
-      const v: BiliVideo = BiliVideo.create(item.bvid, 0, 0, item.title, item.cover, item.duration);
+      const v: BiliVideo = BiliVideo.create(item.bvid, 0, item.cid, item.title, item.cover, item.duration);
       v.ownerName = item.ownerName;
+      v.page = item.page;
+      v.videoTitle = item.videoTitle !== '' ? item.videoTitle : item.title;
+      v.partTitle = item.partTitle;
       await this.controller.playDownloadedSong(v);
       connectBool(Constants.AS_SHOW_PLAYER_OVERLAY, false).value = true;
     } catch (err) {
@@ -173,17 +215,26 @@ export struct HistorySheet {
     }
   }
 
-  // 左滑单条删除（US3 FR-009）：点击时按 bvid 从当前数组实时解析下标，
-  // 避免 LazyForEach 键复用导致的陈旧索引；数组 splice 与 DataSource.notifyDataDelete 双侧同步
-  // （包补位动画 US6），控制器侧异步写盘（removePlayHistoryItem 不 emitUi，面板自行刷新）
-  private removeHistoryItem(item: PlayHistoryItem): void {
-    const bvid: string = item.bvid;
-    if (bvid === '') {
+  // 左滑删除归并行（US6 bvid 级，D11）：一行 = 该视频全部分P 历史——先从 controller 实时历史
+  // 展开该 bvid 全部复合键，逐键调既有 removePlayHistoryItem（存储零变化），再做行级补位动画；
+  // 点击时实时解析下标，避免 LazyForEach 键复用导致的陈旧索引
+  private removeHistoryRow(row: HistoryRow): void {
+    if (row.bvid === '') {
+      return;
+    }
+    const pages: number[] = [];
+    const history: PlayHistoryItem[] = this.controller.playHistory;
+    for (let i = 0; i < history.length; i++) {
+      if (history[i].bvid === row.bvid) {
+        pages.push(history[i].page);
+      }
+    }
+    if (pages.length === 0) {
       return;
     }
     let idx: number = -1;
-    for (let i = 0; i < this.playHistoryItems.length; i++) {
-      if (this.playHistoryItems[i].bvid === bvid) {
+    for (let i = 0; i < this.historyRows.length; i++) {
+      if (this.historyRows[i].bvid === row.bvid) {
         idx = i;
         break;
       }
@@ -191,17 +242,19 @@ export struct HistorySheet {
     if (idx < 0) {
       return;
     }
-    this.controller.removePlayHistoryItem(bvid);
+    for (let i = 0; i < pages.length; i++) {
+      this.controller.removePlayHistoryItem(row.bvid, pages[i]);
+    }
     this.playHistoryVersion = this.controller.playHistoryVersion;
     this.getUIContext().animateTo({ duration: Constants.TOKEN_DELETE_ANIM_MS, curve: Curve.EaseOut }, (): void => {
-      this.playHistoryItems.splice(idx, 1);
+      this.historyRows.splice(idx, 1);
       this.playHistorySource.notifyDataDelete(idx);
     });
   }
 
   // 左滑删除确认（US1 双触发）：点垃圾桶/滑过阈值（SwipeActionItem.onAction）均进本弹窗，
   // 确认后删除，取消/点外围经 closeAllSwipeActions 复位收起滑动行
-  private confirmRemoveHistoryItem(item: PlayHistoryItem): void {
+  private confirmRemoveHistoryRow(row: HistoryRow): void {
     AlertDialog.show({
       title: Constants.DIALOG_DELETE_HISTORY_TITLE,
       message: Constants.DIALOG_DELETE_HISTORY_MSG,
@@ -211,7 +264,7 @@ export struct HistorySheet {
         value: '删除',
         fontColor: $r('app.color.danger_red'),
         action: (): void => {
-          this.removeHistoryItem(item);
+          this.removeHistoryRow(row);
         }
       },
       secondaryButton: {
@@ -228,7 +281,7 @@ export struct HistorySheet {
 
   // 左滑露出的红色垃圾桶删除钮（US1 双触发）：点击进确认弹窗，滑过阈值（onAction）同弹窗
   @Builder
-  historyDeleteAction(item: PlayHistoryItem) {
+  historyDeleteAction(row: HistoryRow) {
     Column() {
       Button() {
         SymbolGlyph($r('sys.symbol.trash'))
@@ -241,7 +294,7 @@ export struct HistorySheet {
       .backgroundColor($r('app.color.danger_red'))
       .borderRadius(Constants.SWIPE_DELETE_BTN_RADIUS)
       .onClick(() => {
-        this.confirmRemoveHistoryItem(item);
+        this.confirmRemoveHistoryRow(row);
       })
     }
     .height('100%')
@@ -249,18 +302,18 @@ export struct HistorySheet {
     .padding({ left: Constants.TOKEN_SPACE_M, right: Constants.TOKEN_SPACE_M })
   }
 
-  private toggleHistorySelect(bvid: string): void {
-    const idx: number = this.selectedHistoryIds.indexOf(bvid);
+  private toggleHistorySelect(key: string): void {
+    const idx: number = this.selectedHistoryIds.indexOf(key);
     if (idx >= 0) {
       this.selectedHistoryIds.splice(idx, 1);
     } else {
-      this.selectedHistoryIds.push(bvid);
+      this.selectedHistoryIds.push(key);
     }
     this.selectedHistoryIds = this.selectedHistoryIds.slice(0);
   }
 
   private isAllHistorySelected(): boolean {
-    return this.playHistoryItems.length > 0 && this.selectedHistoryIds.length === this.playHistoryItems.length;
+    return this.historyRows.length > 0 && this.selectedHistoryIds.length === this.historyRows.length;
   }
 
   private toggleHistorySelectAll(): void {
@@ -268,8 +321,8 @@ export struct HistorySheet {
       this.selectedHistoryIds = [];
     } else {
       const all: string[] = [];
-      for (let i = 0; i < this.playHistoryItems.length; i++) {
-        all.push(this.playHistoryItems[i].bvid);
+      for (let i = 0; i < this.historyRows.length; i++) {
+        all.push(this.historyRows[i].bvid);
       }
       this.selectedHistoryIds = all;
     }
@@ -280,7 +333,9 @@ export struct HistorySheet {
     this.selectedHistoryIds = [];
   }
 
-  // 删除所选（US4）：二次确认后批量删除，先退多选再高→低增量补位动画，交互对齐队列
+  // 删除所选归并行（US6 bvid 级，D11）：二次确认后 UI 层把每个选中 bvid 展开为该视频全部分P
+  // 复合键（itemKeyOf 合成）调既有 removeSelectedHistory（controller 存储零变化），
+  // 先退多选再高→低增量补位动画，交互对齐队列
   private removeSelectedHistory(): void {
     const count: number = this.selectedHistoryIds.length;
     if (count === 0) {
@@ -295,22 +350,29 @@ export struct HistorySheet {
         value: '删除',
         fontColor: $r('app.color.danger_red'),
         action: (): void => {
-          const ids: string[] = this.selectedHistoryIds.slice(0);
+          const bvids: string[] = this.selectedHistoryIds.slice(0);
           this.exitHistorySelectMode();
-          this.controller.removeSelectedHistory(ids);
+          const keys: string[] = [];
+          const history: PlayHistoryItem[] = this.controller.playHistory;
+          for (let i = 0; i < history.length; i++) {
+            if (bvids.indexOf(history[i].bvid) >= 0) {
+              keys.push(BiliVideo.itemKeyOf(history[i].bvid, history[i].page));
+            }
+          }
+          this.controller.removeSelectedHistory(keys);
           this.playHistoryVersion = this.controller.playHistoryVersion;
           this.getUIContext().animateTo({ duration: Constants.TOKEN_DELETE_ANIM_MS, curve: Curve.EaseOut }, (): void => {
             const idxList: number[] = [];
-            for (let i = 0; i < this.playHistoryItems.length; i++) {
-              if (ids.indexOf(this.playHistoryItems[i].bvid) >= 0) {
+            for (let i = 0; i < this.historyRows.length; i++) {
+              if (bvids.indexOf(this.historyRows[i].bvid) >= 0) {
                 idxList.push(i);
               }
             }
             for (let k = idxList.length - 1; k >= 0; k--) {
-              this.playHistoryItems.splice(idxList[k], 1);
+              this.historyRows.splice(idxList[k], 1);
               this.playHistorySource.notifyDataDelete(idxList[k]);
             }
-            if (this.playHistoryItems.length === 0) {
+            if (this.historyRows.length === 0) {
               this.exitHistorySelectMode();
             }
           });
@@ -335,7 +397,7 @@ export struct HistorySheet {
               .fontColor($r('app.color.text_primary'))
               .layoutWeight(1)
 
-            if (this.playHistoryItems.length > 0) {
+            if (this.historyRows.length > 0) {
               Row() {
                 SymbolGlyph($r('sys.symbol.list_checkmark'))
                   .fontSize(Constants.TOKEN_FONT_18)
@@ -420,7 +482,7 @@ export struct HistorySheet {
       .width('100%')
       .padding({ left: Constants.TOKEN_SPACE_L, right: Constants.TOKEN_SPACE_L, top: Constants.TOKEN_SPACE_S, bottom: Constants.TOKEN_SPACE_S })
 
-      if (this.playHistoryItems.length === 0) {
+      if (this.historyRows.length === 0) {
         Column() {
           Text('暂无播放历史，听歌后会自动记录')
             .fontSize(Constants.TOKEN_FONT_BODY_M)
@@ -433,33 +495,33 @@ export struct HistorySheet {
       } else {
         Stack() {
           List({ space: 0, scroller: this.historyScroller }) {
-            LazyForEach(this.playHistorySource, (item: PlayHistoryItem) => {
+            LazyForEach(this.playHistorySource, (row: HistoryRow) => {
               ListItem() {
                 Row() {
                   if (this.selectMode.value) {
                     Checkbox()
-                      .select(this.selectedHistoryIds.indexOf(item.bvid) >= 0)
+                      .select(this.selectedHistoryIds.indexOf(row.bvid) >= 0)
                       .selectedColor(this.accentColor.value)
                       .width(Constants.SELECT_CHECKBOX_SIZE)
                       .height(Constants.SELECT_CHECKBOX_SIZE)
                       .margin({ right: Constants.TOKEN_SPACE_S })
                       .onChange((value: boolean) => {
-                        const inList: boolean = this.selectedHistoryIds.indexOf(item.bvid) >= 0;
+                        const inList: boolean = this.selectedHistoryIds.indexOf(row.bvid) >= 0;
                         if (value !== inList) {
-                          this.toggleHistorySelect(item.bvid);
+                          this.toggleHistorySelect(row.bvid);
                         }
                       })
                   }
 
-                  CoverThumb({ cover: item.cover })
+                  CoverThumb({ cover: row.latest.cover })
 
                   Column() {
-                    Text(item.title)
+                    Text(this.rowTitle(row))
                       .fontSize(Constants.TOKEN_FONT_BODY_M)
                       .fontColor($r('app.color.text_primary'))
                       .maxLines(1)
                       .textOverflow({ overflow: TextOverflow.Ellipsis })
-                    Text(this.historyMetaText(item))
+                    Text(this.historyMetaText(row.latest))
                       .fontSize(Constants.TOKEN_FONT_AUX)
                       .fontColor($r('app.color.text_secondary'))
                       .margin({ top: 3 })
@@ -470,19 +532,19 @@ export struct HistorySheet {
                 }
                 .width('100%')
                 .padding({ left: Constants.TOKEN_SPACE_L, right: Constants.TOKEN_SPACE_L, top: Constants.TOKEN_SPACE_10, bottom: Constants.TOKEN_SPACE_10 })
-                .backgroundColor(this.pressedKey === item.bvid ? $r('app.color.item_pressed_background') : Color.Transparent)
+                .backgroundColor(this.pressedKey === row.bvid ? $r('app.color.item_pressed_background') : Color.Transparent)
                 .onTouch((e: TouchEvent): void => {
                   if (e.type === TouchType.Down) {
-                    this.pressedKey = item.bvid;
+                    this.pressedKey = row.bvid;
                   } else if (e.type === TouchType.Up || e.type === TouchType.Cancel) {
                     this.pressedKey = '';
                   }
                 })
                 .onClick(() => {
                   if (this.selectMode.value) {
-                    this.toggleHistorySelect(item.bvid);
+                    this.toggleHistorySelect(row.bvid);
                   } else {
-                    this.replayHistory(item);
+                    this.replayHistory(row.latest);
                   }
                 })
                 .gesture(
@@ -490,24 +552,24 @@ export struct HistorySheet {
                     .onAction(() => {
                       if (!this.selectMode.value) {
                         this.selectMode.value = true;
-                        this.selectedHistoryIds = [item.bvid];
+                        this.selectedHistoryIds = [row.bvid];
                       }
                     })
                 )
               }
-              // 左滑删除（US1 双触发）：SwipeActionItem——点垃圾桶/滑过阈值均进确认弹窗；
+              // 左滑删除（US1 双触发，US6 bvid 级）：SwipeActionItem——点垃圾桶/滑过阈值均进确认弹窗；
               // 多选态不挂载删除动作，退出多选恢复
               .swipeAction(this.selectMode.value ? {} : {
                 end: {
                   builder: (): void => {
-                    this.historyDeleteAction(item);
+                    this.historyDeleteAction(row);
                   },
                   onAction: (): void => {
-                    this.confirmRemoveHistoryItem(item);
+                    this.confirmRemoveHistoryRow(row);
                   }
                 }
               })
-            }, (item: PlayHistoryItem) => `${item.bvid}_${item.viewAt}_${item.progress}`)
+            }, (row: HistoryRow) => `${row.bvid}_${row.latest.viewAt}`)
           }
           .width('100%')
           .height('100%')

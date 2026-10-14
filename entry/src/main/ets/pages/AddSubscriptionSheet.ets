@@ -105,14 +105,14 @@ export struct AddSubscriptionSheet {
     promptAction.showToast({ message: `已订阅「${sub.title}」` });
   }
 
-  // 识别结果 → 既有六分支分发（bv/av/up/fav/season/series；六个动作方法零改动）
+  // 识别结果 → 既有六分支分发（bv/av/up/fav/season/series；六个动作方法零改动；bv/av 透传 page）
   private dispatchRecognized(parsed: RecognizeResult): void {
     switch (parsed.type) {
       case 'bv':
-        this.playBv(parsed.id);
+        this.playBv(parsed.id, parsed.page);
         break;
       case 'av':
-        this.playAv(parsed.id);
+        this.playAv(parsed.id, parsed.page);
         break;
       case 'up':
         this.lookupUid(parsed.id);
@@ -182,12 +182,12 @@ export struct AddSubscriptionSheet {
     this.dispatchRecognized(parsed);
   }
 
-  private playBv(bvid: string): void {
+  private playBv(bvid: string, page: number = 0): void {
     if (this.mainBusy) {
       return;
     }
     this.mainBusy = true;
-    this.controller.addSingleVideo(bvid).then((result: EnqueueResult): void => {
+    this.controller.addSingleVideo(bvid, page).then((result: EnqueueResult): void => {
       this.mainBusy = false;
       this.onDismiss();
       promptAction.showToast({ message: PlayerController.enqueueToast(result) });
@@ -196,8 +196,8 @@ export struct AddSubscriptionSheet {
     });
   }
 
-  // av 号查询：经 view 接口 aid 参数归一化出 bvid 后，复用既有 playBv 播放链路
-  private playAv(avStr: string): void {
+  // av 号查询：经 view 接口 aid 参数归一化出 bvid 后，复用既有 playBv 播放链路（page 透传）
+  private playAv(avStr: string, page: number = 0): void {
     const aid: number = parseInt(avStr, 10);
     if (isNaN(aid) || aid <= 0) {
       promptAction.showToast({ message: 'av 号无效' });
@@ -213,7 +213,7 @@ export struct AddSubscriptionSheet {
         promptAction.showToast({ message: '未查询到该 av 号对应的视频' });
         return;
       }
-      this.playBv(video.bvid);
+      this.playBv(video.bvid, page);
     }).catch((): void => {
       this.mainBusy = false;
       promptAction.showToast({ message: 'av 号查询失败' });

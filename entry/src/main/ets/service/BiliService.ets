@@ -342,6 +342,12 @@ function cleanTitle(title: string): string {
   return t;
 }
 
+// view 接口完整解析结果：video 视频级元数据 + parts 分P 条目（形态 A，标题按 D4 合成；单P 恰 1 条）
+export class VideoDetail {
+  video: BiliVideo = new BiliVideo();
+  parts: BiliVideo[] = [];
+}
+
 export class BiliService {
   static async fetchNav(): Promise<void> {
     const resultStr: string = await httpGet(BILI_NAV_URL);
@@ -1552,20 +1558,34 @@ export class BiliService {
     return cookie;
   }
 
+  // 薄包装（plan D5）：只要视频级元数据的既有调用方（desc 回填等）零改动
   static async fetchVideoInfo(bvid: string): Promise<BiliVideo> {
-    const resultStr: string = await httpGet(`${BILI_VIDEO_INFO_URL}?bvid=${bvid}`);
-    return BiliService.parseVideoInfoResult(resultStr);
+    const detail: VideoDetail = await BiliService.fetchVideoDetail(bvid);
+    return detail.video;
   }
 
-  // 按 aid 查询视频信息（av 号归一化入口）：与 fetchVideoInfo 同一 view 接口，仅查询参数不同；
+  // 按 aid 查询视频信息（av 号归一化入口）：与 fetchVideoDetail 同一 view 接口，仅查询参数不同；
   // 返回的 BiliVideo 含 bvid，供下游复用既有 playBv 链路
   static async fetchVideoInfoByAid(aid: number): Promise<BiliVideo> {
     const resultStr: string = await httpGet(`${BILI_VIDEO_INFO_URL}?aid=${aid}`);
-    return BiliService.parseVideoInfoResult(resultStr);
+    const detail: VideoDetail = BiliService.parseVideoDetailResult(resultStr);
+    return detail.video;
   }
 
-  private static parseVideoInfoResult(resultStr: string): BiliVideo {
+  static async fetchVideoDetail(bvid: string): Promise<VideoDetail> {
+    const resultStr: string = await httpGet(`${BILI_VIDEO_INFO_URL}?bvid=${bvid}`);
+    return BiliService.parseVideoDetailResult(resultStr);
+  }
+
+  private static parseVideoDetailResult(resultStr: string): VideoDetail {
     const data: Record<string, Object> = parseApiData(resultStr);
+    const detail: VideoDetail = new VideoDetail();
+    detail.video = BiliService.parseVideoFromViewData(data);
+    detail.parts = BiliService.parsePartsFromViewData(data, detail.video);
+    return detail;
+  }
+
+  private static parseVideoFromViewData(data: Record<string, Object>): BiliVideo {
     const video: BiliVideo = BiliVideo.create(
       data['bvid'] as string,
       data['aid'] as number,
@@ -1600,7 +1620,71 @@ export class BiliService {
         video.view = stat['view'] as number;
       }
     }
+    video.videoTitle = video.title;
     return video;
+  }
+
+  // pages[] 逐字段容错解析（cid/page/part/duration）：cid≤0 跳过、page≤0 按序补、分P 时长缺失回退视频时长；
+  // 条目继承视频级元数据，标题按 D4 合成（多P 才缀 Pn）；pages 缺失/为空/全无效回退视频级 cid 单P 条目
+  private static parsePartsFromViewData(data: Record<string, Object>, video: BiliVideo): BiliVideo[] {
+    const parts: BiliVideo[] = [];
+    const pagesRaw: Object = data['pages'];
+    if (pagesRaw !== undefined && pagesRaw !== null) {
+      const pages: Object[] = pagesRaw as Object[];
+      for (let i = 0; i < pages.length; i++) {
+        const rec: Record<string, Object> = pages[i] as Record<string, Object>;
+        let cid: number = 0;
+        if (rec['cid'] !== undefined && rec['cid'] !== null) {
+          cid = rec['cid'] as number;
+        }
+        if (cid <= 0) {
+          continue;
+        }
+        let page: number = 0;
+        if (rec['page'] !== undefined && rec['page'] !== null) {
+          page = rec['page'] as number;
+        }
+        if (page <= 0) {
+          page = i + 1;
+        }
+        let duration: number = video.duration;
+        if (rec['duration'] !== undefined && rec['duration'] !== null) {
+          const d: number = rec['duration'] as number;
+          if (d > 0) {
+            duration = d;
+          }
+        }
+        const part: BiliVideo = BiliService.partFromVideo(video, page, cid, duration);
+        if (rec['part'] !== undefined && rec['part'] !== null) {
+          part.partTitle = rec['part'] as string;
+        }
+        parts.push(part);
+      }
+    }
+    if (parts.length === 0) {
+      parts.push(BiliService.partFromVideo(video, 1, video.cid, video.duration));
+    }
+    const isMultiPart: boolean = parts.length > 1;
+    for (let i = 0; i < parts.length; i++) {
+      const part: BiliVideo = parts[i];
+      part.title = BiliVideo.composePartTitle(video.title, part.page, part.partTitle, isMultiPart);
+    }
+    return parts;
+  }
+
+  private static partFromVideo(video: BiliVideo, page: number, cid: number, duration: number): BiliVideo {
+    const part: BiliVideo = BiliVideo.create(video.bvid, video.aid, cid, video.title, video.cover, duration);
+    part.folderIds = video.folderIds.slice();
+    part.seasonKeys = video.seasonKeys.slice();
+    part.ownerMid = video.ownerMid;
+    part.ownerName = video.ownerName;
+    part.ownerFace = video.ownerFace;
+    part.view = video.view;
+    part.pubdate = video.pubdate;
+    part.desc = video.desc;
+    part.page = page;
+    part.videoTitle = video.videoTitle !== '' ? video.videoTitle : video.title;
+    return part;
   }
 
   // 单条 dash 音轨记录 → AudioTrack（forcedId>0 用于 flac/dolby 节点补档位码，0 取记录自带 id）；

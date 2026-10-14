@@ -187,6 +187,7 @@ export class Constants {
   static readonly DIALOG_DELETE_HISTORY_MSG: string = '确定删除这条播放记录吗？';
   static readonly DIALOG_DELETE_QUEUE_ITEM_TITLE: string = '移除队列条目';
   static readonly DIALOG_DELETE_QUEUE_ITEM_MSG: string = '确定从队列移除该条目吗？';
+  static readonly DIALOG_REMOVE_QUEUE_GROUP_MSG: string = '确定移除该视频的全部 N 个分P 吗？';
   static readonly DIALOG_DELETE_SUB_TITLE: string = '删除订阅';
   static readonly DIALOG_DELETE_SUB_MSG: string = '确定删除该订阅吗？';
   static readonly DIALOG_REMOVE_SELECTED_TITLE: string = '移除所选';
@@ -195,6 +196,8 @@ export class Constants {
   static readonly DIALOG_OPEN_LINK_TITLE: string = '跳转到外部浏览器？';
   // —— 队列空态引导（queue-redesign US1） ——
   static readonly QUEUE_EMPTY_HINT: string = '到订阅源详情页播放节目，或在首页点「＋」添加订阅';
+  // 队列分P 窄行左缩进（D15）：对齐视频头行封面右侧文本起点（TOKEN_SPACE_L + 封面 44 + TOKEN_SPACE_10）
+  static readonly QUEUE_PART_INDENT: number = 70;
 
   // —— 播放页封面取色（palette-glow/palette-bg）：取色与背景衍生色参数唯一来源 ——
   // 取色缓存上限（条）：满则整体清空重新积累

@@ -25,6 +25,7 @@ export class RecognizeResult {
   type: string = '';
   id: string = '';
   ownerMid: string = '';
+  page: number = 0;
 }
 
 // 短链解析结局：成功 | 网络失败 | 无有效目标 | 目标无法识别
@@ -69,17 +70,29 @@ export function extractBiliUrl(raw: string): string {
 
 // —— 目标识别（自 AddSubscriptionSheet.ets 迁入；先命中先返回，语义与迁移前一致） ——
 
+// ?p=N 页号意图抽取（不参与类型判定）：正整数 ≥1 指定分P；缺失/非法置 0（全部展开）
+function extractPageParam(input: string): number {
+  const m: RegExpExecArray | null = new RegExp('[?&]p=(\\d+)').exec(input);
+  if (m === null) {
+    return 0;
+  }
+  const parsed: number = parseInt(m[1], 10);
+  return parsed > 0 ? parsed : 0;
+}
+
 export function recognizeInput(input: string): RecognizeResult {
   const r: RecognizeResult = new RecognizeResult();
   const trimmed: string = input.trim();
   if (trimmed === '') {
     return r;
   }
+  const page: number = extractPageParam(trimmed);
   // av 号（忽略大小写，如 av170001 / AV170001）
   let m: RegExpExecArray | null = new RegExp('^av(\\d+)$', 'i').exec(trimmed);
   if (m !== null) {
     r.type = 'av';
     r.id = m[1];
+    r.page = page;
     return r;
   }
   // av 号 URL 形态（KI-4 修复 / US4）：bilibili.com/video/av{数字}（忽略大小写，含 m. 等任意子域路径）
@@ -87,6 +100,7 @@ export function recognizeInput(input: string): RecognizeResult {
   if (m !== null) {
     r.type = 'av';
     r.id = m[1];
+    r.page = page;
     return r;
   }
   // lists 规则（KI-4 修复 / US4）：host 放宽为 bilibili.com 任意子域，路径兼容桌面 {host}/{mid}/lists/{id}
@@ -149,6 +163,7 @@ export function recognizeInput(input: string): RecognizeResult {
   if (m !== null) {
     r.type = 'bv';
     r.id = m[0];
+    r.page = page;
     return r;
   }
   m = new RegExp('^(\\d+)$').exec(trimmed);

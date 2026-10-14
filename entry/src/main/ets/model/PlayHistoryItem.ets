@@ -23,6 +23,9 @@ export class PlayHistoryItem {
   @Trace duration: number = 0;
   // 分P标识：0 = 未知（流式路径取 currentCid 回填）
   @Trace cid: number = 0;
+  @Trace page: number = 0;
+  @Trace videoTitle: string = '';
+  @Trace partTitle: string = '';
 
   // playedAtMs 为毫秒时间戳（调用方传 Date.now()），内部转秒存入 viewAt
   static fromVideo(video: BiliVideo, sourceType: number, playedAtMs: number): PlayHistoryItem {
@@ -36,6 +39,9 @@ export class PlayHistoryItem {
     // cid/duration 冷启动兜底（plan R7）：BiliVideo.cid 与 duration 均已是秒/直通单位
     r.cid = video.cid;
     r.duration = video.duration;
+    r.page = video.page > 0 ? video.page : 1;
+    r.videoTitle = video.videoTitle !== '' ? video.videoTitle : video.title;
+    r.partTitle = video.partTitle;
     return r;
   }
 
@@ -50,6 +56,9 @@ export class PlayHistoryItem {
       'progress': this.progress,
       'duration': this.duration,
       'cid': this.cid,
+      'page': this.page,
+      'videoTitle': this.videoTitle,
+      'partTitle': this.partTitle,
     };
     return rec;
   }
@@ -85,6 +94,21 @@ export class PlayHistoryItem {
     }
     if (rec['cid'] !== undefined) {
       r.cid = rec['cid'] as number;
+    }
+    if (rec['page'] !== undefined) {
+      r.page = rec['page'] as number;
+    }
+    if (rec['videoTitle'] !== undefined) {
+      r.videoTitle = rec['videoTitle'] as string;
+    }
+    if (rec['partTitle'] !== undefined) {
+      r.partTitle = rec['partTitle'] as string;
+    }
+    if (r.videoTitle === '') {
+      r.videoTitle = r.title;
+    }
+    if (r.page <= 0) {
+      r.page = 1;
     }
     return r;
   }
