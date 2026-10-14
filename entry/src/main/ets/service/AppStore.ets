@@ -57,9 +57,10 @@ export class AppStore {
     AppStore.prefs.flush().catch((): void => {});
   }
 
-  static savePlaylistFile(items: BiliVideo[], lastIndex: number, lastPosMs: number): void {
+  static savePlaylistFile(items: BiliVideo[], lastIndex: number, lastPosMs: number, lastQualityCode: number): void {
     AppStore.putNumber(Constants.KEY_LAST_INDEX, lastIndex);
     AppStore.putNumber(Constants.KEY_LAST_POS_MS, lastPosMs);
+    AppStore.putNumber(Constants.KEY_LAST_QUALITY, lastQualityCode);
     try {
       const context = getContext() as common.UIAbilityContext;
       const path: string = `${context.filesDir}/playlist.json`;

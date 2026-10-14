@@ -27,6 +27,8 @@ export class Constants {
   static readonly KEY_PLAYBACK_RATE: string = 'playbackRate';
   static readonly KEY_LAST_INDEX: string = 'lastIndex';
   static readonly KEY_LAST_POS_MS: string = 'lastPosMs';
+  // 上次实际播到的音质码（与 KEY_LAST_POS_MS 同保存点写入，供冷启动空闲态显示）
+  static readonly KEY_LAST_QUALITY: string = 'lastQuality';
   static readonly KEY_AUTO_PLAY_ON_START: string = 'autoPlayOnStart';
   static readonly KEY_COLOR_MODE: string = 'colorMode';
   static readonly KEY_INTERRUPT_RESUME: string = 'interruptResume';
@@ -51,6 +53,7 @@ export class Constants {
   static readonly AS_SHOW_SPEED: string = 'showSpeed';
   static readonly AS_SHOW_MODE: string = 'showMode';
   static readonly AS_PLAYLIST_SELECT_MODE: string = 'playlistSelectMode';
+  static readonly AS_HISTORY_SELECT_MODE: string = 'historySelectMode';
   static readonly AS_SHOW_SLEEP_TIMER: string = 'showSleepTimer';
   static readonly AS_SHOW_SLEEP_TIMER_PICKER: string = 'showSleepTimerPicker';
   static readonly AS_SHOW_PLAY_HISTORY: string = 'showPlayHistory';

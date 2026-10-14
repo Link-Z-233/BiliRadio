@@ -8,13 +8,14 @@ import { SettingsPage } from './SettingsPage';
 import { LogPage } from './LogPage';
 import { GlassSheet } from '../component/GlassSheet';
 import { QueueSheet } from '../component/QueueSheet';
+import { HistorySheet } from '../component/HistorySheet';
 import { MiniPlayer } from '../component/MiniPlayer';
 import { mediaquery, promptAction } from '@kit.ArkUI';
 import { Constants } from '../service/Constants';
 import { Logger } from '../service/Logger';
 import { AppStore } from '../service/AppStore';
 import { connectBool, connectNum, BoolState, NumState } from '../service/V2State';
-import { registerQueueClose, dismissOverlaysForBack } from '../service/BackHandler';
+import { registerQueueClose, registerHistoryClose, dismissOverlaysForBack } from '../service/BackHandler';
 
 @Entry
 @ComponentV2
@@ -23,6 +24,7 @@ struct Index {
   @Local navBarHeight: NumState = connectNum(Constants.AS_NAV_BAR_HEIGHT, 0);
   @Local showPlayerOverlay: BoolState = connectBool(Constants.AS_SHOW_PLAYER_OVERLAY, false);
   @Local showQueueSheet: BoolState = connectBool(Constants.AS_SHOW_QUEUE_SHEET, false);
+  @Local showPlayHistory: BoolState = connectBool(Constants.AS_SHOW_PLAY_HISTORY, false);
   @Local showSettingsPage: BoolState = connectBool(Constants.AS_SHOW_SETTINGS_PAGE, false);
   @Local showLogPage: BoolState = connectBool(Constants.AS_SHOW_LOG_PAGE, false);
   @Local isWideScreen: BoolState = connectBool(Constants.AS_IS_WIDE_SCREEN, false);
@@ -37,10 +39,6 @@ struct Index {
       this.isWideScreen.value = result.matches;
     });
     const controller: PlayerController = PlayerController.getInstance();
-    // 语义从「切到播放页签」改为「唤起全屏播放层」；调用方（PlayerOverlay/队列/设置等）约定不变
-    controller.goToPlayerTab = (): void => {
-      connectBool(Constants.AS_SHOW_PLAYER_OVERLAY, false).value = true;
-    };
     controller.confirmCellularDownload = (): Promise<boolean> => {
       return new Promise<boolean>((resolve) => {
         AlertDialog.show({
@@ -140,7 +138,7 @@ struct Index {
       .width('100%')
       .padding({ left: Constants.TOKEN_SPACE_L, right: Constants.TOKEN_SPACE_L })
 
-      // 设置层（L2）：自右侧滑入，覆盖胶囊；历史面板留设置页树内（层序契约）
+      // 设置层（L2）：自右侧滑入，覆盖胶囊；历史面板已升为 L4 独立层（层序契约）
       if (this.showSettingsPage.value) {
         Column() {
           SettingsPage()
@@ -175,7 +173,18 @@ struct Index {
             .animation({ duration: 350, curve: Curve.Friction }))
       }
 
-      // 队列浮层（L4 层序最高）：单一挂载点，展开态两入口（胶囊长按/播放浮层）共用
+      // 历史面板（L4 独立层）：设置层之上、队列之下，入口在设置页，点条目仅起播不收面板
+      if (this.showPlayHistory.value) {
+        GlassSheet({
+          openState: this.showPlayHistory,
+          panelHeight: '62%',
+          onRegisterClose: registerHistoryClose
+        }) {
+          HistorySheet()
+        }
+      }
+
+      // 队列浮层（L5 层序最高）：单一挂载点，展开态两入口（胶囊长按/播放浮层）共用
       if (this.showQueueSheet.value) {
         GlassSheet({
           openState: this.showQueueSheet,

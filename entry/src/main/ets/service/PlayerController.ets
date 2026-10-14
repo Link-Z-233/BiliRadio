@@ -75,6 +75,9 @@ export class PlayerController {
   private player: AudioPlayer = new AudioPlayer();
   private mediaSession: MediaSession = MediaSession.getInstance();
   private inited: boolean = false;
+  // init 真正跑完的标志（inited 是防重入哨兵、进入即置 true，不能表达完成），
+  // 供设置页在冷启动恢复完成前显示占位而非「未登录」
+  private initDone: boolean = false;
   private lastSaveTime: number = 0;
   // 上次向 UI 广播进度时所在的秒数，用于进度 tick 秒级节流
   private lastEmittedSec: number = -1;
@@ -83,7 +86,6 @@ export class PlayerController {
   private uiListenerOwners: Array<string> = [];
   playHistory: PlayHistoryItem[] = [];
   playHistoryVersion: number = 0;
-  goToPlayerTab: (() => void) | undefined = undefined;
   confirmCellularDownload: (() => Promise<boolean>) | undefined = undefined;
   private loadToken: number = 0;
 
@@ -99,6 +101,10 @@ export class PlayerController {
 
   isWifiNow(): boolean {
     return this.wifiNow;
+  }
+
+  isInited(): boolean {
+    return this.initDone;
   }
 
   static modeLabel(mode: PlayMode): string {
@@ -203,8 +209,13 @@ export class PlayerController {
       const cookie: string = await SecureStore.load(Constants.COOKIE_ALIAS);
       if (cookie !== '') {
         BiliSession.getInstance().setCookieString(cookie);
-        BiliService.fetchNav().catch((): void => {
+        // fetchNav 落定（成败皆）广播——昵称/头像补全、cookie 失效清空都要驱动 UI 刷新，
+        // 否则冷启动后未播放无广播，设置页账号区冻结在挂载瞬间的旧登录态
+        BiliService.fetchNav().then((): void => {
+          this.emitUi();
+        }).catch((): void => {
           hilog.warn(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'nav verify failed on restore');
+          this.emitUi();
         });
       }
 
@@ -250,6 +261,8 @@ export class PlayerController {
           this.currentTime = restorePos;
           const item: BiliVideo = snapshot.items[restoreIndex];
           this.duration = item.duration > 0 ? item.duration * 1000 : 0;
+          // 上次实际档读回：冷启动未播放前 currentQualityCode 承载它供空闲态显示，起播即被 playIndex 覆写
+          this.currentQualityCode = AppStore.getNumber(Constants.KEY_LAST_QUALITY, 0);
           autoStartIndex = restoreIndex;
           autoStartPos = restorePos;
         }
@@ -327,6 +340,7 @@ export class PlayerController {
     } catch (e) {
       hilog.warn(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'init failed');
     }
+    this.initDone = true;
     this.emitUi();
   }
 
@@ -467,9 +481,10 @@ export class PlayerController {
 
   private persistProgress(): void {
     if (this.currentIndex >= 0 && this.currentIndex < this.playlist.length) {
-      // 全局断点（KEY_LAST_INDEX/KEY_LAST_POS_MS）写入路径零改动（不变式④，与每集进度互不干扰）
+      // 全局断点（KEY_LAST_INDEX/KEY_LAST_POS_MS/KEY_LAST_QUALITY）写入路径零改动（不变式④，与每集进度互不干扰）
       AppStore.putNumber(Constants.KEY_LAST_INDEX, this.currentIndex);
       AppStore.putNumber(Constants.KEY_LAST_POS_MS, this.currentTime);
+      AppStore.putNumber(Constants.KEY_LAST_QUALITY, this.currentQualityCode);
       // 每集进度（plan R6）：当前条目 progress=floor(currentTime/1000)（恒 ≥0，-1 仅由完播判定写入），
       // 随本 5s 节拍/暂停/切歌即时点异步写历史文件，异常退出进度回退 ≤ 一个节拍
       this.updateHistoryProgressForCurrent(Math.floor(this.currentTime / 1000));
@@ -551,7 +566,7 @@ export class PlayerController {
       this.setPlaying(false);
       this.currentTime = 0;
       this.duration = 0;
-      AppStore.savePlaylistFile(this.playlist, startIndex, 0);
+      AppStore.savePlaylistFile(this.playlist, startIndex, 0, this.currentQualityCode);
       if (toAdd.length > 0) {
         this.statusMsg = `已添加 ${toAdd.length} 首，开始播放`;
         this.emitUi();
@@ -569,7 +584,7 @@ export class PlayerController {
       this.playlist.push(toAdd[i]);
     }
     this.playlistVersion++;
-    AppStore.savePlaylistFile(this.playlist, this.currentIndex, this.currentTime);
+    AppStore.savePlaylistFile(this.playlist, this.currentIndex, this.currentTime, this.currentQualityCode);
     let msg: string = `已追加 ${toAdd.length} 首到歌单末尾`;
     if (skipped > 0) {
       msg += `，去重 ${skipped} 首`;
@@ -699,7 +714,7 @@ export class PlayerController {
       }
       this.mediaSession.updateTrack(item.bvid, item.title,
         item.duration > 0 ? item.duration * 1000 : 0, item.cover, item.ownerName);
-      AppStore.savePlaylistFile(this.playlist, this.currentIndex, 0);
+      AppStore.savePlaylistFile(this.playlist, this.currentIndex, 0, this.currentQualityCode);
     } catch (err) {
       if (token !== this.loadToken) {
         return;
@@ -1113,7 +1128,8 @@ export class PlayerController {
     this.emitUi();
   }
 
-  // 按 bvid 加入歌单并立即播放（已在歌单则直接播放）
+  // 按 bvid 加入歌单并立即播放（已在歌单则直接播放）；不在歌单时插播——
+  // 插到当前播放条目之前起播，播完自然回到原当前条目（历史面板点播链路）
   async playDownloadedSong(video: BiliVideo): Promise<void> {
     if (this.isPreparing) {
       this.statusMsg = '正在准备中，请稍候';
@@ -1125,12 +1141,17 @@ export class PlayerController {
       await this.playIndex(idx, 0);
       return;
     }
-    this.playlist.push(video);
+    const insertIdx: number = this.currentIndex >= 0 ? this.currentIndex : this.playlist.length;
+    this.playlist.splice(insertIdx, 0, video);
     this.playlistVersion++;
-    AppStore.savePlaylistFile(this.playlist, this.currentIndex, this.currentTime);
+    // 插入使旧当前条目后移一位；修正 currentIndex 保持指向旧曲，playIndex 进门才能正确 flush 旧曲进度
+    if (this.currentIndex >= 0) {
+      this.currentIndex += 1;
+    }
+    AppStore.savePlaylistFile(this.playlist, this.currentIndex, this.currentTime, this.currentQualityCode);
     this.statusMsg = `已添加「${video.title}」`;
     this.emitUi();
-    await this.playIndex(this.playlist.length - 1, 0);
+    await this.playIndex(insertIdx, 0);
   }
 
   // 单视频入队统一入口（queue-redesign US6）：取详情后委托 loadPlaylistAndPlay——
@@ -1186,7 +1207,7 @@ export class PlayerController {
       this.duration = 0;
       await this.player.resetPlayer();
       this.statusMsg = '已取消收藏，歌单已空';
-        AppStore.savePlaylistFile(this.playlist, -1, 0);
+        AppStore.savePlaylistFile(this.playlist, -1, 0, 0);
       } else {
         let targetIndex: number = this.currentIndex;
         let restoreForward: boolean = false;
@@ -1204,7 +1225,7 @@ export class PlayerController {
           'unfavorite target=%{public}s strategy=%{public}s',
           this.playlist[targetIndex].bvid, restoreForward ? 'forward' : 'successor');
         this.statusMsg = `已从 ${folderCount} 个收藏夹移除`;
-        AppStore.savePlaylistFile(this.playlist, targetIndex, 0);
+        AppStore.savePlaylistFile(this.playlist, targetIndex, 0, this.currentQualityCode);
         await this.playIndex(targetIndex, 0, restoreForward);
       }
       this.emitUi();
@@ -1434,7 +1455,7 @@ export class PlayerController {
       this.duration = 0;
       await this.player.resetPlayer();
       this.statusMsg = `已从歌单移除 ${removedCount} 首，歌单已空`;
-      AppStore.savePlaylistFile(this.playlist, -1, 0);
+      AppStore.savePlaylistFile(this.playlist, -1, 0, 0);
     } else if (removingCurrent) {
       this.isPrepared = false;
       this.setPlaying(false);
@@ -1443,12 +1464,12 @@ export class PlayerController {
         target = 0;
       }
       this.statusMsg = `已从歌单移除 ${removedCount} 首`;
-      AppStore.savePlaylistFile(this.playlist, target, 0);
+      AppStore.savePlaylistFile(this.playlist, target, 0, this.currentQualityCode);
       await this.playIndex(target, 0);
     } else {
       this.currentIndex -= removedBeforeCurrent;
       this.statusMsg = `已从歌单移除 ${removedCount} 首`;
-      AppStore.savePlaylistFile(this.playlist, this.currentIndex, this.currentTime);
+      AppStore.savePlaylistFile(this.playlist, this.currentIndex, this.currentTime, this.currentQualityCode);
     }
     this.emitUi();
   }

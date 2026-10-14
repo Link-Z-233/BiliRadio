@@ -47,7 +47,9 @@ export class SecureStore {
           return SecureStore.fromU8(secret);
         }
       }
-      return '';
+      // asset 查询成功但无记录时同样落到 prefs 兜底——
+      // 保存时 asset.add 失败走 prefs 的 cookie，否则冷启动永远读不回（假未登录）
+      return SecureStore.loadPref(alias);
     } catch (e) {
       hilog.warn(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'asset load failed, fallback to preferences');
     }

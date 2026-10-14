@@ -11,74 +11,25 @@ import { componentSnapshot, promptAction } from '@kit.ArkUI';
 import { image } from '@kit.ImageKit';
 import { photoAccessHelper } from '@kit.MediaLibraryKit';
 import { fileIo as fs } from '@kit.CoreFileKit';
-import { CoverThumb } from '../component/CoverThumb';
 import { SettingsGroup } from '../component/SettingsGroup';
 import { SettingsRow } from '../component/SettingsRow';
-import { GlassSheet } from '../component/GlassSheet';
 import { Constants } from '../service/Constants';
 import { registerSettingsBack } from '../service/BackHandler';
-import { connectBool, connectNum, connectStr, BoolState, NumState, StrState } from '../service/V2State';
+import { connectBool, connectNum, connectStr, NumState, StrState } from '../service/V2State';
 import { Logger } from '../service/Logger';
-import { PlayHistoryItem } from '../model/PlayHistoryItem';
-import { BiliVideo } from '../model/BiliVideo';
 import { AudioQuality, QualityTier } from '../model/AudioQuality';
 
 const QR_CANVAS_SIZE: number = 280;
 
-// 播放历史懒加载数据源：LazyForEach 只构建可视区域内的列表项，避免长历史一次性创建全部封面
-class HistoryDataSource implements IDataSource {
-  private items: PlayHistoryItem[] = [];
-  private listeners: DataChangeListener[] = [];
-
-  totalCount(): number {
-    return this.items.length;
-  }
-
-  getData(index: number): PlayHistoryItem {
-    return this.items[index];
-  }
-
-  registerDataChangeListener(listener: DataChangeListener): void {
-    if (this.listeners.indexOf(listener) < 0) {
-      this.listeners.push(listener);
-    }
-  }
-
-  unregisterDataChangeListener(listener: DataChangeListener): void {
-    const pos: number = this.listeners.indexOf(listener);
-    if (pos >= 0) {
-      this.listeners.splice(pos, 1);
-    }
-  }
-
-  setItems(next: PlayHistoryItem[]): void {
-    // 入参可能是 @State 数组的代理对象（重新赋值后代理会更换），拷贝成普通数组避免渲染源失联
-    this.items = next.slice(0);
-    for (let i = 0; i < this.listeners.length; i++) {
-      this.listeners[i].onDataReloaded();
-    }
-  }
-
-  // 单条删除通知（US3 FR-009）：LazyForEach 增量删除指定下标；
-  // 按 DataChangeListener 契约，先从自身数据删除对应下标再通知监听者
-  notifyDataDelete(index: number): void {
-    if (index < 0 || index >= this.items.length) {
-      return;
-    }
-    this.items.splice(index, 1);
-    for (let i = 0; i < this.listeners.length; i++) {
-      this.listeners[i].onDataDelete(index);
-    }
-  }
-}
-
 // 设置页（US8 HarmonyOS 系统风格重写）：大标题 + 分组卡片（SettingsGroup/SettingsRow），
-// 登录 / 播放设置 / 外观（含主题色板）/ 播放历史 / 日志 / 关于功能全保留；
-// Index 树内层级承载（设置层，导航+胶囊之上、播放浮层之下），历史面板留本页树内
+// 登录 / 播放设置 / 外观（含主题色板）/ 播放历史入口 / 日志 / 关于功能全保留；
+// Index 树内层级承载（设置层，导航+胶囊之上、播放浮层之下），历史面板为 Index L4 独立层
 @ComponentV2
 export struct SettingsPage {
   @Local showQr: boolean = false;
   @Local isLogged: boolean = false;
+  // 冷启动恢复完成前的账号区占位（避免闪现「未登录」），initDone 广播后翻 false
+  @Local accountLoading: boolean = true;
   @Local loginName: string = '未登录';
   @Local avatarUrl: string = '';
   @Local cookieInput: string = '';
@@ -90,17 +41,6 @@ export struct SettingsPage {
   @Local showAbout: boolean = false;
   @Local debugModeOn: boolean = false;
   @Local appVersion: string = '';
-
-  // —— 播放历史 ——
-  @Local showPlayHistory: BoolState = connectBool(Constants.AS_SHOW_PLAY_HISTORY, false);
-  @Local playHistoryItems: PlayHistoryItem[] = [];
-  @Local playHistoryVersion: number = -1;
-  // 多选管理（v0.4-Part1-ux-fixes US4）：面板关闭/退出多选时清空，交互对齐队列
-  @Local historySelectMode: boolean = false;
-  @Local selectedHistoryIds: string[] = [];
-
-  // —— 应用内日志（US9） ——
-  @Local pressedKey: string = '';
 
   @Local autoPlayOnStart: boolean = false;
   // —— 新增设置开关状态 ——
@@ -141,11 +81,6 @@ export struct SettingsPage {
   private polling: boolean = false;
   private pollGeneration: number = 0;
   private controller: PlayerController = PlayerController.getInstance();
-  private playHistorySource: HistoryDataSource = new HistoryDataSource();
-  // 播放历史浮层动画关闭句柄（GlassSheet onRegisterClose 注册，系统返回复用滑出动画）
-  private historyClose: (() => void) | undefined = undefined;
-  // ListScroller（extends Scroller）：取消确认后经 closeAllSwipeActions 复位滑动行（US1）
-  private historyScroller: ListScroller = new ListScroller();
   private settingsScroller: Scroller = new Scroller();
   // 进度广播退订句柄（US2/KI-1）：aboutToDisappear 中调用，避免监听器累积
   private unsubscribePlayer: () => void = (): void => {};
@@ -163,29 +98,12 @@ export struct SettingsPage {
     this.cellularQuality = this.readStoredTier(Constants.KEY_CELLULAR_AUDIO_QUALITY, QualityTier.Q132K);
     this.unsubscribePlayer = this.controller.subscribe((): void => {
       this.refreshLoginState();
-      if (this.showPlayHistory.value && this.playHistoryVersion !== this.controller.playHistoryVersion) {
-        this.playHistoryVersion = this.controller.playHistoryVersion;
-        this.playHistoryItems = this.controller.playHistory.slice(0);
-        this.playHistorySource.setItems(this.playHistoryItems);
-      }
     }, 'SettingsPage');
     // debugMode 开关显示：仅读 AppStore 供 UI；Logger 恢复与启动提醒已前移 Index 冷启动链路（v0.4-Part1-ux-fixes US10）
     this.debugModeOn = AppStore.getNumber(Constants.KEY_DEBUG_MODE, 0) === 1;
     registerSettingsBack((): boolean => {
       if (this.showQualitySheet) {
         this.showQualitySheet = false;
-        return true;
-      }
-      if (this.showPlayHistory.value) {
-        if (this.historySelectMode) {
-          this.exitHistorySelectMode();
-          return true;
-        }
-        if (this.historyClose !== undefined) {
-          this.historyClose();
-        } else {
-          this.showPlayHistory.value = false;
-        }
         return true;
       }
       return false;
@@ -201,6 +119,7 @@ export struct SettingsPage {
 
   private refreshLoginState(): void {
     const session: BiliSession = BiliSession.getInstance();
+    this.accountLoading = !this.controller.isInited();
     this.isLogged = session.isLogged();
     if (session.isLogged()) {
       this.loginName = session.uname !== '' ? session.uname : `已登录 (UID ${session.mid})`;
@@ -248,13 +167,6 @@ export struct SettingsPage {
       AppStore.putNumber(Constants.KEY_CELLULAR_AUDIO_QUALITY, tier);
     }
     this.showQualitySheet = false;
-  }
-
-  private openPlayHistory(): void {
-    this.playHistoryVersion = this.controller.playHistoryVersion;
-    this.playHistoryItems = this.controller.playHistory.slice(0);
-    this.playHistorySource.setItems(this.playHistoryItems);
-    this.showPlayHistory.value = true;
   }
 
   private handleAboutIconTap(): void {
@@ -309,255 +221,6 @@ export struct SettingsPage {
 
   private openLogPage(): void {
     connectBool(Constants.AS_SHOW_LOG_PAGE, false).value = true;
-  }
-
-  // viewAt 为秒级时间戳（play-history-progress 迁移后统一单位），内部转毫秒做相对时间计算
-  private formatPlayedAt(viewAt: number): string {
-    const playedAtMs: number = viewAt * 1000;
-    const diff: number = Date.now() - playedAtMs;
-    if (diff < 60000) {
-      return '刚刚';
-    }
-    if (diff < 3600000) {
-      return `${Math.floor(diff / 60000)} 分钟前`;
-    }
-    if (diff < 86400000) {
-      return `${Math.floor(diff / 3600000)} 小时前`;
-    }
-    if (diff < 7 * 86400000) {
-      return `${Math.floor(diff / 86400000)} 天前`;
-    }
-    const d: Date = new Date(playedAtMs);
-    const month: number = d.getMonth() + 1;
-    const day: number = d.getDate();
-    const monthStr: string = month < 10 ? `0${month}` : `${month}`;
-    const dayStr: string = day < 10 ? `0${day}` : `${day}`;
-    return `${monthStr}-${dayStr}`;
-  }
-
-  // 剩余时长格式化（plan R10）：mm:ss，分钟数不封顶，与 QueueSheet.formatTime 风格一致
-  private formatRemainingSec(remainingSec: number): string {
-    const minutes: number = Math.floor(remainingSec / 60);
-    const seconds: number = remainingSec % 60;
-    const minStr: string = minutes < 10 ? `0${minutes}` : `${minutes}`;
-    const secStr: string = seconds < 10 ? `0${seconds}` : `${seconds}`;
-    return `${minStr}:${secStr}`;
-  }
-
-  // 历史条目第二行文案（FR-008/FR-010）：已听完 → 「日期 · 已听完」；
-  // 有进度且时长已知 → 「日期 · 剩 mm:ss」；其余（未记录进度/时长未知）降级为仅日期
-  private historyMetaText(item: PlayHistoryItem): string {
-    const timeText: string = this.formatPlayedAt(item.viewAt);
-    if (item.progress === -1) {
-      return `${timeText} · 已听完`;
-    }
-    if (item.progress > 0 && item.duration > 0 && item.duration > item.progress) {
-      return `${timeText} · 剩 ${this.formatRemainingSec(item.duration - item.progress)}`;
-    }
-    return timeText;
-  }
-
-  private async replayHistory(item: PlayHistoryItem): Promise<void> {
-    try {
-      const v: BiliVideo = BiliVideo.create(item.bvid, 0, 0, item.title, item.cover, item.duration);
-      v.ownerName = item.ownerName;
-      await this.controller.playDownloadedSong(v);
-      this.controller.goToPlayerTab?.();
-    } catch (err) {
-      const error = err as BusinessError;
-      promptAction.showToast({ message: `播放失败: ${error.message}` });
-    }
-  }
-
-  // 左滑单条删除（US3 FR-009）：点击时按 bvid 从当前 @State 数组实时解析下标，
-  // 避免 LazyForEach 键复用导致的陈旧索引；@State splice 与 DataSource.notifyDataDelete 双侧同步
-  // （包补位动画 US6），控制器侧异步写盘（removePlayHistoryItem 不 emitUi，面板自行刷新）
-  private removeHistoryItem(item: PlayHistoryItem): void {
-    const bvid: string = item.bvid;
-    if (bvid === '') {
-      return;
-    }
-    let idx: number = -1;
-    for (let i = 0; i < this.playHistoryItems.length; i++) {
-      if (this.playHistoryItems[i].bvid === bvid) {
-        idx = i;
-        break;
-      }
-    }
-    if (idx < 0) {
-      return;
-    }
-    this.controller.removePlayHistoryItem(bvid);
-    this.playHistoryVersion = this.controller.playHistoryVersion;
-    this.getUIContext().animateTo({ duration: Constants.TOKEN_DELETE_ANIM_MS, curve: Curve.EaseOut }, (): void => {
-      this.playHistoryItems.splice(idx, 1);
-      this.playHistorySource.notifyDataDelete(idx);
-    });
-  }
-
-  // 左滑删除确认（US1 双触发）：点垃圾桶/滑过阈值（SwipeActionItem.onAction）均进本弹窗，
-  // 确认后删除，取消/点外围经 closeAllSwipeActions 复位收起滑动行
-  private confirmRemoveHistoryItem(item: PlayHistoryItem): void {
-    AlertDialog.show({
-      title: Constants.DIALOG_DELETE_HISTORY_TITLE,
-      message: Constants.DIALOG_DELETE_HISTORY_MSG,
-      autoCancel: true,
-      alignment: DialogAlignment.Center,
-      primaryButton: {
-        value: '删除',
-        fontColor: $r('app.color.danger_red'),
-        action: (): void => {
-          this.removeHistoryItem(item);
-        }
-      },
-      secondaryButton: {
-        value: '取消',
-        action: (): void => {
-          this.historyScroller.closeAllSwipeActions();
-        }
-      },
-      cancel: (): void => {
-        this.historyScroller.closeAllSwipeActions();
-      }
-    });
-  }
-
-  // 左滑露出的红色垃圾桶删除钮（US1 双触发）：点击进确认弹窗，滑过阈值（onAction）同弹窗
-  @Builder
-  historyDeleteAction(item: PlayHistoryItem) {
-    Column() {
-      Button() {
-        SymbolGlyph($r('sys.symbol.trash'))
-          .fontSize(Constants.SWIPE_DELETE_ICON_FONT)
-          .fontColor([$r('app.color.fg_on_dark')])
-          .fontWeight(FontWeight.Bold)
-      }
-      .width(Constants.SWIPE_DELETE_BTN_SIZE)
-      .height(Constants.SWIPE_DELETE_BTN_SIZE)
-      .backgroundColor($r('app.color.danger_red'))
-      .borderRadius(Constants.SWIPE_DELETE_BTN_RADIUS)
-      .onClick(() => {
-        this.confirmRemoveHistoryItem(item);
-      })
-    }
-    .height('100%')
-    .justifyContent(FlexAlign.Center)
-    .padding({ left: Constants.TOKEN_SPACE_M, right: Constants.TOKEN_SPACE_M })
-  }
-
-  private confirmClearPlayHistory(): void {
-    AlertDialog.show({
-      title: '清空播放历史',
-      message: '确定清空全部播放历史吗？此操作不可恢复。',
-      autoCancel: true,
-      alignment: DialogAlignment.Center,
-      primaryButton: {
-        value: '取消',
-        action: (): void => {
-        }
-      },
-      secondaryButton: {
-        value: '清空',
-        fontColor: $r('app.color.danger_red'),
-        action: (): void => {
-          this.controller.clearPlayHistory();
-          this.playHistoryVersion = this.controller.playHistoryVersion;
-          this.playHistoryItems = [];
-          this.playHistorySource.setItems(this.playHistoryItems);
-        }
-      }
-    });
-  }
-
-  // 面板关闭（遮罩/返回/滑出）自动退出多选并清选中（US4，对齐队列面板关闭复位语义）
-  @Monitor('showPlayHistory.value')
-  onPlayHistoryVisibilityChanged(): void {
-    if (!this.showPlayHistory.value) {
-      this.exitHistorySelectMode();
-    }
-  }
-
-  // 进入多选即收起已滑出的行（v0.4-Part1-ux-fixes US5）：多选态不再挂载左滑删除动作
-  @Monitor('historySelectMode')
-  onHistorySelectModeChanged(): void {
-    if (this.historySelectMode) {
-      this.historyScroller.closeAllSwipeActions();
-    }
-  }
-
-  private toggleHistorySelect(bvid: string): void {
-    const idx: number = this.selectedHistoryIds.indexOf(bvid);
-    if (idx >= 0) {
-      this.selectedHistoryIds.splice(idx, 1);
-    } else {
-      this.selectedHistoryIds.push(bvid);
-    }
-    this.selectedHistoryIds = this.selectedHistoryIds.slice(0);
-  }
-
-  private isAllHistorySelected(): boolean {
-    return this.playHistoryItems.length > 0 && this.selectedHistoryIds.length === this.playHistoryItems.length;
-  }
-
-  private toggleHistorySelectAll(): void {
-    if (this.isAllHistorySelected()) {
-      this.selectedHistoryIds = [];
-    } else {
-      const all: string[] = [];
-      for (let i = 0; i < this.playHistoryItems.length; i++) {
-        all.push(this.playHistoryItems[i].bvid);
-      }
-      this.selectedHistoryIds = all;
-    }
-  }
-
-  private exitHistorySelectMode(): void {
-    this.historySelectMode = false;
-    this.selectedHistoryIds = [];
-  }
-
-  // 删除所选（US4）：二次确认后批量删除，先退多选再高→低增量补位动画，交互对齐队列
-  private removeSelectedHistory(): void {
-    const count: number = this.selectedHistoryIds.length;
-    if (count === 0) {
-      return;
-    }
-    AlertDialog.show({
-      title: Constants.DIALOG_REMOVE_SELECTED_TITLE,
-      message: Constants.DIALOG_REMOVE_SELECTED_MSG,
-      autoCancel: true,
-      alignment: DialogAlignment.Center,
-      primaryButton: {
-        value: '删除',
-        fontColor: $r('app.color.danger_red'),
-        action: (): void => {
-          const ids: string[] = this.selectedHistoryIds.slice(0);
-          this.exitHistorySelectMode();
-          this.controller.removeSelectedHistory(ids);
-          this.playHistoryVersion = this.controller.playHistoryVersion;
-          this.getUIContext().animateTo({ duration: Constants.TOKEN_DELETE_ANIM_MS, curve: Curve.EaseOut }, (): void => {
-            const idxList: number[] = [];
-            for (let i = 0; i < this.playHistoryItems.length; i++) {
-              if (ids.indexOf(this.playHistoryItems[i].bvid) >= 0) {
-                idxList.push(i);
-              }
-            }
-            for (let k = idxList.length - 1; k >= 0; k--) {
-              this.playHistoryItems.splice(idxList[k], 1);
-              this.playHistorySource.notifyDataDelete(idxList[k]);
-            }
-            if (this.playHistoryItems.length === 0) {
-              this.exitHistorySelectMode();
-            }
-          });
-        }
-      },
-      secondaryButton: {
-        value: '取消',
-        action: (): void => {
-        }
-      }
-    });
   }
 
   // 外链统一跳转（US7）：四链接复用——二次确认后 openLink 拉起系统浏览器，失败 toast
@@ -1260,206 +923,6 @@ export struct SettingsPage {
     })
   }
 
-  // 播放历史面板（GlassSheet 承载）：最近播放倒序，点击回放，清空需二次确认；
-  // 背景由容器提供（sheet_panel_background），关闭经容器动画滑出
-  @Builder
-  playHistoryPanel() {
-    Column() {
-      Column() {
-        if (!this.historySelectMode) {
-          Row() {
-            Text('播放历史')
-              .fontSize(17)
-              .fontWeight(FontWeight.Bold)
-              .fontColor($r('app.color.text_primary'))
-              .layoutWeight(1)
-
-            if (this.playHistoryItems.length > 0) {
-              Row() {
-                SymbolGlyph($r('sys.symbol.list_checkmark'))
-                  .fontSize(Constants.TOKEN_FONT_18)
-                  .fontColor([$r('app.color.text_primary')])
-              }
-              .width(Constants.GLASS_ICON_BTN_SIZE)
-              .height(Constants.GLASS_ICON_BTN_SIZE)
-              .justifyContent(FlexAlign.Center)
-              .backgroundColor($r('app.color.btn_glass'))
-              .backdropBlur(Constants.GLASS_ICON_BTN_BLUR)
-              .border({ width: Constants.GLASS_ICON_BTN_BORDER, color: $r('app.color.btn_border') })
-              .borderRadius(Constants.TOKEN_RADIUS_18)
-              .onClick(() => {
-                this.historySelectMode = true;
-                this.selectedHistoryIds = [];
-              })
-            }
-          }
-          .width('100%')
-        } else {
-          // 多选操作行（US4，对齐队列）：全选/删除所选(计数)/返回
-          Row() {
-            Row() {
-              SymbolGlyph($r('sys.symbol.checkmark_circle_on_circle'))
-                .fontSize(Constants.TOKEN_FONT_18)
-                .fontColor([this.isAllHistorySelected() ? this.accentColor.value : $r('app.color.text_primary')])
-            }
-            .width(Constants.GLASS_ICON_BTN_SIZE)
-            .height(Constants.GLASS_ICON_BTN_SIZE)
-            .justifyContent(FlexAlign.Center)
-            .backgroundColor($r('app.color.btn_glass'))
-            .backdropBlur(Constants.GLASS_ICON_BTN_BLUR)
-            .border({ width: Constants.GLASS_ICON_BTN_BORDER, color: $r('app.color.btn_border') })
-            .borderRadius(Constants.TOKEN_RADIUS_18)
-            .onClick(() => {
-              this.toggleHistorySelectAll();
-            })
-
-            Blank()
-
-            Row({ space: Constants.TOKEN_SPACE_XS }) {
-              SymbolGlyph($r('sys.symbol.trash_fill'))
-                .fontSize(Constants.TOKEN_FONT_18)
-                .fontColor([$r('app.color.danger_red')])
-              Text(`${this.selectedHistoryIds.length}`)
-                .fontSize(Constants.TOKEN_FONT_BODY_S)
-                .fontColor($r('app.color.danger_red'))
-            }
-            .height(Constants.GLASS_ICON_BTN_SIZE)
-            .padding({ left: Constants.TOKEN_SPACE_10, right: Constants.TOKEN_SPACE_10 })
-            .justifyContent(FlexAlign.Center)
-            .alignItems(VerticalAlign.Center)
-            .backgroundColor($r('app.color.btn_glass'))
-            .backdropBlur(Constants.GLASS_ICON_BTN_BLUR)
-            .border({ width: Constants.GLASS_ICON_BTN_BORDER, color: $r('app.color.btn_border') })
-            .borderRadius(Constants.TOKEN_RADIUS_18)
-            .opacity(this.selectedHistoryIds.length > 0 ? 1 : 0.4)
-            .onClick(() => {
-              this.removeSelectedHistory();
-            })
-
-            Row() {
-              SymbolGlyph($r('sys.symbol.chevron_left'))
-                .fontSize(Constants.TOKEN_FONT_18)
-                .fontColor([$r('app.color.text_primary')])
-            }
-            .width(Constants.GLASS_ICON_BTN_SIZE)
-            .height(Constants.GLASS_ICON_BTN_SIZE)
-            .justifyContent(FlexAlign.Center)
-            .backgroundColor($r('app.color.btn_glass'))
-            .backdropBlur(Constants.GLASS_ICON_BTN_BLUR)
-            .border({ width: Constants.GLASS_ICON_BTN_BORDER, color: $r('app.color.btn_border') })
-            .borderRadius(Constants.TOKEN_RADIUS_18)
-            .margin({ left: Constants.TOKEN_SPACE_S })
-            .onClick(() => {
-              this.exitHistorySelectMode();
-            })
-          }
-          .width('100%')
-        }
-      }
-      .width('100%')
-      .padding({ left: Constants.TOKEN_SPACE_L, right: Constants.TOKEN_SPACE_L, top: Constants.TOKEN_SPACE_S, bottom: Constants.TOKEN_SPACE_S })
-
-      if (this.playHistoryItems.length === 0) {
-        Column() {
-          Text('暂无播放历史，听歌后会自动记录')
-            .fontSize(Constants.TOKEN_FONT_BODY_M)
-            .fontColor($r('app.color.text_secondary'))
-            .margin({ top: 80 })
-        }
-        .width('100%')
-        .alignItems(HorizontalAlign.Center)
-        .layoutWeight(1)
-      } else {
-        Stack() {
-          List({ space: 0, scroller: this.historyScroller }) {
-            LazyForEach(this.playHistorySource, (item: PlayHistoryItem) => {
-            ListItem() {
-              Row() {
-                if (this.historySelectMode) {
-                  Checkbox()
-                    .select(this.selectedHistoryIds.indexOf(item.bvid) >= 0)
-                    .selectedColor(this.accentColor.value)
-                    .width(Constants.SELECT_CHECKBOX_SIZE)
-                    .height(Constants.SELECT_CHECKBOX_SIZE)
-                    .margin({ right: Constants.TOKEN_SPACE_S })
-                    .onChange((value: boolean) => {
-                      const inList: boolean = this.selectedHistoryIds.indexOf(item.bvid) >= 0;
-                      if (value !== inList) {
-                        this.toggleHistorySelect(item.bvid);
-                      }
-                    })
-                }
-
-                CoverThumb({ cover: item.cover })
-
-                Column() {
-                  Text(item.title)
-                    .fontSize(Constants.TOKEN_FONT_BODY_M)
-                    .fontColor($r('app.color.text_primary'))
-                    .maxLines(1)
-                    .textOverflow({ overflow: TextOverflow.Ellipsis })
-                  Text(this.historyMetaText(item))
-                    .fontSize(Constants.TOKEN_FONT_AUX)
-                    .fontColor($r('app.color.text_secondary'))
-                    .margin({ top: 3 })
-                }
-                .alignItems(HorizontalAlign.Start)
-                .layoutWeight(1)
-                .margin({ left: Constants.TOKEN_SPACE_10 })
-              }
-              .width('100%')
-              .padding({ left: Constants.TOKEN_SPACE_L, right: Constants.TOKEN_SPACE_L, top: Constants.TOKEN_SPACE_10, bottom: Constants.TOKEN_SPACE_10 })
-              .backgroundColor(this.pressedKey === item.bvid ? $r('app.color.item_pressed_background') : Color.Transparent)
-              .onTouch((e: TouchEvent): void => {
-                if (e.type === TouchType.Down) {
-                  this.pressedKey = item.bvid;
-                } else if (e.type === TouchType.Up || e.type === TouchType.Cancel) {
-                  this.pressedKey = '';
-                }
-              })
-              .onClick(() => {
-                if (this.historySelectMode) {
-                  this.toggleHistorySelect(item.bvid);
-                } else {
-                  this.replayHistory(item);
-                }
-              })
-              .gesture(
-                LongPressGesture()
-                  .onAction(() => {
-                    if (!this.historySelectMode) {
-                      this.historySelectMode = true;
-                      this.selectedHistoryIds = [item.bvid];
-                    }
-                  })
-              )
-            }
-            // 左滑删除（US1 双触发）：SwipeActionItem——点垃圾桶/滑过阈值均进确认弹窗；
-            // 多选态不挂载删除动作（v0.4-Part1-ux-fixes US5），退出多选恢复
-            .swipeAction(this.historySelectMode ? {} : {
-              end: {
-                builder: (): void => {
-                  this.historyDeleteAction(item);
-                },
-                onAction: (): void => {
-                  this.confirmRemoveHistoryItem(item);
-                }
-              }
-            })
-          }, (item: PlayHistoryItem) => `${item.bvid}_${item.viewAt}_${item.progress}`)
-          }
-          .width('100%')
-          .height('100%')
-          .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
-        }
-        .width('100%')
-        .layoutWeight(1)
-      }
-      }
-      .width('100%')
-      .height('100%')
-  }
-
   // 音质档位选择面板（audio-quality-settings）：单 sheet + qualityEditTarget 标记当前编辑项；
   // 当前档 ✓ 高亮，选中即持久化并关闭；未登录仅渲染「最高」「64K」（FR-009）
   @Builder
@@ -1499,7 +962,7 @@ export struct SettingsPage {
           .width('100%')
           .padding({ left: Constants.TOKEN_SPACE_L, right: Constants.TOKEN_SPACE_L, top: Constants.TOKEN_SPACE_S, bottom: Constants.TOKEN_SPACE_L })
       } else if (BiliSession.getInstance().vipStatus !== 1) {
-        Text('192K 音质需大会员')
+        Text('192K/Hi-Res/杜比需大会员')
           .fontSize(Constants.TOKEN_FONT_BODY_S)
           .fontColor(this.accentColor.value)
           .width('100%')
@@ -1543,7 +1006,12 @@ export struct SettingsPage {
           Scroll(this.settingsScroller) {
             Column() {
               SettingsGroup({ title: '账号' }) {
-                if (this.isLogged) {
+                if (this.accountLoading) {
+                  SettingsRow({
+                    title: '正在恢复登录状态…',
+                    rowIcon: $r('sys.symbol.person')
+                  })
+                } else if (this.isLogged) {
                   SettingsRow({
                     title: this.loginName,
                     rowIcon: $r('sys.symbol.person'),
@@ -1616,7 +1084,7 @@ export struct SettingsPage {
                     .textAlign(TextAlign.Start)
                     .padding({ left: Constants.TOKEN_SPACE_L, right: Constants.TOKEN_SPACE_L, top: Constants.TOKEN_SPACE_XS, bottom: Constants.TOKEN_SPACE_10 })
                 } else if (BiliSession.getInstance().vipStatus !== 1) {
-                  Text('192K 音质需大会员')
+                  Text('192K/Hi-Res/杜比需大会员')
                     .fontSize(Constants.TOKEN_FONT_BODY_S)
                     .fontColor(this.accentColor.value)
                     .width('100%')
@@ -1664,7 +1132,7 @@ export struct SettingsPage {
                   showArrow: true,
                   showDivider: true,
                   rowAction: (): void => {
-                    this.openPlayHistory();
+                    connectBool(Constants.AS_SHOW_PLAY_HISTORY, false).value = true;
                   }
                 })
                 SettingsRow({
@@ -1731,18 +1199,6 @@ export struct SettingsPage {
       .width('100%')
       .height('100%')
       .backgroundColor($r('app.color.page_background'))
-
-      if (this.showPlayHistory.value) {
-        GlassSheet({
-          openState: this.showPlayHistory,
-          panelHeight: '62%',
-          onRegisterClose: (close: (() => void) | undefined): void => {
-            this.historyClose = close;
-          }
-        }) {
-          this.playHistoryPanel()
-        }
-      }
     }
     .width('100%')
     .height('100%')

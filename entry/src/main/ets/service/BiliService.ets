@@ -1725,9 +1725,9 @@ export class BiliService {
   }
 
   // 回落算法（FR-003，纯函数）：MAX→列表首位（bandwidth 降序即最高带宽，含 Hi-Res/杜比升级）；
-  // 期望档 qn 精确存在→取之；否则取不高于期望档的常规档（仅 30216/30232/30280 参与，
-  // Hi-Res/杜比升级只走 MAX 分支）中带宽最高者；无任何 ≤期望 常规档→取列表首位兜底（不能不放）；
-  // 空列表抛错
+  // 期望档 qn 精确存在→取之；否则取不高于期望档的常规档（仅 30216/30232/30280 参与；
+  // Hi-Res/杜比档缺档时回落上限按 192K 计——qn 数值序与质量序不一致，按数值比较会错落 132K）
+  // 中带宽最高者；无任何 ≤期望 常规档→取列表首位兜底（不能不放）；空列表抛错
   static pickAudioTrack(tracks: AudioTrack[], tier: QualityTier): AudioTrack {
     if (tracks.length === 0) {
       throw new Error('No audio track to pick');
@@ -1737,6 +1737,9 @@ export class BiliService {
       return tracks[0];
     }
     const wantId: number = Number(tier);
+    // Hi-Res/杜比档缺档回落上限为 192K：qn 数值序与质量序不一致，按数值比较会错落 132K
+    const fallbackId: number = (tier === QualityTier.QHIRES || tier === QualityTier.QDOLBY)
+      ? QualityTier.Q192K : wantId;
     for (let i = 0; i < tracks.length; i++) {
       if (tracks[i].id === wantId) {
         Logger.log('player', 'pickAudioTrack', `tier=${wantId} qn=${tracks[i].id} exact`);
@@ -1747,7 +1750,7 @@ export class BiliService {
       const tid: number = tracks[i].id;
       const isStandard: boolean = tid === QualityTier.Q64K || tid === QualityTier.Q132K ||
         tid === QualityTier.Q192K;
-      if (isStandard && tid <= wantId) {
+      if (isStandard && tid <= fallbackId) {
         Logger.log('player', 'pickAudioTrack', `tier=${wantId} qn=${tid} fallback`);
         return tracks[i];
       }

@@ -9,7 +9,9 @@ import { CoverUrl } from '../service/CoverUrl';
 import { Appearance } from '../service/Appearance';
 import { CoverPalette } from '../service/CoverPalette';
 import { SleepTimerController } from '../service/SleepTimerController';
-import { AudioTrack, AudioQuality } from '../model/AudioQuality';
+import { AppStore } from '../service/AppStore';
+import { BiliSession } from '../service/BiliSession';
+import { AudioTrack, AudioQuality, QualityTier } from '../model/AudioQuality';
 import { connectBool, connectNum, connectStr, BoolState, NumState, StrState } from '../service/V2State';
 
 // 颜色全部使用 base/dark 双份颜色资源：浅色/深色外观下自动匹配（见 resources/base|dark/element/color.json）
@@ -455,12 +457,28 @@ export struct PlayerOverlay {
   }
 
   // 音质入口按钮短名（T017，替代波形图标）：dash 流式 → 当前音轨码精确档名
-  // （trackLabel 可显示 Hi-Res/杜比，比按档位归并的 label 更精确）；其余（未起播/未知）→「64K」
+  // （trackLabel 可显示 Hi-Res/杜比，比按档位归并的 label 更精确）；空闲 → 缓存的上次实际档
+  // （无缓存回退当前网络设置默认档）；durl 兜底流 →「默认」（无档位概念）
   private qualityEntryLabel(): string {
     if (this.currentTrackSource === 'dash') {
       return AudioQuality.trackLabel(this.currentQualityCode);
     }
-    return '64K';
+    if (this.currentTrackSource === '') {
+      if (this.currentQualityCode > 0) {
+        return AudioQuality.trackLabel(this.currentQualityCode);
+      }
+      return AudioQuality.label(this.idleTier());
+    }
+    return '默认';
+  }
+
+  // 空闲回退档（无缓存时）：当前网络设置默认档，按登录/会员收敛显示
+  private idleTier(): QualityTier {
+    const key: string = this.controller.isWifiNow()
+      ? Constants.KEY_WIFI_AUDIO_QUALITY : Constants.KEY_CELLULAR_AUDIO_QUALITY;
+    const stored: number = AppStore.getNumber(key, -1);
+    return AudioQuality.clampTier(AudioQuality.fromStored(stored),
+      BiliSession.getInstance().isLogged(), BiliSession.getInstance().vipStatus);
   }
 
   @Builder
@@ -654,7 +672,7 @@ export struct PlayerOverlay {
   }
 
   // 音质面板（audio-quality-settings FR-005）：dash 源列出实际下发音轨（当前档高亮，点选换档并写回默认）；
-  // durl/空闲源按 64K 兜底显示；未登录时高档位由服务端决定是否下发，面板天然只显示实际可用音轨
+  // 空闲源显示将用档（缓存上次实际档优先，无缓存回退设置默认档）；durl 兜底流为「默认」单选项
   @Builder
   qualityPanel() {
     Column() {
@@ -684,16 +702,29 @@ export struct PlayerOverlay {
             }, (track: AudioTrack) => `${track.id}`)
           }
           .width('100%')
-        } else {
-          Text('64K')
+        } else if (this.currentTrackSource === '') {
+          Text(this.qualityEntryLabel())
             .fontSize(Constants.TOKEN_FONT_BODY_L)
             .fontColor($r('app.color.text_primary'))
             .margin({ bottom: Constants.TOKEN_SPACE_6 })
-          Text('登录后可选更高音质')
+          Text('起播后显示实际可用音轨')
             .fontSize(Constants.TOKEN_FONT_BODY)
             .fontColor(this.textSecondary())
             .textAlign(TextAlign.Center)
             .width('100%')
+        } else {
+          Button('默认')
+            .width('44%')
+            .height(40)
+            .backgroundColor(this.tintBg())
+            .backdropBlur(20)
+            .fontColor($r('app.color.text_primary'))
+            .borderRadius(Constants.TOKEN_RADIUS_XL)
+            .fontSize(Constants.TOKEN_FONT_BODY_M)
+            .margin(Constants.TOKEN_SPACE_6)
+            .onClick(() => {
+              this.showQuality = false;
+            })
         }
       }
       .width('76%')

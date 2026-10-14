@@ -2,14 +2,19 @@ import { Constants } from './Constants';
 import { connectBool, BoolState } from './V2State';
 
 // 返回链统一入口（v0.4-Part2 z-layer-refactor）：去路由化后系统返回仅达 Index @Entry，
-// dismissOverlaysForBack 按层自上而下逐层关闭（队列→播放层附属面板→播放层→日志层→设置层句柄→设置层），
-// 层物理堆叠保证链命中的永远是当前最上层；队列滑出句柄与设置层内部句柄均模块级注册（宿主生命周期上报）。
+// dismissOverlaysForBack 按层自上而下逐层关闭（队列→历史面板→播放层附属面板→播放层→日志层→设置层句柄→设置层），
+// 层物理堆叠保证链命中的永远是当前最上层；各层滑出句柄与设置层内部句柄均模块级注册（宿主生命周期上报）。
 
 let queueCloseHandle: (() => void) | undefined = undefined;
+let historyCloseHandle: (() => void) | undefined = undefined;
 let settingsBackHandle: (() => boolean) | undefined = undefined;
 
 export function registerQueueClose(handle: (() => void) | undefined): void {
   queueCloseHandle = handle;
+}
+
+export function registerHistoryClose(handle: (() => void) | undefined): void {
+  historyCloseHandle = handle;
 }
 
 export function registerSettingsBack(handle: (() => boolean) | undefined): void {
@@ -29,6 +34,21 @@ export function dismissOverlaysForBack(): boolean {
       queueCloseHandle();
     } else {
       showQueueSheet.value = false;
+    }
+    return true;
+  }
+  // 历史面板（L4 独立层）：多选优先退多选，再滑出面板
+  const showPlayHistory: BoolState = connectBool(Constants.AS_SHOW_PLAY_HISTORY, false);
+  if (showPlayHistory.value) {
+    const historySelectMode: BoolState = connectBool(Constants.AS_HISTORY_SELECT_MODE, false);
+    if (historySelectMode.value) {
+      historySelectMode.value = false;
+      return true;
+    }
+    if (historyCloseHandle !== undefined) {
+      historyCloseHandle();
+    } else {
+      showPlayHistory.value = false;
     }
     return true;
   }

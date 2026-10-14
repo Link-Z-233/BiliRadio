@@ -2,7 +2,7 @@
 
 ## 构建与运行
 
-- **构建**：`devecocli build`（需安装 DevEco Studio；SDK 在 `D:\Program Files\Huawei\DevEco Studio\sdk`）
+- **构建**：`devecocli build`
 - **运行**：`devecocli run --skip-build`（构建成功后）
 - **静态检查**（`.ets` 快速预检）：`arkts_check` — 本轮编辑的所有 `.ets` 文件一次性传入，通过后再 `devecocli build`
 - **无测试套件**：devDependencies 有 `@ohos/hypium` / `@ohos/hamock` 但无测试文件
@@ -14,14 +14,13 @@
 - **pages/** — `Index.ets`（唯一 `@Entry`、单页壳）、`HomePage`、`PlayerOverlay`、`SourcePage`、`SettingsPage`、`AddSubscriptionSheet`
 - **service/** — 业务单例：`PlayerController`（播控）、`BiliService`（B 站 API）、`BiliSession`（登录）、`MediaSession`（锁屏/控中心）、`AudioPlayer`、`LinkResolver`、`WbiSigner`、`SleepTimerController`、`AppStore`（持久化）、`SecureStore`、`SubscriptionStore`、`Constants`
 - **model/** — 数据类：`BiliVideo`、`AudioQuality`（音质档位）、`PlayHistoryItem`、`Subscription`、`Season`、`FavFolder`
-- **component/** — 共用 UI：`MiniPlayer`、`GlassSheet`（通用玻璃浮层容器，队列/历史共用）、`QueueSheet`、`CoverThumb`、`SettingsRow`、`SettingsGroup`、`EdgeHint`
-
+- **component/** — 共用 UI：`MiniPlayer`、`GlassSheet`（通用玻璃浮层容器，队列/历史共用）、`QueueSheet`、`HistorySheet`、`CoverThumb`、`SettingsRow`、`SettingsGroup`、`EdgeHint`
 - **模块边界契约**：`spec/v0.3-engineering-refactor/architecture-boundary.md`（依赖单向：service→model、pages→service/model、Constants 零业务依赖；上帝对象 PlayerController/BiliService/SettingsPage 只登记不拆分）
 
 ### 导航
 
 - **唯一 `@Entry`**：`Index`（`main_pages.json` 注册）
-- **四层 z 序**（v0.4-Part2 层序契约，Index Stack 自下而上）：L1 导航+胶囊 → L2 设置层+日志层（去路由，Stack 条件渲染层级；历史面板留设置页树内）→ L3 播放浮层 → L4 队列面板；高层物理覆盖低层，返回链统一 `BackHandler.dismissOverlaysForBack` 逐层关闭
+- **五层 z 序**（v0.4-Part2 层序契约 + 历史面板独立层修订）：L1 导航+胶囊 → L2 设置层+日志层（去路由，Stack 条件渲染层级）→ L3 播放浮层 → L4 历史面板（Index 单一挂载 GlassSheet，入口在设置页）→ L5 队列面板；高层物理覆盖低层，返回链统一 `BackHandler.dismissOverlaysForBack` 逐层关闭
 - `Navigation` + `NavPathStack` 仅存 `sourcePage` 一条路由（`router_map.json`）；设置/日志不再走系统路由
 - 播放层是 **Stack 条件渲染**（非 `bindContentCover`——KI-5：ModalPage 渲染管线在 API 24 平板断裂）
 - 队列是底部弹出面板（Index 单一挂载的 GlassSheet，非系统 sheet）
@@ -38,9 +37,7 @@
 
 ## 版本基线（API 26 前提）
 
-- **compatibleSdkVersion = 26.0.0**（已落地，2026-10-11 实施轮 T004；`targetSdkVersion` 已为 26.0.0）
-- 规划整体基于 **API 26**，**不考虑任何 API<26 兼容设计/守卫**（全局前提详见 `spec/v0.3-engineering-refactor/spec.md`）
-- **`[API24-COMPAT]` 守卫已全部移除**（2026-10-11 实施轮 T005；`setMediaCenterControlType` 防御性 try/catch 保留、无标记），不再新增守卫
+- **compatibleSdkVersion = 26.0.0**
 
 ## 编码原则（Ponytail）
 
@@ -64,20 +61,25 @@
 - **DIS-1**：首页下拉刷新已禁用（代码以注释保留，标记 `[DISABLED 2026-10]`）
 - **待真机验证**：PROJECT_NOTES.md §五集中登记（VR-1～VR-11）——后续轮次验证一律真机；含 KI-3（三处左滑已实现，复测销项）、KI-6（睡眠定时切后台校准）、R9/R10 反馈轮、v0.4-Part1 修复轮、v0.4-Part2 z 序重构
 
-## 工作方式（SDD 五阶段）
+## 工作方式
+
+- **无人值守模式**（用户批准批次执行时的默认运行方式）：① 小问题（不影响行为/不返工）继续执行，轮次结束时在对话末尾集中输出交用户判断，不写入文件；② 大问题（可能行为回归/数据丢失/需返工）立即暂停报告；③ 有争议的问题（多方案均合理/影响后续路线）停下解释选项交用户决策；④ 验证失败不无限重试——同一目标最多 3 次，仍失败即暂停报告
+- **bugfix 记录**：直接修复的 bug（不走 SDD 的）统一记入活跃 spec 目录（`spec/feature.json` 所指）的单份 `bugfix.md`，按发生顺序编号分节追加（`## 1.` 起递增）
+- **代码中不带时间戳**：注释只写机制/动机/约束，不写日期——时间信息由 git 历史与文档（bugfix.md、spec 工件）承载
+
+### SDD 五阶段
 
 - **五阶段流程**：spec（需求）→ plan（设计）→ tasks（任务拆解）→ Review Gate（逐阶段确认）→ 子代理实施/验证
 - **规划轮 vs 实施轮**：可只产出规划（spec/plan/tasks 三份文档）不实施代码；`tasks.md` 是实施路线图，实施时按其中「实施轮次建议」分批执行
 - **子代理行为规范**：`spec-implementation` 只实施已批准任务；`spec-verify` 只验证一次（失败不重调，报告由主代理处理并修复）；零代码轮次（规划轮）禁止触碰任何源码/配置
 - **验证范围默认值**：**默认仅构建验证（build-only）**——`tasks.md` Verification 阶段默认只含构建+部署（`<!-- verification_scope: build-only -->`）；需要 UI 验证（模拟器/真机）须在 Phase 3 Review Gate 前显式提出，并改标记为 `<!-- verification_scope: build+ui -->`
 - **Spec**：`spec/` 存放功能规格与 UX 反馈轮次，`spec/feature.json` 指向当前活跃目录；实现功能前先查阅对应 spec
-- **无人值守模式**（用户批准批次执行时的默认运行方式）：① 小问题（不影响行为/不返工）记录在案（提交信息/PROJECT_NOTES）继续执行；② 大问题（可能行为回归/数据丢失/需返工）立即暂停报告；③ 有争议的问题（多方案均合理/影响后续路线）停下解释选项交用户决策；④ 验证失败不无限重试——同一目标最多 3 次，仍失败即暂停报告
 
 ## Git 提交
 
 - **标题行**：`<type>: <版本-轮次>（<主题>）`，如 `feat: v0.4.0-Part1（浮层视觉重设计 + UX 修复轮）`
 - **正文**：要点列表，每块改动一行，写清「做了什么 + 关键机制/根因」，不罗列文件路径清单；同类小项合并一行以「等」收尾
-- **不入提交信息**：验证结论与待验登记（记 PROJECT_NOTES §五）、文件级明细（git diff 自查）
+- **不入提交信息**：验证结论与待验登记、文件级明细（git diff 自查）
 - **范例**（v0.4.0-Part1 提交信息）：
 
 ```
