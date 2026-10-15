@@ -14,22 +14,97 @@ import { promptAction } from '@kit.ArkUI';
 // 列表上下边缘渐变模糊半径；sheet 底部安全留白
 const EDGE_BLUR_RADIUS: number = 48;
 const LIST_BOTTOM_GAP: number = 12;
-// 列表项近似高度：长按滑动多选时把手指位移换算成经过的条目数（富列表：44 封面 + 上下各 12 内边距）
-// ponytail: 分P 窄行（约 36）低于本估算，滑动范围选对窄行计数偏保守；需要精确时改按行实际高度累积
-const ITEM_HEIGHT: number = 68;
+// 条目估算高度（拖选位移换算用）：单条目整行沿用 68（封面 44 + 上下各 12 内边距）；
+// 组头行 ≈ 封面 44 + 上 12 下 8；分P 窄行 ≈ 字号 14 行高 + 上下各 8
+// ponytail: 估算偏保守只影响拖选效率不影响正确性；需精确时改按 onAreaChange 逐条目回填实际高度
+const EST_FULL_ROW_HEIGHT: number = 68;
+const EST_GROUP_HEADER_HEIGHT: number = 64;
+const EST_PART_ROW_HEIGHT: number = 36;
 
-// 播放列表懒加载数据源：配合 LazyForEach 只构建可视区域内的列表项，
+// 展示条目（plan D1）：队列渲染与交互的最小单位，随 playlistVersion 整体重建、不落盘。
+// 组条目 = 相邻（≥2）同 bvid 且页号≥1 的分P（头行+分P 窄行同属一个 ListItem、一体滑动）；
+// 单条目 = 单P/孤立分P/占位整行。组内扁平下标 = startIndex + 组内偏移
+class QueueEntry {
+  isGroup: boolean = false;
+  videos: BiliVideo[] = [];
+  startIndex: number = 0;
+  key: string = '';
+  estHeight: number = 0;
+}
+
+// 由扁平分P 队列 + PlayerController 条目游程构建展示条目（游程与条目一一对应）
+function buildQueueEntries(flat: BiliVideo[], groups: number[][]): QueueEntry[] {
+  const entries: QueueEntry[] = [];
+  // 同 bvid 多组并存（插播拆组等路径）时附加序号消歧，保证条目键全表唯一（LazyForEach 键约束）
+  const groupSeen: Map<string, number> = new Map<string, number>();
+  for (let g = 0; g < groups.length; g++) {
+    const run: number[] = groups[g];
+    const entry: QueueEntry = new QueueEntry();
+    entry.startIndex = run[0];
+    for (let i = 0; i < run.length; i++) {
+      entry.videos.push(flat[run[i]]);
+    }
+    if (run.length >= 2) {
+      const bvid: string = entry.videos[0].bvid;
+      const seen: number = groupSeen.get(bvid) ?? 0;
+      groupSeen.set(bvid, seen + 1);
+      entry.isGroup = true;
+      entry.key = seen === 0 ? `g:${bvid}` : `g:${bvid}#${seen + 1}`;
+      entry.estHeight = EST_GROUP_HEADER_HEIGHT + run.length * EST_PART_ROW_HEIGHT;
+    } else {
+      const v: BiliVideo = entry.videos[0];
+      entry.isGroup = false;
+      entry.key = `s:${BiliVideo.itemKeyOf(v.bvid, v.page)}`;
+      entry.estHeight = EST_FULL_ROW_HEIGHT;
+    }
+    entries.push(entry);
+  }
+  return entries;
+}
+
+// 条目内容一致性校验（diff 辅助）：键相同但 videos 变化（组裁剪/组内增长）不算纯删除
+function sameEntryVideos(a: QueueEntry, b: QueueEntry): boolean {
+  if (a.videos.length !== b.videos.length) {
+    return false;
+  }
+  for (let i = 0; i < a.videos.length; i++) {
+    if (a.videos[i] !== b.videos[i]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// 队列条目 diff（plan D2）：next 可由 old 纯删除得到时返回被删下标（升序），
+// 否则（增长/重排/组分裂/组缩减）返回 undefined，调用方走整表 reload；相等返回空数组（no-op）
+function diffRemovedEntries(old: QueueEntry[], next: QueueEntry[]): number[] | undefined {
+  const removed: number[] = [];
+  let j: number = 0;
+  for (let i = 0; i < old.length; i++) {
+    if (j < next.length && old[i].key === next[j].key && sameEntryVideos(old[i], next[j])) {
+      j++;
+    } else {
+      removed.push(i);
+    }
+  }
+  if (j !== next.length) {
+    return undefined;
+  }
+  return removed;
+}
+
+// 播放列表懒加载数据源：配合 LazyForEach 只构建可视区域内的列表条目，
 // 避免长歌单一次性创建全部条目（每项都要下载并解码一张封面，会瞬间打满内存）
 class PlaylistDataSource implements IDataSource {
-  private items: BiliVideo[] = [];
+  private entries: QueueEntry[] = [];
   private listeners: DataChangeListener[] = [];
 
   totalCount(): number {
-    return this.items.length;
+    return this.entries.length;
   }
 
-  getData(index: number): BiliVideo {
-    return this.items[index];
+  getData(index: number): QueueEntry {
+    return this.entries[index];
   }
 
   registerDataChangeListener(listener: DataChangeListener): void {
@@ -45,30 +120,29 @@ class PlaylistDataSource implements IDataSource {
     }
   }
 
-  setItems(next: BiliVideo[]): void {
-    // 入参可能是 @State 数组的代理对象（重新赋值后代理会更换），拷贝成普通数组避免渲染源失联
-    this.items = next.slice(0);
+  setItems(next: QueueEntry[]): void {
+    this.entries = next.slice(0);
     for (let i = 0; i < this.listeners.length; i++) {
       this.listeners[i].onDataReloaded();
     }
   }
 
-  // 单项增量删除通知（queue-redesign plan R7）：镜像 HistoryDataSource——先裁自身再广播，
-  // 供左滑删除/清除已播从高索引向低索引逐项刷新，避免整表 reload 造成的封面闪烁
+  // 条目级增量删除通知：先裁自身再广播，供纯删除路径从高索引向低索引逐项刷新，
+  // 避免整表 reload 造成的封面闪烁
   notifyDataDelete(index: number): void {
-    if (index < 0 || index >= this.items.length) {
+    if (index < 0 || index >= this.entries.length) {
       return;
     }
-    this.items.splice(index, 1);
+    this.entries.splice(index, 1);
     for (let i = 0; i < this.listeners.length; i++) {
       this.listeners[i].onDataDelete(index);
     }
   }
 
-  // 单项变更通知：LazyForEach 删除后不重绑部分缓存条目生成器闭包里的 index（过期下标对已缩短
+  // 条目变更通知：LazyForEach 删除后不重绑部分缓存条目生成器闭包里的 index（过期下标对已缩短
   // 数组越界即 jscrash），增量删除后从最低删除位到末尾逐项 onDataChange 强制重绑，使 index 恢复可信
   notifyDataChange(index: number): void {
-    if (index < 0 || index >= this.items.length) {
+    if (index < 0 || index >= this.entries.length) {
       return;
     }
     for (let i = 0; i < this.listeners.length; i++) {
@@ -77,35 +151,15 @@ class PlaylistDataSource implements IDataSource {
   }
 }
 
-// 队列 diff（queue-redesign plan R7）：next 可由 old 纯删除得到时返回被删下标（升序），
-// 否则（增长/重排）返回 undefined，调用方走整表 reload；相等返回空数组（no-op，不触发刷新）
-// 比较键为复合键（bvid:page）——同视频多分P 条目 bvid 不再唯一
-function diffRemovedIndices(old: BiliVideo[], next: BiliVideo[]): number[] | undefined {
-  const removed: number[] = [];
-  let j: number = 0;
-  for (let i = 0; i < old.length; i++) {
-    if (j < next.length && BiliVideo.itemKeyOf(old[i].bvid, old[i].page) ===
-      BiliVideo.itemKeyOf(next[j].bvid, next[j].page)) {
-      j++;
-    } else {
-      removed.push(i);
-    }
-  }
-  if (j !== next.length) {
-    return undefined;
-  }
-  return removed;
-}
-
-// 播放队列抽屉：单行图标头部（清除已播/多选/清空）、左滑单条删除、多选批量移除
+// 播放队列抽屉：单行图标头部（清除已播/多选/清空）、左滑条目删除、多选批量移除
 @ComponentV2
 export struct QueueSheet {
-  @Local items: BiliVideo[] = [];
+  @Local entries: QueueEntry[] = [];
   @Local currentIndex: number = -1;
   @Local currentItemEnded: boolean = false;
   @Local playlistVersion: number = -1;
   @Local selectMode: BoolState = connectBool(Constants.AS_PLAYLIST_SELECT_MODE, false);
-  @Local selectedBvids: string[] = [];
+  @Local selectedEntryKeys: string[] = [];
   @Local pressedKey: string = '';
   // 面板显隐同源（v0.3 US7）：与 GlassSheet/Index 共享同键实例，关闭时驱动多选复位
   @Local showQueueSheet: BoolState = connectBool(Constants.AS_SHOW_QUEUE_SHEET, false);
@@ -134,7 +188,8 @@ export struct QueueSheet {
   private listSource: PlaylistDataSource = new PlaylistDataSource();
   // ListScroller（extends Scroller）：取消确认后经 closeAllSwipeActions 复位滑动行（US1）
   private listScroller: ListScroller = new ListScroller();
-  private swipeStartIndex: number = -1;
+  // 拖选起始条目下标（长按进入多选时记录，Pan 拖选换算起点）
+  private dragStartEntryIndex: number = -1;
   // 进度广播退订句柄（US2/KI-1）：aboutToDisappear 中调用，避免监听器累积
   private unsubscribePlayer: () => void = (): void => {};
 
@@ -162,7 +217,7 @@ export struct QueueSheet {
   @Monitor('selectMode.value')
   onSelectModeChanged(): void {
     if (!this.selectMode.value) {
-      this.selectedBvids = [];
+      this.selectedEntryKeys = [];
     } else {
       // 进入多选即收起已滑出的行（v0.4-Part1-ux-fixes US5）：多选态不再挂载左滑删除动作
       this.listScroller.closeAllSwipeActions();
@@ -172,19 +227,28 @@ export struct QueueSheet {
   private syncFrom(c: PlayerController): void {
     if (this.playlistVersion !== c.playlistVersion) {
       this.playlistVersion = c.playlistVersion;
-      const next: BiliVideo[] = c.playlist.slice(0);
-      // 纯删除走增量 notifyDataDelete（从高到低），增长/重排走整表 reload，相等 no-op
-      const removed: number[] | undefined = diffRemovedIndices(this.items, next);
+      const next: QueueEntry[] = buildQueueEntries(c.playlist, c.getQueueEntryGroups());
+      // 纯删除走增量 notifyDataDelete（从高到低），增长/重排/组分裂/组缩减走整表 reload，相等 no-op
+      const removed: number[] | undefined = diffRemovedEntries(this.entries, next);
       if (removed === undefined) {
-        this.items = next;
-        this.listSource.setItems(this.items);
+        this.entries = next;
+        this.listSource.setItems(next);
       } else {
+        // 数据源持旧条目对象（notifyDataDelete 只裁数组），扁平删除使存活条目 startIndex 移位，
+        // 先按 next 对齐再通知，保证重绑后「startIndex+组内偏移」换算的扁平下标可信
+        let k: number = 0;
+        for (let i = 0; i < this.entries.length; i++) {
+          if (removed.indexOf(i) < 0) {
+            this.entries[i].startIndex = next[k].startIndex;
+            k++;
+          }
+        }
         for (let i = removed.length - 1; i >= 0; i--) {
           this.listSource.notifyDataDelete(removed[i]);
         }
-        this.items = next;
-        // 删除后强制重绑（机制见 PlaylistDataSource.notifyDataChange 注释）：
-        // 从最低删除位扫到末尾，防止缓存条目闭包 index 过期
+        this.entries = next;
+        // 删除后强制重绑（bugfix #1 机制保留）：从最低删除位扫到末尾，
+        // 防止缓存条目闭包 index 过期（LazyForEach 使用 index 参数时删除后框架不保证重绑）
         if (removed.length > 0) {
           for (let i = removed[removed.length - 1]; i < next.length; i++) {
             this.listSource.notifyDataChange(i);
@@ -193,13 +257,13 @@ export struct QueueSheet {
       }
       if (this.selectMode.value) {
         const valid: string[] = [];
-        for (let i = 0; i < this.selectedBvids.length; i++) {
-          if (this.items.findIndex((v: BiliVideo): boolean => this.itemKey(v) === this.selectedBvids[i]) >= 0) {
-            valid.push(this.selectedBvids[i]);
+        for (let i = 0; i < this.selectedEntryKeys.length; i++) {
+          if (this.hasEntryKey(this.selectedEntryKeys[i])) {
+            valid.push(this.selectedEntryKeys[i]);
           }
         }
-        this.selectedBvids = valid;
-        if (this.items.length === 0) {
+        this.selectedEntryKeys = valid;
+        if (this.entries.length === 0) {
           this.selectMode.value = false;
         }
       }
@@ -208,149 +272,18 @@ export struct QueueSheet {
     this.currentItemEnded = c.currentItemEnded;
   }
 
-  // 队列条目复合键（bvid:page）唯一合成点：多选 ID / 按压高亮 / 删除入参共用
-  private itemKey(item: BiliVideo): string {
-    return BiliVideo.itemKeyOf(item.bvid, item.page);
-  }
-
-  // US7 组头标志派生（D12）：组首 = 分P 条目（page≥1）、前一条目不构成同组、后一条目同 bvid 且
-  // 同为分P 条目（相邻 ≥2 条成组）；随机打散后不相邻自然无头，占位条目不成组。
-  // 纯展示层派生（FR-015），随 items 整体重算，删至不成组时组头自动消失
-  private hasGroupHeader(index: number): boolean {
-    const items: BiliVideo[] = this.items;
-    // 边界守卫：index 可能是 LazyForEach 未重绑的过期闭包值（见 notifyDataChange 注释），越界一律无头
-    if (index < 0 || index >= items.length) {
-      return false;
-    }
-    const cur: BiliVideo = items[index];
-    if (cur.page < 1 || index + 1 >= items.length) {
-      return false;
-    }
-    if (index > 0) {
-      const prev: BiliVideo = items[index - 1];
-      if (prev.bvid === cur.bvid && prev.page >= 1) {
-        return false;
-      }
-    }
-    const next: BiliVideo = items[index + 1];
-    return next.bvid === cur.bvid && next.page >= 1;
-  }
-
-  // 组头标题：纯视频标题（videoTitle，旧数据/占位回退 title）
-  private groupHeaderTitle(item: BiliVideo): string {
-    return item.videoTitle !== '' ? item.videoTitle : item.title;
-  }
-
-  // 组内分P 条目判定（D15）：前或后相邻条目同 bvid 且同为分P 条目——组首（hasGroupHeader）与
-  // 组身共用；孤立/单P/占位条目不满足，走原有整行
-  private isGroupedPart(index: number): boolean {
-    const items: BiliVideo[] = this.items;
-    if (index < 0 || index >= items.length) {
-      return false;
-    }
-    const cur: BiliVideo = items[index];
-    if (cur.page < 1) {
-      return false;
-    }
-    if (index > 0) {
-      const prev: BiliVideo = items[index - 1];
-      if (prev.bvid === cur.bvid && prev.page >= 1) {
-        return true;
-      }
-    }
-    if (index + 1 < items.length) {
-      const next: BiliVideo = items[index + 1];
-      if (next.bvid === cur.bvid && next.page >= 1) {
+  private hasEntryKey(key: string): boolean {
+    for (let i = 0; i < this.entries.length; i++) {
+      if (this.entries[i].key === key) {
         return true;
       }
     }
     return false;
   }
 
-  // 组内分P 数（头行「共 nP」）：以组首为起点向后数相邻同 bvid 分P 条目
-  private groupPartCount(index: number): number {
-    const items: BiliVideo[] = this.items;
-    if (index < 0 || index >= items.length) {
-      return 0;
-    }
-    const bvid: string = items[index].bvid;
-    let count: number = 0;
-    for (let i = index; i < items.length; i++) {
-      if (items[i].bvid !== bvid || items[i].page < 1) {
-        break;
-      }
-      count++;
-    }
-    return count;
-  }
-
-  // 组内任意成员的组首下标（D15-Trim 整组语义用）：沿前邻同 bvid 分P 链回溯
-  private groupStartIndex(index: number): number {
-    let start: number = index;
-    while (start > 0) {
-      const prev: BiliVideo = this.items[start - 1];
-      const cur: BiliVideo = this.items[start];
-      if (prev.bvid !== cur.bvid || prev.page < 1 || cur.page < 1) {
-        break;
-      }
-      start--;
-    }
-    return start;
-  }
-
-  // 组键收集（D15 头行多选/整组移除共用）：从组首（index）向后收集相邻同 bvid 分P 条目复合键
-  private groupKeys(index: number): string[] {
-    const keys: string[] = [];
-    const items: BiliVideo[] = this.items;
-    if (index < 0 || index >= items.length) {
-      return keys;
-    }
-    const bvid: string = items[index].bvid;
-    for (let i = index; i < items.length; i++) {
-      const cur: BiliVideo = items[i];
-      if (cur.bvid !== bvid || cur.page < 1) {
-        break;
-      }
-      keys.push(this.itemKey(cur));
-    }
-    return keys;
-  }
-
-  // 头行整组选中态：全组复合键均在 selectedBvids 才算选中
-  // （管理收敛头行后组勾选恒全选/全不选，无部分选中路径，全检保留作兜底）
-  private isGroupFullySelected(index: number): boolean {
-    const keys: string[] = this.groupKeys(index);
-    for (let i = 0; i < keys.length; i++) {
-      if (this.selectedBvids.indexOf(keys[i]) < 0) {
-        return false;
-      }
-    }
-    return keys.length > 0;
-  }
-
-  // 头行整组切换（D15 多选）：全选则清本组，否则补齐本组未选键
-  private toggleGroupSelect(index: number): void {
-    const keys: string[] = this.groupKeys(index);
-    if (keys.length === 0) {
-      return;
-    }
-    if (this.isGroupFullySelected(index)) {
-      const next: string[] = [];
-      for (let i = 0; i < this.selectedBvids.length; i++) {
-        if (keys.indexOf(this.selectedBvids[i]) < 0) {
-          next.push(this.selectedBvids[i]);
-        }
-      }
-      this.selectedBvids = next;
-    } else {
-      const next: string[] = this.selectedBvids.slice(0);
-      for (let i = 0; i < keys.length; i++) {
-        if (next.indexOf(keys[i]) < 0) {
-          next.push(keys[i]);
-        }
-      }
-      this.selectedBvids = next;
-    }
+  // 组头标题：纯视频标题（videoTitle，旧数据/占位回退 title）
+  private groupHeaderTitle(item: BiliVideo): string {
+    return item.videoTitle !== '' ? item.videoTitle : item.title;
   }
 
   // 分P 窄行主文本：Pn + 分P 标题（partTitle 空回退 title）
@@ -359,21 +292,18 @@ export struct QueueSheet {
     return `P${item.page} ${name}`;
   }
 
-  // US7 组头点击两段判定（D13）：① latestHistoryOf 有历史 → 目标 = 最新 viewAt 分P（续播其历史进度）；
-  // ② 无历史 → 目标 = 组内最小 page 条目（通常 P1，从头播）。目标在队列内（复合键匹配，占位 0≡1）
-  // 复用既有跳播入口；队外（仅①可能）以该历史条目元数据构造分P 条目走 playDownloadedSong 插播
-  private onGroupHeaderClick(item: BiliVideo): void {
-    if (item.bvid === '') {
+  // 组头点击两段判定（plan D4，沿第三轮 D13）：① latestHistoryOf 有历史 → 目标 = 最新 viewAt 分P
+  // （续播其历史进度）；② 无历史 → 目标 = 条目内最小 page 条目（通常 P1，从头播）。目标在队列内
+  // （复合键匹配，占位 0≡1）复用既有跳播入口；队外（仅①可能）以该历史条目元数据构造分P 条目
+  // 走 playDownloadedSong 插播
+  private onGroupHeaderClick(entry: QueueEntry): void {
+    const head: BiliVideo = entry.videos[0];
+    if (head.bvid === '') {
       return;
     }
-    const latest: PlayHistoryItem | null = this.controller.latestHistoryOf(item.bvid);
-    let targetPage: number = 0;
-    if (latest !== null) {
-      targetPage = latest.page;
-    } else {
-      targetPage = this.minGroupPage(item.bvid);
-    }
-    const idx: number = this.indexOfQueueItem(item.bvid, targetPage);
+    const latest: PlayHistoryItem | null = this.controller.latestHistoryOf(head.bvid);
+    const targetPage: number = latest !== null ? latest.page : this.minEntryPage(entry);
+    const idx: number = this.indexOfQueueItem(head.bvid, targetPage);
     if (idx >= 0) {
       this.controller.playIndex(idx, 0);
       return;
@@ -383,13 +313,13 @@ export struct QueueSheet {
     }
   }
 
-  // 该视频在队列内分P 条目的最小页号（②段目标；组内条目全为分P 条目，通常 P1）
-  private minGroupPage(bvid: string): number {
+  // 条目内分P 条目的最小页号（②段目标；组内条目全为分P 条目，通常 P1）
+  private minEntryPage(entry: QueueEntry): number {
     let minPage: number = 0;
-    for (let i = 0; i < this.items.length; i++) {
-      const cur: BiliVideo = this.items[i];
-      if (cur.bvid === bvid && cur.page >= 1 && (minPage === 0 || cur.page < minPage)) {
-        minPage = cur.page;
+    for (let i = 0; i < entry.videos.length; i++) {
+      const cur: number = entry.videos[i].page;
+      if (cur >= 1 && (minPage === 0 || cur < minPage)) {
+        minPage = cur;
       }
     }
     return minPage;
@@ -398,8 +328,9 @@ export struct QueueSheet {
   // 队列内复合键定位（占位 0≡1 经 itemKeyOf 归一化比较）
   private indexOfQueueItem(bvid: string, page: number): number {
     const key: string = BiliVideo.itemKeyOf(bvid, page);
-    for (let i = 0; i < this.items.length; i++) {
-      if (this.itemKey(this.items[i]) === key) {
+    const list: BiliVideo[] = this.controller.playlist;
+    for (let i = 0; i < list.length; i++) {
+      if (BiliVideo.itemKeyOf(list[i].bvid, list[i].page) === key) {
         return i;
       }
     }
@@ -416,66 +347,103 @@ export struct QueueSheet {
     this.controller.playDownloadedSong(v);
   }
 
-  private toggleSelect(key: string): void {
-    const idx: number = this.selectedBvids.indexOf(key);
-    if (idx >= 0) {
-      this.selectedBvids.splice(idx, 1);
-    } else {
-      this.selectedBvids.push(key);
+  // 条目全部分P 复合键（plan D3）：确认移除时把选中条目键展开为分P 键，
+  // 走既有 removeSelectedFromPlaylist（存储删除保持分P 粒度，索引修正/自动切播/持久化零改动）
+  private entryPartKeys(entry: QueueEntry): string[] {
+    const keys: string[] = [];
+    for (let i = 0; i < entry.videos.length; i++) {
+      keys.push(BiliVideo.itemKeyOf(entry.videos[i].bvid, entry.videos[i].page));
     }
-    this.selectedBvids = this.selectedBvids.slice(0);
+    return keys;
+  }
+
+  private toggleSelect(key: string): void {
+    const idx: number = this.selectedEntryKeys.indexOf(key);
+    if (idx >= 0) {
+      this.selectedEntryKeys.splice(idx, 1);
+    } else {
+      this.selectedEntryKeys.push(key);
+    }
+    this.selectedEntryKeys = this.selectedEntryKeys.slice(0);
   }
 
   private selectAll(): void {
     const all: string[] = [];
-    for (let i = 0; i < this.items.length; i++) {
-      all.push(this.itemKey(this.items[i]));
+    for (let i = 0; i < this.entries.length; i++) {
+      all.push(this.entries[i].key);
     }
-    this.selectedBvids = all;
+    this.selectedEntryKeys = all;
   }
 
   private isAllSelected(): boolean {
-    return this.items.length > 0 && this.selectedBvids.length === this.items.length;
+    return this.entries.length > 0 && this.selectedEntryKeys.length === this.entries.length;
   }
 
   private toggleSelectAll(): void {
     if (this.isAllSelected()) {
-      this.selectedBvids = [];
+      this.selectedEntryKeys = [];
     } else {
       this.selectAll();
     }
   }
 
-  // 长按滑动多选：把 from..to 区间内所有条目选中（只增不减）；
-  // 组感知（D15-Trim）：区间碰到的组整组补齐，孤立/单P 条目按单键
+  // 长按拖动范围选（plan D5）：from..to 区间内条目整条目选中（组键/单键，只增不减）
   private selectRange(from: number, to: number): void {
     const lo: number = Math.max(0, Math.min(from, to));
-    const hi: number = Math.min(this.items.length - 1, Math.max(from, to));
+    const hi: number = Math.min(this.entries.length - 1, Math.max(from, to));
     let changed: boolean = false;
     for (let i = lo; i <= hi; i++) {
-      const keys: string[] = this.isGroupedPart(i)
-        ? this.groupKeys(this.groupStartIndex(i))
-        : [this.itemKey(this.items[i])];
-      for (let k = 0; k < keys.length; k++) {
-        if (this.selectedBvids.indexOf(keys[k]) < 0) {
-          this.selectedBvids.push(keys[k]);
-          changed = true;
-        }
+      const key: string = this.entries[i].key;
+      if (this.selectedEntryKeys.indexOf(key) < 0) {
+        this.selectedEntryKeys.push(key);
+        changed = true;
       }
     }
     if (changed) {
-      this.selectedBvids = this.selectedBvids.slice(0);
+      this.selectedEntryKeys = this.selectedEntryKeys.slice(0);
     }
+  }
+
+  // 拖选位移换算目标条目（plan D5）：从起始条目按条目估算高度累积换算（组条目高度可变），
+  // 取代定值高度换算；估算保守只影响拖选效率
+  private targetEntryIndex(start: number, offsetY: number): number {
+    let idx: number = start;
+    if (idx < 0) {
+      return 0;
+    }
+    if (idx >= this.entries.length) {
+      idx = this.entries.length - 1;
+    }
+    if (offsetY >= 0) {
+      let acc: number = 0;
+      while (idx + 1 < this.entries.length) {
+        acc += this.entries[idx].estHeight;
+        if (offsetY < acc) {
+          break;
+        }
+        idx++;
+      }
+    } else {
+      let acc: number = 0;
+      while (idx - 1 >= 0) {
+        acc -= this.entries[idx - 1].estHeight;
+        if (offsetY >= acc) {
+          break;
+        }
+        idx--;
+      }
+    }
+    return idx;
   }
 
   private exitSelectMode(): void {
     this.selectMode.value = false;
-    this.selectedBvids = [];
+    this.selectedEntryKeys = [];
   }
 
-  // 多选移除（US2）：二次确认防误触；确认后批量移除包补位动画（US6）
+  // 多选移除（US2）：二次确认防误触；确认后选中条目键展开为分P 键批量移除（US6 补位动画）
   private removeSelected(): void {
-    const count: number = this.selectedBvids.length;
+    const count: number = this.selectedEntryKeys.length;
     if (count === 0) {
       return;
     }
@@ -488,7 +456,15 @@ export struct QueueSheet {
         value: '移除',
         fontColor: $r('app.color.danger_red'),
         action: (): void => {
-          const keys: string[] = this.selectedBvids.slice(0);
+          const keys: string[] = [];
+          for (let i = 0; i < this.entries.length; i++) {
+            if (this.selectedEntryKeys.indexOf(this.entries[i].key) >= 0) {
+              const parts: string[] = this.entryPartKeys(this.entries[i]);
+              for (let p = 0; p < parts.length; p++) {
+                keys.push(parts[p]);
+              }
+            }
+          }
           this.exitSelectMode();
           this.getUIContext().animateTo({ duration: Constants.TOKEN_DELETE_ANIM_MS, curve: Curve.EaseOut }, (): void => {
             this.controller.removeSelectedFromPlaylist(keys);
@@ -503,18 +479,10 @@ export struct QueueSheet {
     });
   }
 
-  // 左滑单条删除（US2 FR-004/FR-005）：按复合键走既有批量移除链路
-  // （含当前条目自动切播语义，FR-010），UI 刷新交由 syncFrom 的 diff 增量通知
-  private removeQueueItem(item: BiliVideo): void {
-    if (item.bvid === '') {
-      return;
-    }
-    this.controller.removeSelectedFromPlaylist([this.itemKey(item)]);
-  }
-
-  // 左滑删除确认（US1 双触发）：点垃圾桶/滑过阈值（SwipeActionItem.onAction）均进本弹窗，
-  // 确认后删除（US6 补位动画），取消/点外围经 closeAllSwipeActions 复位收起滑动行
-  private confirmRemoveQueueItem(item: BiliVideo): void {
+  // 左滑单条目删除确认（US1 双触发）：点垃圾桶/滑过阈值均进本弹窗；确认后按分P 键走既有
+  // 批量移除链路（含当前条目自动切播语义），UI 刷新交由 syncFrom 的 diff 增量通知；
+  // 取消/点外围经 closeAllSwipeActions 复位收起滑动行
+  private confirmRemoveQueueItem(entry: QueueEntry): void {
     AlertDialog.show({
       title: Constants.DIALOG_DELETE_QUEUE_ITEM_TITLE,
       message: Constants.DIALOG_DELETE_QUEUE_ITEM_MSG,
@@ -525,7 +493,7 @@ export struct QueueSheet {
         fontColor: $r('app.color.danger_red'),
         action: (): void => {
           this.getUIContext().animateTo({ duration: Constants.TOKEN_DELETE_ANIM_MS, curve: Curve.EaseOut }, (): void => {
-            this.removeQueueItem(item);
+            this.controller.removeSelectedFromPlaylist(this.entryPartKeys(entry));
           });
         }
       },
@@ -541,10 +509,10 @@ export struct QueueSheet {
     });
   }
 
-  // 组首条目左滑整组移除（D15）：头行与组首分P 同属一个 ListItem，swipeAction 只能挂 ListItem，
-  // 故组首左滑语义为整组移除（确认弹窗标注分P 数防误触）；确认后走既有批量移除链路（含自动切播）
-  private confirmRemoveGroup(index: number): void {
-    const keys: string[] = this.groupKeys(index);
+  // 左滑组条目整组移除确认（plan D6）：确认弹窗标注整组分P 数防误触；
+  // 确认后走既有批量移除链路（含当前条目自动切播）
+  private confirmRemoveGroup(entry: QueueEntry): void {
+    const keys: string[] = this.entryPartKeys(entry);
     if (keys.length === 0) {
       return;
     }
@@ -574,7 +542,7 @@ export struct QueueSheet {
     });
   }
 
-  // 清除已播（US3）：无可清 toast 不弹框；可清时按可清计数二次确认，确认后按 playedSet 语义清理
+  // 清除已播（US3）：无可清 toast 不弹框；可清时按可清计数（条目口径，plan D7）二次确认
   private confirmClearPlayed(): void {
     const count: number = this.controller.playedRemovableCount();
     if (count === 0) {
@@ -603,15 +571,15 @@ export struct QueueSheet {
     });
   }
 
-  // 清空队列（R3 US4）：移除全部条目（含当前播放），二次确认防误触；
+  // 清空队列（R3 US4）：移除全部条目（含当前播放），二次确认防误触（计数为条目口径，plan D7）；
   // 确认后两层同收（closeBothLayersNow）+ 停声先行、延时清数据（clearAllWithExitDelay）
   private clearQueue(): void {
-    if (this.items.length === 0) {
+    if (this.entries.length === 0) {
       return;
     }
     AlertDialog.show({
       title: '清空队列',
-      message: `确定移除全部 ${this.items.length} 首吗？`,
+      message: `确定移除全部 ${this.entries.length} 首吗？`,
       autoCancel: true,
       alignment: DialogAlignment.Center,
       primaryButton: {
@@ -652,9 +620,9 @@ export struct QueueSheet {
   }
 
   // 左滑露出的红色垃圾桶删除钮（US1 双触发）：点击进确认弹窗，滑过阈值（onAction）同弹窗；
-  // 组首条目（含视频头行）按整组移除弹窗，其余按单条
+  // 组条目按整组移除弹窗（标注分P 数），单条目按单删确认
   @Builder
-  queueDeleteAction(item: BiliVideo, index: number) {
+  queueDeleteAction(entry: QueueEntry) {
     Column() {
       Button() {
         SymbolGlyph($r('sys.symbol.trash'))
@@ -667,10 +635,10 @@ export struct QueueSheet {
       .backgroundColor($r('app.color.danger_red'))
       .borderRadius(Constants.SWIPE_DELETE_BTN_RADIUS)
       .onClick(() => {
-        if (this.hasGroupHeader(index)) {
-          this.confirmRemoveGroup(index);
+        if (entry.isGroup) {
+          this.confirmRemoveGroup(entry);
         } else {
-          this.confirmRemoveQueueItem(item);
+          this.confirmRemoveQueueItem(entry);
         }
       })
     }
@@ -679,26 +647,28 @@ export struct QueueSheet {
     .padding({ left: Constants.TOKEN_SPACE_M, right: Constants.TOKEN_SPACE_M })
   }
 
-  // 视频头行（D15）：封面 + 视频标题 + 共 nP 独占一行；多选态前置换 Checkbox（整组切换，
-  // 管理收敛头行后组勾选恒全选/全不选）；非多选点击整组续播（D13 两段判定）；不参与按压高亮
+  // 组条目视频头行（plan D4/D9）：封面 + 视频标题 + 共 nP 独占一行；多选态前置换 Checkbox
+  // （整组切换，选择单位=条目）；按压高亮 + 长按进多选（选中本组条目）+ Pan 拖选与单条目整行同构；
+  // 非多选点击整组续播（两段判定），多选点击整组切换
   @Builder
-  videoHeaderRow(item: BiliVideo, index: number) {
+  videoHeaderRow(entry: QueueEntry, index: number) {
     Row() {
       if (this.selectMode.value) {
         Checkbox()
-          .select(this.isGroupFullySelected(index))
+          .select(this.selectedEntryKeys.indexOf(entry.key) >= 0)
           .selectedColor(this.accentColor.value)
           .width(20)
           .height(20)
           .margin({ right: Constants.TOKEN_SPACE_S })
           .onChange((value: boolean) => {
-            if (value !== this.isGroupFullySelected(index)) {
-              this.toggleGroupSelect(index);
+            const inList: boolean = this.selectedEntryKeys.indexOf(entry.key) >= 0;
+            if (value !== inList) {
+              this.toggleSelect(entry.key);
             }
           })
       }
-      CoverThumb({ cover: item.cover, highlight: false, accent: this.accentColor.value })
-      Text(this.groupHeaderTitle(item))
+      CoverThumb({ cover: entry.videos[0].cover, highlight: false, accent: this.accentColor.value })
+      Text(this.groupHeaderTitle(entry.videos[0]))
         .fontSize(Constants.TOKEN_FONT_BODY_M)
         .fontWeight(FontWeight.Medium)
         .fontColor(this.textPrimary())
@@ -706,40 +676,70 @@ export struct QueueSheet {
         .textOverflow({ overflow: TextOverflow.Ellipsis })
         .layoutWeight(1)
         .margin({ left: Constants.TOKEN_SPACE_10 })
-      Text(`共 ${this.groupPartCount(index)}P`)
+      Text(`共 ${entry.videos.length}P`)
         .fontSize(Constants.TOKEN_FONT_AUX)
         .fontColor(this.textSecondary())
         .margin({ left: Constants.TOKEN_SPACE_S })
     }
     .width('100%')
     .padding({ left: Constants.TOKEN_SPACE_L, right: Constants.TOKEN_SPACE_L, top: Constants.TOKEN_SPACE_M, bottom: Constants.TOKEN_SPACE_S })
-    .onClick(() => {
-      if (this.selectMode.value) {
-        this.toggleGroupSelect(index);
-      } else {
-        this.onGroupHeaderClick(item);
+    .backgroundColor(this.pressedKey === entry.key ? $r('app.color.item_pressed_background') : Color.Transparent)
+    .borderRadius(Constants.TOKEN_RADIUS_M)
+    .onTouch((e: TouchEvent): void => {
+      if (e.type === TouchType.Down) {
+        this.pressedKey = entry.key;
+      } else if (e.type === TouchType.Up || e.type === TouchType.Cancel) {
+        this.pressedKey = '';
       }
     })
+    .onClick(() => {
+      if (this.selectMode.value) {
+        this.toggleSelect(entry.key);
+      } else {
+        this.onGroupHeaderClick(entry);
+      }
+    })
+    .gesture(
+      GestureGroup(GestureMode.Sequence,
+        LongPressGesture()
+          .onAction(() => {
+            if (!this.selectMode.value) {
+              this.selectMode.value = true;
+              this.selectedEntryKeys = [entry.key];
+              this.dragStartEntryIndex = index;
+            }
+          }),
+        PanGesture({ fingers: 1, direction: PanDirection.Vertical })
+          .onActionUpdate((event: GestureEvent) => {
+            if (!this.selectMode.value || this.isWideScreen.value) {
+              return;
+            }
+            const target: number = this.targetEntryIndex(this.dragStartEntryIndex, event.offsetY);
+            this.selectRange(this.dragStartEntryIndex, target);
+          })
+      )
+    )
   }
 
-  // 分P 窄行（D15）：无封面，Pn + 分P 标题 + 时长，左缩进对齐头行标题；
-  // 管理收敛头行（D15-Trim）：无勾选框/无左滑，点击切播，多选点击与长按均为整组语义；已播 ✓ 为 bvid 级（D7 口径）
+  // 组条目分P 窄行（plan D9）：无封面，Pn + 分P 标题 + 时长，左缩进对齐头行标题；
+  // 点击切播（扁平下标 = startIndex+偏移）、当前播放高亮；多选点击/长按均为整条目（组）语义；
+  // 已播 ✓ 为 bvid 级（D7 口径）；拖选/按压与头行同构（组为最小管理粒度，D15-Trim 语义保持）
   @Builder
-  queuePartRow(item: BiliVideo, index: number) {
+  queuePartRow(part: BiliVideo, entry: QueueEntry, entryIndex: number, partIdx: number) {
     Row() {
-      Text(this.partRowTitle(item))
+      Text(this.partRowTitle(part))
         .fontSize(Constants.TOKEN_FONT_BODY_M)
-        .fontColor(index === this.currentIndex ? this.accentColor.value : this.textPrimary())
+        .fontColor(entry.startIndex + partIdx === this.currentIndex ? this.accentColor.value : this.textPrimary())
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
         .layoutWeight(1)
-      if (item.duration > 0) {
-        Text(this.formatTime(item.duration * 1000))
+      if (part.duration > 0) {
+        Text(this.formatTime(part.duration * 1000))
           .fontSize(Constants.TOKEN_FONT_AUX)
           .fontColor(this.textSecondary())
           .margin({ left: Constants.TOKEN_SPACE_S })
       }
-      if (!this.selectMode.value && this.controller.isPlayed(item.bvid)) {
+      if (!this.selectMode.value && this.controller.isPlayed(part.bvid)) {
         SymbolGlyph($r('sys.symbol.checkmark_circle'))
           .fontSize(Constants.TOKEN_FONT_TITLE)
           .fontColor([$r('app.color.success_green')])
@@ -748,20 +748,20 @@ export struct QueueSheet {
     }
     .width('100%')
     .padding({ left: Constants.QUEUE_PART_INDENT, right: Constants.TOKEN_SPACE_L, top: Constants.TOKEN_SPACE_S, bottom: Constants.TOKEN_SPACE_S })
-    .backgroundColor(this.pressedKey === this.itemKey(item) ? $r('app.color.item_pressed_background') : Color.Transparent)
+    .backgroundColor(this.pressedKey === BiliVideo.itemKeyOf(part.bvid, part.page) ? $r('app.color.item_pressed_background') : Color.Transparent)
     .borderRadius(Constants.TOKEN_RADIUS_M)
     .onTouch((e: TouchEvent): void => {
       if (e.type === TouchType.Down) {
-        this.pressedKey = this.itemKey(item);
+        this.pressedKey = BiliVideo.itemKeyOf(part.bvid, part.page);
       } else if (e.type === TouchType.Up || e.type === TouchType.Cancel) {
         this.pressedKey = '';
       }
     })
     .onClick(() => {
       if (this.selectMode.value) {
-        this.toggleGroupSelect(this.groupStartIndex(index));
+        this.toggleSelect(entry.key);
       } else {
-        this.controller.playIndex(index, 0);
+        this.controller.playIndex(entry.startIndex + partIdx, 0);
       }
     })
     .gesture(
@@ -769,10 +769,9 @@ export struct QueueSheet {
         LongPressGesture()
           .onAction(() => {
             if (!this.selectMode.value) {
-              const start: number = this.groupStartIndex(index);
               this.selectMode.value = true;
-              this.selectedBvids = this.groupKeys(start);
-              this.swipeStartIndex = start;
+              this.selectedEntryKeys = [entry.key];
+              this.dragStartEntryIndex = entryIndex;
             }
           }),
         PanGesture({ fingers: 1, direction: PanDirection.Vertical })
@@ -780,40 +779,39 @@ export struct QueueSheet {
             if (!this.selectMode.value || this.isWideScreen.value) {
               return;
             }
-            const target: number = this.swipeStartIndex +
-              Math.round(event.offsetY / ITEM_HEIGHT);
-            this.selectRange(this.swipeStartIndex, target);
+            const target: number = this.targetEntryIndex(this.dragStartEntryIndex, event.offsetY);
+            this.selectRange(this.dragStartEntryIndex, target);
           })
       )
     )
   }
 
-  // 孤立/单P 条目整行（原有渲染原样保留）：封面 + 标题 + UP 主/时长
+  // 单条目整行（原有渲染原样保留）：封面 + 标题 + UP 主/时长；选择/按压/手势改条目键
   @Builder
-  queueFullRow(item: BiliVideo, index: number) {
+  queueFullRow(entry: QueueEntry, index: number) {
     Row() {
       if (this.selectMode.value) {
         Checkbox()
-          .select(this.selectedBvids.indexOf(this.itemKey(item)) >= 0)
+          .select(this.selectedEntryKeys.indexOf(entry.key) >= 0)
           .selectedColor(this.accentColor.value)
           .width(20)
           .height(20)
           .margin({ right: Constants.TOKEN_SPACE_S })
           .onChange((value: boolean) => {
-            const inList: boolean = this.selectedBvids.indexOf(this.itemKey(item)) >= 0;
+            const inList: boolean = this.selectedEntryKeys.indexOf(entry.key) >= 0;
             if (value !== inList) {
-              this.toggleSelect(this.itemKey(item));
+              this.toggleSelect(entry.key);
             }
           })
       }
 
-      CoverThumb({ cover: item.cover, highlight: index === this.currentIndex, accent: this.accentColor.value })
+      CoverThumb({ cover: entry.videos[0].cover, highlight: entry.startIndex === this.currentIndex, accent: this.accentColor.value })
 
       Column() {
         Row() {
-          Text(item.title)
+          Text(entry.videos[0].title)
             .fontSize(Constants.TOKEN_FONT_BODY_M)
-            .fontColor(index === this.currentIndex ? this.accentColor.value : this.textPrimary())
+            .fontColor(entry.startIndex === this.currentIndex ? this.accentColor.value : this.textPrimary())
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
             .layoutWeight(1)
@@ -821,7 +819,7 @@ export struct QueueSheet {
         .width('100%')
 
         // FR-104：duration 未知（0）不渲染 00:00 占位，只显示 UP 主名
-        Text(item.duration > 0 ? `${item.ownerName} · ${this.formatTime(item.duration * 1000)}` : item.ownerName)
+        Text(entry.videos[0].duration > 0 ? `${entry.videos[0].ownerName} · ${this.formatTime(entry.videos[0].duration * 1000)}` : entry.videos[0].ownerName)
           .fontSize(Constants.TOKEN_FONT_AUX)
           .fontColor(this.textSecondary())
           .maxLines(1)
@@ -834,7 +832,7 @@ export struct QueueSheet {
       .margin({ left: Constants.TOKEN_SPACE_10 })
 
       // 已播标记（US4）：非当前条目且已播完时行尾绿 ✓，对齐 SourcePage NEW 徽标视觉
-      if (!this.selectMode.value && this.controller.isPlayed(item.bvid)) {
+      if (!this.selectMode.value && this.controller.isPlayed(entry.videos[0].bvid)) {
         SymbolGlyph($r('sys.symbol.checkmark_circle'))
           .fontSize(Constants.TOKEN_FONT_TITLE)
           .fontColor([$r('app.color.success_green')])
@@ -843,21 +841,21 @@ export struct QueueSheet {
     }
     .width('100%')
     .padding({ left: Constants.TOKEN_SPACE_L, right: Constants.TOKEN_SPACE_L, top: Constants.TOKEN_SPACE_M, bottom: Constants.TOKEN_SPACE_M })
-    .backgroundColor(this.pressedKey === this.itemKey(item) ? $r('app.color.item_pressed_background') : Color.Transparent)
+    .backgroundColor(this.pressedKey === entry.key ? $r('app.color.item_pressed_background') : Color.Transparent)
     .borderRadius(Constants.TOKEN_RADIUS_M)
     .onTouch((e: TouchEvent): void => {
       if (e.type === TouchType.Down) {
-        this.pressedKey = this.itemKey(item);
+        this.pressedKey = entry.key;
       } else if (e.type === TouchType.Up || e.type === TouchType.Cancel) {
         this.pressedKey = '';
       }
     })
     .onClick(() => {
       if (this.selectMode.value) {
-        this.toggleSelect(this.itemKey(item));
+        this.toggleSelect(entry.key);
       } else {
         // 仅切换歌曲，不跳转播放页
-        this.controller.playIndex(index, 0);
+        this.controller.playIndex(entry.startIndex, 0);
       }
     })
     .gesture(
@@ -866,8 +864,8 @@ export struct QueueSheet {
           .onAction(() => {
             if (!this.selectMode.value) {
               this.selectMode.value = true;
-              this.selectedBvids = [this.itemKey(item)];
-              this.swipeStartIndex = index;
+              this.selectedEntryKeys = [entry.key];
+              this.dragStartEntryIndex = index;
             }
           }),
         PanGesture({ fingers: 1, direction: PanDirection.Vertical })
@@ -875,9 +873,8 @@ export struct QueueSheet {
             if (!this.selectMode.value || this.isWideScreen.value) {
               return;
             }
-            const target: number = this.swipeStartIndex +
-              Math.round(event.offsetY / ITEM_HEIGHT);
-            this.selectRange(this.swipeStartIndex, target);
+            const target: number = this.targetEntryIndex(this.dragStartEntryIndex, event.offsetY);
+            this.selectRange(this.dragStartEntryIndex, target);
           })
       )
     )
@@ -889,13 +886,13 @@ export struct QueueSheet {
       Column() {
         if (!this.selectMode.value) {
           Row() {
-            Text(`播放队列 (${this.items.length})`)
+            Text(`播放队列 (${this.entries.length})`)
               .fontSize(17)
               .fontWeight(FontWeight.Bold)
               .fontColor(this.textPrimary())
               .layoutWeight(1)
 
-            if (this.items.length > 0) {
+            if (this.entries.length > 0) {
               Row() {
                 SymbolGlyph($r('sys.symbol.wand_and_stars'))
                   .fontSize(Constants.TOKEN_FONT_18)
@@ -927,7 +924,7 @@ export struct QueueSheet {
               .margin({ left: Constants.TOKEN_SPACE_S })
               .onClick(() => {
                 this.selectMode.value = true;
-                this.selectedBvids = [];
+                this.selectedEntryKeys = [];
               })
 
               Row() {
@@ -974,7 +971,7 @@ export struct QueueSheet {
               SymbolGlyph($r('sys.symbol.trash_fill'))
                 .fontSize(Constants.TOKEN_FONT_18)
                 .fontColor([$r('app.color.danger_red')])
-              Text(`${this.selectedBvids.length}`)
+              Text(`${this.selectedEntryKeys.length}`)
                 .fontSize(Constants.TOKEN_FONT_BODY_S)
                 .fontColor($r('app.color.danger_red'))
             }
@@ -986,7 +983,7 @@ export struct QueueSheet {
             .backdropBlur(20)
             .border({ width: 1, color: $r('app.color.btn_border') })
             .borderRadius(Constants.TOKEN_RADIUS_18)
-            .opacity(this.selectedBvids.length > 0 ? 1 : 0.4)
+            .opacity(this.selectedEntryKeys.length > 0 ? 1 : 0.4)
             .onClick(() => {
               this.removeSelected();
             })
@@ -1018,7 +1015,7 @@ export struct QueueSheet {
         this.headerHeight = newArea.height as number;
       })
 
-      if (this.items.length === 0) {
+      if (this.entries.length === 0) {
         Column() {
           Text('队列为空')
             .fontSize(Constants.TOKEN_FONT_TITLE)
@@ -1037,38 +1034,38 @@ export struct QueueSheet {
       } else {
         Stack() {
           List({ space: 0, scroller: this.listScroller }) {
-            LazyForEach(this.listSource, (item: BiliVideo, index: number) => {
+            LazyForEach(this.listSource, (entry: QueueEntry, index: number) => {
               ListItem() {
-                Column() {
-                  // US7→D15 视频级分组：组首条目顶部渲染视频头行（封面+标题独占一行），
-                  // 组内条目渲染分P 窄行（按分P 标题），孤立/单P 条目保持原有整行
-                  if (this.hasGroupHeader(index)) {
-                    this.videoHeaderRow(item, index)
+                // 条目分发渲染（plan D9）：组条目 = Column{ 头行 + ForEach(分P 窄行) } 一体滑动，
+                // 单条目沿用整行；外层键 = 条目键，组内键 = 分P 复合键
+                if (entry.isGroup) {
+                  Column() {
+                    this.videoHeaderRow(entry, index)
+                    ForEach(entry.videos, (part: BiliVideo, partIdx: number) => {
+                      this.queuePartRow(part, entry, index, partIdx)
+                    }, (part: BiliVideo) => BiliVideo.itemKeyOf(part.bvid, part.page))
                   }
-                  if (this.isGroupedPart(index)) {
-                    this.queuePartRow(item, index)
-                  } else {
-                    this.queueFullRow(item, index)
-                  }
+                } else {
+                  this.queueFullRow(entry, index)
                 }
               }
-              // 多选态不挂载删除动作（v0.4-Part1-ux-fixes US5）：左滑手势随 end 缺失整体禁用，退出多选恢复；
-              // 组身分P 管理收敛头行（D15-Trim）亦不挂；组首 ListItem（含视频头行）左滑整组移除（D15），整行保持单条删除
-              .swipeAction((this.selectMode.value || (this.isGroupedPart(index) && !this.hasGroupHeader(index))) ? {} : {
+              // 条目级横删（plan D6）：组条目整组滑出（组/单删双弹窗），多选态不挂载删除动作
+              // （左滑手势随 end 缺失整体禁用，退出多选恢复）；删除按钮点击与滑过阈值（onAction）双触发
+              .swipeAction(this.selectMode.value ? {} : {
                 end: {
                   builder: (): void => {
-                    this.queueDeleteAction(item, index);
+                    this.queueDeleteAction(entry);
                   },
                   onAction: (): void => {
-                    if (this.hasGroupHeader(index)) {
-                      this.confirmRemoveGroup(index);
+                    if (entry.isGroup) {
+                      this.confirmRemoveGroup(entry);
                     } else {
-                      this.confirmRemoveQueueItem(item);
+                      this.confirmRemoveQueueItem(entry);
                     }
                   }
                 }
               })
-            }, (item: BiliVideo) => `${item.bvid}_${item.page}_${item.ownerName}`)
+            }, (entry: QueueEntry) => entry.key)
           }
           .width('100%')
           .height('100%')

@@ -611,6 +611,26 @@ export class PlayerController {
     return 0;
   }
 
+  // 条目游程单一来源（v0.4-queue-multi-p-item plan D8，展示层条目构建与播控随机抽取共用）：
+  // 扁平播放列表的连续下标游程，同 bvid 且页号≥1 的相邻条目合并为一游程（≥2 为组、=1 为单条目）；
+  // 覆盖全部下标、有序连续；纯只读派生，不广播无副作用
+  getQueueEntryGroups(): number[][] {
+    const groups: number[][] = [];
+    for (let i = 0; i < this.playlist.length; i++) {
+      const cur: BiliVideo = this.playlist[i];
+      if (cur.page >= 1 && groups.length > 0) {
+        const lastRun: number[] = groups[groups.length - 1];
+        const prev: BiliVideo = this.playlist[lastRun[lastRun.length - 1]];
+        if (prev.bvid === cur.bvid && prev.page >= 1) {
+          lastRun.push(i);
+          continue;
+        }
+      }
+      groups.push([i]);
+    }
+    return groups;
+  }
+
   async playIndex(index: number, seekMs: number, fromNav: boolean = false): Promise<void> {
     this.resumeAfterInterrupt = false;
     if (index < 0 || index >= this.playlist.length) {
@@ -742,14 +762,33 @@ export class PlayerController {
     }
   }
 
+  // 随机条目级抽取（v0.4-queue-multi-p-item plan D8）：优先级 = 组内连播（当前为分P 且扁平下一条
+  // 同 bvid 分P → currentIndex+1）> 条目级随机（非当前条目游程等概率，抽中取其最小页下标起播）>
+  // 回退当前条目（重播/续播语义随 playIndex）；prev() 随机回溯与轨迹键不动
   private randomIndex(): number {
-    const len: number = this.playlist.length;
-    if (len <= 1) {
-      return 0;
+    if (this.currentIndex >= 0 && this.currentIndex + 1 < this.playlist.length) {
+      const cur: BiliVideo = this.playlist[this.currentIndex];
+      const nextItem: BiliVideo = this.playlist[this.currentIndex + 1];
+      if (cur.page >= 1 && nextItem.bvid === cur.bvid && nextItem.page >= 1) {
+        return this.currentIndex + 1;
+      }
     }
-    let target: number = Math.floor(Math.random() * len);
-    while (target === this.currentIndex) {
-      target = Math.floor(Math.random() * len);
+    const groups: number[][] = this.getQueueEntryGroups();
+    const candidates: number[][] = [];
+    for (let g = 0; g < groups.length; g++) {
+      if (groups[g].indexOf(this.currentIndex) < 0) {
+        candidates.push(groups[g]);
+      }
+    }
+    if (candidates.length === 0) {
+      return this.currentIndex >= 0 ? this.currentIndex : 0;
+    }
+    const picked: number[] = candidates[Math.floor(Math.random() * candidates.length)];
+    let target: number = picked[0];
+    for (let i = 1; i < picked.length; i++) {
+      if (this.playlist[picked[i]].page < this.playlist[target].page) {
+        target = picked[i];
+      }
     }
     return target;
   }
@@ -1605,11 +1644,35 @@ export class PlayerController {
     return result;
   }
 
-  hasPlayedItems(): boolean {
-    return this.collectPlayedRemovable().length > 0;
+  // 条目口径已播可清计数（v0.4-queue-multi-p-item plan D7）：bvid 已播完（isPlayed）且
+  // 该条目游程不含当前播放条目的条目数（组算 1；含当前条目的组被 clearPlayedItems 裁剪
+  // 但不清除，不计入避免歧义）；collectPlayedRemovable/clearPlayedItems 的分P 键集合不动
+  playedRemovableCount(): number {
+    const currentKey: string = this.currentIndex >= 0 && this.currentIndex < this.playlist.length
+      ? BiliVideo.itemKeyOf(this.playlist[this.currentIndex].bvid, this.playlist[this.currentIndex].page)
+      : '';
+    const groups: number[][] = this.getQueueEntryGroups();
+    let count: number = 0;
+    for (let g = 0; g < groups.length; g++) {
+      const run: number[] = groups[g];
+      if (!this.isPlayed(this.playlist[run[0]].bvid)) {
+        continue;
+      }
+      let containsCurrent: boolean = false;
+      for (let i = 0; i < run.length; i++) {
+        if (BiliVideo.itemKeyOf(this.playlist[run[i]].bvid, this.playlist[run[i]].page) === currentKey) {
+          containsCurrent = true;
+          break;
+        }
+      }
+      if (!containsCurrent) {
+        count++;
+      }
+    }
+    return count;
   }
 
-  playedRemovableCount(): number {
-    return this.collectPlayedRemovable().length;
+  hasPlayedItems(): boolean {
+    return this.playedRemovableCount() > 0;
   }
 }
