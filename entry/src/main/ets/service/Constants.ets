@@ -40,6 +40,8 @@ export class Constants {
   static readonly KEY_CELLULAR_AUDIO_QUALITY: string = 'cellularAudioQuality';
   static readonly KEY_DEBUG_MODE: string = 'debugMode';
   static readonly PLAY_HISTORY_FILE: string = 'play_history.json';
+  // 历史同步开关持久化键（1=开 0=关，默认开；生效还需已登录，未登录由调用方 gate）
+  static readonly KEY_HISTORY_SYNC: string = 'historySync';
 
   // —— AppStorage 键 ——
   static readonly AS_COLOR_MODE_SETTING: string = 'colorModeSetting';
@@ -233,6 +235,23 @@ export class Constants {
   static readonly COVER_SAVER_W: number = 480;
   static readonly COVER_SAVER_H: number = 270;
 
+  // —— 历史同步心跳（v0.5 cloud-history-sync）：web heartbeat 端点 + 熔断/节流参数 ——
+  // web heartbeat 心跳上报端点（PiliPlus 同源；form POST：bvid/cid/played_time/type=3=UGC/csrf）
+  static readonly BILI_HEARTBEAT_URL: string = 'https://api.bilibili.com/x/click-interface/web/heartbeat';
+  // 心跳连续失败熔断阈值（次）：达到后本分P 停止上报，切分P/重新起播复位
+  static readonly HEARTBEAT_FAIL_FUSE: number = 3;
+  // 状态变化（暂停/切分P）补报最小前进量（秒）；播放中周期上报前进阈值复用 PROGRESS_SAVE_INTERVAL_MS 换算
+  static readonly HEARTBEAT_MIN_GAP_SEC: number = 2;
+
+  // —— 订阅详情页剧集行缩略图（v0.5-part1-source-page-redesign）：16:9 左图右文行，显示档 vp / 请求档 px ——
+  static readonly EPISODE_THUMB_W: number = 121;
+  static readonly EPISODE_THUMB_H: number = 68;
+  static readonly EPISODE_THUMB_REQ_W: number = 480;
+  static readonly EPISODE_THUMB_REQ_H: number = 270;
+
+  // —— 订阅详情页页头等高（v0.5-part2-source-page-polish）：封面与文字列统一高度基准 ——
+  static readonly SOURCE_HEADER_H: number = 56;
+
   // —— 关于页链接（v0.4-Part1-ux-fixes US7）：项目双托管地址 + 参考项目仓库，统一二次确认跳转 ——
   static readonly LINK_PROJECT_GITCODE: string = 'https://gitcode.com/Link-Z-233/BiliRadio';
   static readonly LINK_PROJECT_GITHUB: string = 'https://github.com/Link-Z-233/BiliRadio';
@@ -253,6 +272,7 @@ export class Constants {
   static readonly TOKEN_FONT_TITLE_L: number = 22;
   static readonly TOKEN_FONT_24: number = 24;
   static readonly TOKEN_FONT_56: number = 56;
+  static readonly TOKEN_ICON_BTN: number = 40;
   // 圆角：基础档（plan）+ 实测扩展档
   static readonly TOKEN_RADIUS_S: number = 8;
   static readonly TOKEN_RADIUS_M: number = 12;

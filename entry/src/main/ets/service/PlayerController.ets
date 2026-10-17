@@ -99,6 +99,12 @@ export class PlayerController {
   // 当前网络是否 Wi-Fi（US6）：由 watchStableNetworkType 回调与 init 一次性查询共同维护
   private wifiNow: boolean = false;
 
+  // —— 云端进度同步（v0.5 cloud-history-sync）：零装饰器，挂既有节拍编排 ——
+  // 上次心跳上报的 played_time（秒），兼作防重发水位（seek 回退后水位不复位，与 PiliPlus 一致）
+  private heartbeatLastSentSec: number = 0;
+  // 心跳连续失败计数：≥HEARTBEAT_FAIL_FUSE 熔断本分P 上报，切分P/重新起播复位
+  private heartbeatFailCount: number = 0;
+
   isWifiNow(): boolean {
     return this.wifiNow;
   }
@@ -397,6 +403,8 @@ export class PlayerController {
       this.setPlaying(true);
     } else if (state === 'paused') {
       this.persistProgress();
+      // 暂停即时补报（US1）：前进 ≥HEARTBEAT_MIN_GAP_SEC 才发，补报一次后停报
+      this.reportHeartbeatIfAdvanced(Constants.HEARTBEAT_MIN_GAP_SEC);
       this.mediaSession.updateState(false, this.currentTime);
       this.setPlaying(false);
     } else if (state === 'completed') {
@@ -463,6 +471,8 @@ export class PlayerController {
     if (now - this.lastSaveTime > Constants.PROGRESS_SAVE_INTERVAL_MS) {
       this.lastSaveTime = now;
       this.persistProgress();
+      // 云端心跳挂同一 5s 节拍（US1）：前进阈值复用节拍间隔换算，不新增独立计时器
+      this.reportHeartbeatIfAdvanced(Math.floor(Constants.PROGRESS_SAVE_INTERVAL_MS / 1000));
       this.mediaSession.updateState(this.playingNow, time);
     }
     // 完播阈值判定（plan R5②）：duration 已知且进度 ≥ duration×95% → 同样标记已听完
@@ -489,6 +499,78 @@ export class PlayerController {
       // 随本 5s 节拍/暂停/切歌即时点异步写历史文件，异常退出进度回退 ≤ 一个节拍
       this.updateHistoryProgressForCurrent(Math.floor(this.currentTime / 1000));
     }
+  }
+
+  // 云端同步总开关（上行/下行共用）：已登录且 KEY_HISTORY_SYNC 开（默认开）；
+  // 未登录/关闭时零上报请求、零云端续播合并（FR-006/SC-004）
+  private isHistorySyncEnabled(): boolean {
+    return BiliSession.getInstance().isLogged() &&
+      AppStore.getNumber(Constants.KEY_HISTORY_SYNC, 1) === 1;
+  }
+
+  // 心跳上报（best-effort，US1）：minGapSec=较上次上报的最小前进量
+  // （播放节拍取 PROGRESS_SAVE_INTERVAL_MS 换算 5s，暂停/切分P 补报取 HEARTBEAT_MIN_GAP_SEC）；
+  // 取调用时刻的 bvid/cid/currentTime（快速切分P 不串台）；熔断后本分P 静默；
+  // 失败计数连续达阈值熔断，成功清零；全程静默无弹窗无重试循环（FR-007）
+  private reportHeartbeatIfAdvanced(minGapSec: number): void {
+    if (this.heartbeatFailCount >= Constants.HEARTBEAT_FAIL_FUSE) {
+      return;
+    }
+    if (!this.isHistorySyncEnabled() || this.currentCid <= 0) {
+      return;
+    }
+    const playedSec: number = Math.floor(this.currentTime / 1000);
+    if (playedSec <= 0 || playedSec - this.heartbeatLastSentSec < minGapSec) {
+      return;
+    }
+    const bvid: string = this.currentIndex >= 0 && this.currentIndex < this.playlist.length
+      ? this.playlist[this.currentIndex].bvid : '';
+    if (bvid === '') {
+      return;
+    }
+    const cid: number = this.currentCid;
+    this.heartbeatLastSentSec = playedSec;
+    BiliService.reportHeartbeat(bvid, cid, playedSec).then((ok: boolean): void => {
+      if (ok) {
+        this.heartbeatFailCount = 0;
+        Logger.log('player', 'heartbeat sent', `bvid=${bvid} cid=${cid} sec=${playedSec}`);
+      } else {
+        this.heartbeatFailCount++;
+        Logger.log('player', 'heartbeat fail', `count=${this.heartbeatFailCount}`);
+        if (this.heartbeatFailCount >= Constants.HEARTBEAT_FAIL_FUSE) {
+          Logger.log('player', 'heartbeat fuse blown', `bvid=${bvid} cid=${cid}`);
+        }
+      }
+    });
+  }
+
+  // 完播上报（US3）：played_time=-1（B 站「-1=看完」语义），挂 markCurrentHistoryCompleted
+  // 唯一判定点（自然完播/95% 阈值共用，幂等去重由 progress===-1 早退保证，每分P 至多一次）；
+  // 经 isHistorySyncEnabled + 熔断计数同一 gate，不占用水位（-1 是完播语义非进度），失败计数熔断
+  private reportHeartbeatCompleted(): void {
+    if (this.heartbeatFailCount >= Constants.HEARTBEAT_FAIL_FUSE) {
+      return;
+    }
+    if (!this.isHistorySyncEnabled() || this.currentCid <= 0) {
+      return;
+    }
+    if (this.currentIndex < 0 || this.currentIndex >= this.playlist.length) {
+      return;
+    }
+    const bvid: string = this.playlist[this.currentIndex].bvid;
+    if (bvid === '') {
+      return;
+    }
+    const cid: number = this.currentCid;
+    BiliService.reportHeartbeat(bvid, cid, -1).then((ok: boolean): void => {
+      if (ok) {
+        this.heartbeatFailCount = 0;
+        Logger.log('player', 'heartbeat complete sent', `bvid=${bvid} cid=${cid}`);
+      } else {
+        this.heartbeatFailCount++;
+        Logger.log('player', 'heartbeat complete fail', `count=${this.heartbeatFailCount}`);
+      }
+    });
   }
 
   // 元数据回填（US2）：cid/UP 主/播放量/发布时间/简介写回队列条目并刷新 UI
@@ -631,6 +713,18 @@ export class PlayerController {
     return groups;
   }
 
+  // 复合键完播查询（v0.5 cloud-history-sync US2）：该 (bvid,page) 历史条目 progress===-1；
+  // 与 bvid 粒度 isPlayed 区分——云端合并防护只需当前分P 自身完播，不被同视频其他分P 的完播吞并
+  private isHistoryCompletedFor(bvid: string, page: number): boolean {
+    const key: string = BiliVideo.itemKeyOf(bvid, page);
+    for (let i = 0; i < this.playHistory.length; i++) {
+      if (BiliVideo.itemKeyOf(this.playHistory[i].bvid, this.playHistory[i].page) === key) {
+        return this.playHistory[i].progress === -1;
+      }
+    }
+    return false;
+  }
+
   async playIndex(index: number, seekMs: number, fromNav: boolean = false): Promise<void> {
     this.resumeAfterInterrupt = false;
     if (index < 0 || index >= this.playlist.length) {
@@ -657,6 +751,8 @@ export class PlayerController {
     // 此刻 currentIndex/currentTime/duration/currentCid 均属旧曲目，先落史再切换
     if (this.playingNow && !this.isPreparing) {
       this.updateHistoryProgressForCurrent(Math.floor(this.currentTime / 1000));
+      // 切分P 即时补报（US1）：旧条目最终位置上报云端（此刻 cid/进度仍属旧条目）
+      this.reportHeartbeatIfAdvanced(Constants.HEARTBEAT_MIN_GAP_SEC);
     }
     if (!fromNav) {
       const currentBvid: string = this.currentIndex >= 0 && this.currentIndex < this.playlist.length
@@ -680,6 +776,9 @@ export class PlayerController {
     this.currentQualityCode = 0;
     this.currentTrackSource = '';
     this.currentCid = 0;
+    // 云端心跳复位（US1）：切分P/重新起播重置上报水位与熔断计数，新分P 重新计
+    this.heartbeatLastSentSec = 0;
+    this.heartbeatFailCount = 0;
     // 续播决策（plan R4）：仅新起播（seekMs<=0，如点历史条目/点单集入队/切歌）时以历史进度决定起点；
     // seekMs>0 的换音质保进度（setQualityTier resumePos）与全局断点恢复路径零变化
     let effectiveSeekMs: number = seekMs;
@@ -735,6 +834,33 @@ export class PlayerController {
       const result: ResolvedAudio = await BiliService.resolveAudioTrack(item.bvid, cid, tier);
       if (token !== this.loadToken) {
         return;
+      }
+      // 云端续播合并（v0.5 cloud-history-sync US2）：仅新起播（seekMs<=0）路径，取流响应零新增请求携带云端进度；
+      // 严格 cid 匹配（FR-003）：仅云端 last_play_cid 与起播分P cid 一致且进度 >0 时参与，否则纯本地；
+      // 本地该分P 已听完（-1）→ 从头忽略云端；云端 ≥ duration×完播阈值 → 视为云端已看完从头；
+      // 否则起点=max(本地续播, 云端) 不回退；未登录/开关关（isHistorySyncEnabled）→ 纯本地（现状行为）；
+      // 此刻尚未 openStream，改写 pendingSeekMs/currentTime 即改起播点
+      if (seekMs <= 0) {
+        let mergedSeekMs: number = effectiveSeekMs;
+        const cloudMs: number = this.isHistorySyncEnabled() &&
+          !this.isHistoryCompletedFor(item.bvid, item.page) &&
+          result.lastPlayCid === cid && result.lastPlayTimeMs > 0
+          ? result.lastPlayTimeMs : 0;
+        if (cloudMs > 0) {
+          if (this.duration > 0 && cloudMs >= this.duration * Constants.PLAY_COMPLETE_RATIO) {
+            mergedSeekMs = 0;
+            Logger.log('player', 'cloud resume completed, from head',
+              `bvid=${item.bvid} page=${item.page} cid=${cid} cloudMs=${cloudMs}`);
+          } else if (cloudMs > mergedSeekMs) {
+            mergedSeekMs = cloudMs;
+            Logger.log('player', 'cloud resume',
+              `bvid=${item.bvid} page=${item.page} cid=${cid} cloudMs=${cloudMs} localMs=${effectiveSeekMs}`);
+          }
+        }
+        if (mergedSeekMs !== effectiveSeekMs) {
+          this.pendingSeekMs = mergedSeekMs;
+          this.currentTime = mergedSeekMs;
+        }
       }
       this.currentCid = cid;
       this.availableTracks = result.tracks;
@@ -1421,6 +1547,7 @@ export class PlayerController {
     entry.progress = -1;
     this.playHistoryVersion++;
     Logger.log('player', 'history complete', `bvid=${current.bvid} page=${current.page}`);
+    this.reportHeartbeatCompleted();
     this.savePlayHistoryFileAsync();
   }
 
@@ -1460,6 +1587,8 @@ export class PlayerController {
         }
         if (existing.progress === -1) {
           existing.progress = 0;
+          // 重播已听完条目（US3 边界）：上报水位归零，云端进度随之归零重记（B 站语义：看完重看从头记）
+          this.heartbeatLastSentSec = 0;
         }
         item = existing;
       } else {

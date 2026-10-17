@@ -48,7 +48,7 @@ export function SourcePageBuilder() {
   SourcePage()
 }
 
-// 源详情：剧集列表（新在上）/ NEW 徽标 / 已播标记 / 播放全部 / 刷新 / 取消订阅
+// 源详情：剧集列表（新在上）/ NEW 徽标 / 已播标记 / 顶栏 ··· 菜单（刷新/取消订阅）/ 多选批量入队
 // 四类订阅（UP/收藏夹/合集/系列）统一支持触底「加载更早」（按需翻页，只进内存不写缓存）
 @ComponentV2
 struct SourcePage {
@@ -62,6 +62,9 @@ struct SourcePage {
   @Local loadingOlder: boolean = false;
   @Local episodeCount: number = 0;
   @Local pressedKey: string = '';
+  @Local selectMode: boolean = false;
+  // 多选集合不可变整体换引用更新：V2 @Local 赋值观测不观测 Set 内部变更
+  @Local selectedKeys: Set<string> = new Set<string>();
   private seenBefore: number = 0;         // 进入时的 lastSeenAt，NEW 徽标基准
   private olderPage: number = 1;          // 已加载的最大页号（sortReverse 语义）
   private olderFailAt: number = 0;        // 加载更早失败时间戳：冷却期内禁止重试（US2）
@@ -95,12 +98,74 @@ struct SourcePage {
     return this.typeLabel();
   }
 
+  // 源内总集数（接口 total/count 真值）优先；未知回退已加载数（近期一页 + 滚动追加）
+  private headerCount(): number {
+    return this.sub.totalCount > 0 ? this.sub.totalCount : this.episodeCount;
+  }
+
   private isPlayed(item: BiliVideo): boolean {
     return this.playedSet.has(item.bvid);
   }
 
   private isNew(item: BiliVideo): boolean {
     return this.seenBefore > 0 && item.pubdate > this.seenBefore;
+  }
+
+  private enterSelectMode(): void {
+    this.selectMode = true;
+  }
+
+  private exitSelectMode(): void {
+    this.selectMode = false;
+    this.selectedKeys = new Set<string>();
+  }
+
+  private toggleSelect(bvid: string): void {
+    const next: Set<string> = new Set<string>(this.selectedKeys);
+    if (next.has(bvid)) {
+      next.delete(bvid);
+    } else {
+      next.add(bvid);
+    }
+    this.selectedKeys = next;
+  }
+
+  private isAllSelected(): boolean {
+    return this.episodes.length > 0 && this.selectedKeys.size >= this.episodes.length;
+  }
+
+  private toggleSelectAll(): void {
+    if (this.isAllSelected()) {
+      this.selectedKeys = new Set<string>();
+      return;
+    }
+    const next: Set<string> = new Set<string>();
+    for (let i = 0; i < this.episodes.length; i++) {
+      next.add(this.episodes[i].bvid);
+    }
+    this.selectedKeys = next;
+  }
+
+  // 按列表序取选中剧集批量入队（US2）：复用 loadPlaylistAndPlay 全语义（空队列起播/非空追加
+  // 不打断/复合键去重），toast 分型反馈，完成后退出多选清空集合
+  private enqueueSelected(): void {
+    if (this.selectedKeys.size === 0) {
+      return;
+    }
+    const items: BiliVideo[] = [];
+    for (let i = 0; i < this.episodes.length; i++) {
+      if (this.selectedKeys.has(this.episodes[i].bvid)) {
+        items.push(this.episodes[i]);
+      }
+    }
+    this.controller.loadPlaylistAndPlay(items, 0)
+      .then((result: EnqueueResult): void => {
+        promptAction.showToast({ message: PlayerController.enqueueToast(result) });
+        this.exitSelectMode();
+      })
+      .catch((): void => {
+        this.exitSelectMode();
+      });
   }
 
   private loadFromCache(): void {
@@ -289,13 +354,6 @@ struct SourcePage {
     });
   }
 
-  private playAll(): void {
-    if (this.episodes.length === 0) {
-      return;
-    }
-    this.controller.loadPlaylistAndPlay(this.episodes, 0);
-  }
-
   // 入队 + toast 分型反馈（queue-redesign：已加入队列/开始播放/已在队列中）
   private enqueueAndToast(items: BiliVideo[]): void {
     this.controller.loadPlaylistAndPlay(items, 0)
@@ -348,66 +406,183 @@ struct SourcePage {
     });
   }
 
-  build() {
-    NavDestination() {
+  // 多选底部操作条（US2）：全选/取消全选 + 加入队列(N)（N=0 禁用）+ 取消；
+  // bottom 避让 MINI_PLAYER_CLEARANCE + navBarHeight，与列表底部预留对齐
+  @Builder
+  private selectActionBar() {
+    Row() {
+      Text(this.isAllSelected() ? '取消全选' : '全选')
+        .fontSize(Constants.TOKEN_FONT_BODY_M)
+        .fontColor($r('app.color.text_primary'))
+        .padding({
+          left: Constants.TOKEN_SPACE_14,
+          right: Constants.TOKEN_SPACE_14,
+          top: Constants.TOKEN_SPACE_S,
+          bottom: Constants.TOKEN_SPACE_S
+        })
+        .onClick(() => {
+          this.toggleSelectAll();
+        })
+      Blank()
+      Text(`加入队列 (${this.selectedKeys.size})`)
+        .fontSize(Constants.TOKEN_FONT_BODY_M)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(this.accentColor.value)
+        .padding({
+          left: Constants.TOKEN_SPACE_14,
+          right: Constants.TOKEN_SPACE_14,
+          top: Constants.TOKEN_SPACE_S,
+          bottom: Constants.TOKEN_SPACE_S
+        })
+        .opacity(this.selectedKeys.size > 0 ? 1 : 0.4)
+        .enabled(this.selectedKeys.size > 0)
+        .onClick(() => {
+          this.enqueueSelected();
+        })
+      Text('取消')
+        .fontSize(Constants.TOKEN_FONT_BODY_M)
+        .fontColor($r('app.color.text_secondary'))
+        .padding({
+          left: Constants.TOKEN_SPACE_14,
+          right: Constants.TOKEN_SPACE_14,
+          top: Constants.TOKEN_SPACE_S,
+          bottom: Constants.TOKEN_SPACE_S
+        })
+        .margin({ left: Constants.TOKEN_SPACE_M })
+        .onClick(() => {
+          this.exitSelectMode();
+        })
+    }
+    .width('100%')
+    .borderRadius(Constants.TOKEN_RADIUS_L)
+    .backgroundColor($r('app.color.card_background'))
+    .margin({
+      left: Constants.TOKEN_SPACE_S,
+      right: Constants.TOKEN_SPACE_S,
+      bottom: Constants.MINI_PLAYER_CLEARANCE + this.navBarHeight.value
+    })
+  }
+
+  // 标题栏：系统返回钮样式不可定制，hideBackButton 后经自定义 title 重建；
+  // 返回按钮与设置页/日志页同款 36×36 圆卡；标题样式对齐两页页头（TOKEN_FONT_24 Bold）；
+  // ··· 卡同入此 Row——原 .menus() 容器在 refreshing 内容交换后布局错乱致卡片脱落压住返回卡，
+  // 自控 Row 不依赖框架 menus 布局；placement 显式 BottomRight（默认 BottomLeft 会从左上角展开）
+  @Builder
+  private sourceTitleBuilder() {
+    Row() {
+      Row() {
+        SymbolGlyph($r('sys.symbol.chevron_left'))
+          .fontSize(Constants.TOKEN_FONT_TITLE_L)
+          .fontColor([$r('app.color.text_primary')])
+      }
+      .width(36)
+      .height(36)
+      .borderRadius(Constants.TOKEN_RADIUS_18)
+      .backgroundColor($r('app.color.card_background'))
+      .justifyContent(FlexAlign.Center)
+      .onClick(() => {
+        if (this.selectMode) {
+          this.exitSelectMode();
+          return;
+        }
+        if (!dismissOverlaysForBack()) {
+          this.navPathStack.pop();
+        }
+      })
+
+      Text(this.navTitle)
+        .fontSize(Constants.TOKEN_FONT_24)
+        .fontWeight(FontWeight.Bold)
+        .fontColor($r('app.color.text_primary'))
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+        .layoutWeight(1)
+        .margin({ left: Constants.TOKEN_SPACE_10 })
+
+      Row() {
+        if (this.refreshing) {
+          LoadingProgress()
+            .width(Constants.TOKEN_FONT_TITLE_L)
+            .height(Constants.TOKEN_FONT_TITLE_L)
+            .color(this.accentColor.value)
+        } else {
+          SymbolGlyph($r('sys.symbol.ellipsis_circle'))
+            .fontSize(Constants.TOKEN_FONT_TITLE_L)
+            .fontColor([$r('app.color.text_primary')])
+            .bindMenu([
+              {
+                value: '刷新',
+                action: (): void => {
+                  this.refreshSource();
+                }
+              },
+              {
+                value: '取消订阅',
+                action: (): void => {
+                  this.unsubscribe();
+                }
+              }
+            ], { placement: Placement.BottomRight })
+        }
+      }
+      .width(Constants.TOKEN_ICON_BTN)
+      .height(Constants.TOKEN_ICON_BTN)
+      .borderRadius(Constants.TOKEN_RADIUS_XL)
+      .backgroundColor($r('app.color.card_background'))
+      .justifyContent(FlexAlign.Center)
+      .margin({ left: Constants.TOKEN_SPACE_M })
+    }
+    .width('100%')
+    .alignItems(VerticalAlign.Center)
+    .margin({ top: Constants.TOKEN_SPACE_10 })
+    .padding({ left: Constants.TOKEN_SPACE_L, right: Constants.TOKEN_SPACE_M })
+  }
+
+  // 页头（US3/US5）：List 首个 ListItem 随列表滚动离屏/回顶再现；横向留白由所在容器统一控制
+  @Builder
+  private headerRow() {
+    Row() {
+      CoverThumb({ cover: this.sub.cover, thumbSize: Constants.SOURCE_HEADER_H, radius: Constants.TOKEN_RADIUS_14 })
       Column() {
+        Text(this.subtitle())
+          .fontSize(Constants.TOKEN_FONT_BODY)
+          .fontColor($r('app.color.text_secondary'))
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+        Text(`${this.headerCount()} 集`)
+          .fontSize(Constants.TOKEN_FONT_BODY_S)
+          .fontColor($r('app.color.text_disabled'))
+          .margin({ top: Constants.TOKEN_SPACE_XS })
+      }
+      .alignItems(HorizontalAlign.Start)
+      .justifyContent(FlexAlign.Center)
+      .height(Constants.SOURCE_HEADER_H)
+      .layoutWeight(1)
+      .margin({ left: Constants.TOKEN_SPACE_M, right: Constants.TOKEN_SPACE_S })
+      if (this.episodeCount > 0) {
         Row() {
-          CoverThumb({ cover: this.sub.cover, thumbSize: 56, radius: 14 })
-          Column() {
-            Text(this.subtitle())
-              .fontSize(Constants.TOKEN_FONT_BODY)
-              .fontColor($r('app.color.text_secondary'))
-              .maxLines(1)
-              .textOverflow({ overflow: TextOverflow.Ellipsis })
-            Text(`${this.episodeCount} 集`)
-              .fontSize(Constants.TOKEN_FONT_BODY_S)
-              .fontColor($r('app.color.text_disabled'))
-              .margin({ top: 3 })
-          }
-          .alignItems(HorizontalAlign.Start)
-          .layoutWeight(1)
-          .margin({ left: Constants.TOKEN_SPACE_M, right: Constants.TOKEN_SPACE_S })
-          if (this.refreshing) {
-            LoadingProgress()
-              .width(22)
-              .height(22)
-              .color(this.accentColor.value)
-          } else {
-            SymbolGlyph($r('sys.symbol.arrow_clockwise'))
-              .fontSize(Constants.TOKEN_FONT_20)
-              .fontColor([$r('app.color.text_primary')])
-              .onClick(() => {
-                this.refreshSource();
-              })
-          }
-          SymbolGlyph($r('sys.symbol.trash'))
+          SymbolGlyph($r('sys.symbol.list_checkmark'))
             .fontSize(Constants.TOKEN_FONT_20)
             .fontColor([$r('app.color.text_secondary')])
-            .margin({ left: Constants.TOKEN_SPACE_L })
-            .onClick(() => {
-              this.unsubscribe();
-            })
         }
-        .width('100%')
-        .padding({ left: Constants.TOKEN_SPACE_L, right: Constants.TOKEN_SPACE_L, top: Constants.TOKEN_SPACE_XS, bottom: Constants.TOKEN_SPACE_10 })
+        .width(Constants.CONTROL_BTN_SIZE)
+        .height(Constants.CONTROL_BTN_SIZE)
+        .justifyContent(FlexAlign.Center)
+        .onClick(() => {
+          this.enterSelectMode();
+        })
+      }
+    }
+    .width('100%')
+    .alignItems(VerticalAlign.Center)
+    .padding({ top: Constants.TOKEN_SPACE_XS, bottom: Constants.TOKEN_SPACE_10 })
+  }
 
-        if (this.episodeCount > 0) {
-          Row() {
-            Text('播放全部')
-              .fontSize(Constants.TOKEN_FONT_BODY_M)
-              .fontWeight(FontWeight.Medium)
-              .fontColor(this.accentColor.value)
-          }
-          .padding({ left: Constants.TOKEN_SPACE_14, right: Constants.TOKEN_SPACE_14, top: 7, bottom: 7 })
-          .borderRadius(Constants.TOKEN_RADIUS_L)
-          .backgroundColor($r('app.color.card_background'))
-          .margin({ left: Constants.TOKEN_SPACE_L, bottom: Constants.TOKEN_SPACE_S })
-          .onClick(() => {
-            this.playAll();
-          })
-        }
-
-        if (this.episodeCount === 0) {
+  build() {
+    NavDestination() {
+      if (this.episodeCount === 0) {
+        Column() {
+          this.headerRow()
           Column() {
             Text('暂无节目')
               .fontSize(Constants.TOKEN_FONT_BODY_L)
@@ -416,46 +591,84 @@ struct SourcePage {
           .width('100%')
           .layoutWeight(1)
           .justifyContent(FlexAlign.Center)
-        } else {
-          Stack() {
-            List({ space: 4, scroller: this.scroller }) {
+        }
+        .width('100%')
+        .height('100%')
+        .padding({ left: Constants.TOKEN_SPACE_S, right: Constants.TOKEN_SPACE_S })
+      } else {
+        Stack({ alignContent: Alignment.Bottom }) {
+          List({ space: Constants.TOKEN_SPACE_XS, scroller: this.scroller }) {
+            ListItem() {
+              this.headerRow()
+            }
             ForEach(this.episodes, (item: BiliVideo, index: number) => {
               ListItem() {
-                Column() {
-                  Text(item.title)
-                    .fontSize(Constants.TOKEN_FONT_BODY_L)
-                    .fontColor($r('app.color.text_primary'))
-                    .maxLines(2)
-                    .textOverflow({ overflow: TextOverflow.Ellipsis })
-                  Row() {
-                    Text(formatDate(item.pubdate))
-                      .fontSize(Constants.TOKEN_FONT_BODY_S)
-                      .fontColor($r('app.color.text_disabled'))
+                Row() {
+                  if (this.selectMode) {
+                    SymbolGlyph(this.selectedKeys.has(item.bvid)
+                      ? $r('sys.symbol.checkmark_circle') : $r('sys.symbol.circle'))
+                      .fontSize(Constants.SELECT_CHECKBOX_SIZE)
+                      .fontColor([this.selectedKeys.has(item.bvid)
+                        ? this.accentColor.value : $r('app.color.text_disabled')])
+                      .margin({ right: Constants.TOKEN_SPACE_S })
+                  }
+                  Stack({ alignContent: Alignment.BottomEnd }) {
+                    CoverThumb({
+                      cover: item.cover,
+                      thumbWidth: Constants.EPISODE_THUMB_W,
+                      thumbHeight: Constants.EPISODE_THUMB_H,
+                      radius: Constants.TOKEN_RADIUS_M
+                    })
                     if (item.duration > 0) {
                       Text(formatDuration(item.duration))
-                        .fontSize(Constants.TOKEN_FONT_BODY_S)
-                        .fontColor($r('app.color.text_disabled'))
-                        .margin({ left: Constants.TOKEN_SPACE_10 })
-                    }
-                    Blank()
-                    if (this.isNew(item)) {
-                      Text('NEW')
                         .fontSize(Constants.TOKEN_FONT_AUX)
-                        .fontWeight(FontWeight.Bold)
-                        .fontColor(this.accentColor.value)
-                    }
-                    if (this.isPlayed(item)) {
-                      SymbolGlyph($r('sys.symbol.checkmark_circle'))
-                        .fontSize(Constants.TOKEN_FONT_TITLE)
-                        .fontColor([$r('app.color.success_green')])
-                        .margin({ left: this.isNew(item) ? 8 : 0 })
+                        .fontColor($r('app.color.fg_on_dark'))
+                        .maxLines(1)
+                        .padding({
+                          left: Constants.TOKEN_SPACE_XXS,
+                          right: Constants.TOKEN_SPACE_XXS,
+                          top: Constants.TOKEN_SPACE_XXS,
+                          bottom: Constants.TOKEN_SPACE_XXS
+                        })
+                        .margin(Constants.TOKEN_SPACE_XXS)
+                        .borderRadius(Constants.TOKEN_RADIUS_S)
+                        .backgroundColor($r('app.color.duration_badge_scrim'))
                     }
                   }
-                  .width('100%')
-                  .margin({ top: Constants.TOKEN_SPACE_XS })
+                  Column() {
+                    Text(item.title)
+                      .fontSize(Constants.TOKEN_FONT_BODY_L)
+                      .fontColor($r('app.color.text_primary'))
+                      .maxLines(2)
+                      .textOverflow({ overflow: TextOverflow.Ellipsis })
+                    Row() {
+                      Text(formatDate(item.pubdate))
+                        .fontSize(Constants.TOKEN_FONT_BODY_S)
+                        .fontColor($r('app.color.text_disabled'))
+                      Blank()
+                      if (this.isNew(item)) {
+                        Text('NEW')
+                          .fontSize(Constants.TOKEN_FONT_AUX)
+                          .fontWeight(FontWeight.Bold)
+                          .fontColor(this.accentColor.value)
+                      }
+                      if (this.isPlayed(item)) {
+                        SymbolGlyph($r('sys.symbol.checkmark_circle'))
+                          .fontSize(Constants.TOKEN_FONT_TITLE)
+                          .fontColor([$r('app.color.success_green')])
+                          .margin({ left: this.isNew(item) ? Constants.TOKEN_SPACE_S : 0 })
+                      }
+                    }
+                    .width('100%')
+                  }
+                  .alignItems(HorizontalAlign.Start)
+                  .justifyContent(FlexAlign.SpaceBetween)
+                  .height(Constants.EPISODE_THUMB_H)
+                  .layoutWeight(1)
+                  .margin({ left: Constants.TOKEN_SPACE_M })
                 }
                 .width('100%')
-                .alignItems(HorizontalAlign.Start)
+                .alignItems(VerticalAlign.Center)
                 .padding({ left: Constants.TOKEN_SPACE_M, right: Constants.TOKEN_SPACE_M, top: Constants.TOKEN_SPACE_10, bottom: Constants.TOKEN_SPACE_10 })
                 .borderRadius(Constants.TOKEN_RADIUS_14)
                 .backgroundColor(this.pressedKey === item.bvid ? $r('app.color.item_pressed_background') : $r('app.color.card_background'))
@@ -467,7 +680,11 @@ struct SourcePage {
                   }
                 })
                 .onClick(() => {
-                  this.playEpisode(index);
+                  if (this.selectMode) {
+                    this.toggleSelect(item.bvid);
+                  } else {
+                    this.playEpisode(index);
+                  }
                 })
               }
             }, (item: BiliVideo) => item.bvid)
@@ -475,8 +692,8 @@ struct SourcePage {
               ListItem() {
                 Row() {
                   LoadingProgress()
-                    .width(18)
-                    .height(18)
+                    .width(Constants.TOKEN_FONT_18)
+                    .height(Constants.TOKEN_FONT_18)
                     .color($r('app.color.text_secondary'))
                   Text('加载中...')
                     .fontSize(Constants.TOKEN_FONT_BODY)
@@ -501,20 +718,21 @@ struct SourcePage {
             }
             .width('100%')
             .height('100%')
-            .padding({ left: Constants.TOKEN_SPACE_M, right: Constants.TOKEN_SPACE_M, top: Constants.TOKEN_SPACE_XS, bottom: Constants.MINI_PLAYER_CLEARANCE + this.navBarHeight.value })
+            .padding({ left: Constants.TOKEN_SPACE_S, right: Constants.TOKEN_SPACE_S, top: Constants.TOKEN_SPACE_XS, bottom: Constants.MINI_PLAYER_CLEARANCE + this.navBarHeight.value })
             .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
             .onReachEnd(() => {
               this.loadOlder();
             })
+            if (this.selectMode) {
+              this.selectActionBar()
+            }
           }
           .width('100%')
-          .layoutWeight(1)
+          .height('100%')
         }
       }
-      .width('100%')
-      .height('100%')
-    }
-    .title(this.navTitle)
+    .title(this.sourceTitleBuilder())
+    .hideBackButton(true)
     .onReady((ctx: NavDestinationContext) => {
       this.navPathStack = ctx.pathStack;
       if (ctx.pathInfo.param === undefined || ctx.pathInfo.param === null) {
@@ -544,7 +762,13 @@ struct SourcePage {
       // 无参 pop() 故永不回调，徽标返回首页不清除；改经 AppStorage tick 驱动 HomePage @Watch 重建
       connectNum(Constants.AS_HOME_REFRESH_TICK, 0).value = Date.now();
     })
-    // US5：系统返回先经 BackHandler 关队列/浮层，无浮层可关返回 false 放行默认 pop
-    .onBackPressed((): boolean => dismissOverlaysForBack())
+    // US5：系统返回先退多选（US2），再经 BackHandler 关队列/浮层，无浮层可关返回 false 放行默认 pop
+    .onBackPressed((): boolean => {
+      if (this.selectMode) {
+        this.exitSelectMode();
+        return true;
+      }
+      return dismissOverlaysForBack();
+    })
   }
 }

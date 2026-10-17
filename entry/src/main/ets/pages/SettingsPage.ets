@@ -43,6 +43,8 @@ export struct SettingsPage {
   @Local appVersion: string = '';
 
   @Local autoPlayOnStart: boolean = false;
+  // 历史同步开关（v0.5-part1-play-history-sync US4）：读写 KEY_HISTORY_SYNC（默认开），仅登录时展示
+  @Local historySyncOn: boolean = true;
   // —— 新增设置开关状态 ——
   @Local interruptResume: boolean = false;
   @Local wifiOnlyDownload: boolean = false;
@@ -92,6 +94,7 @@ export struct SettingsPage {
     const bundleInfo = bundleManager.getBundleInfoForSelfSync(bundleManager.BundleFlag.GET_BUNDLE_INFO_DEFAULT);
     this.appVersion = bundleInfo.versionName;
     this.autoPlayOnStart = AppStore.getNumber(Constants.KEY_AUTO_PLAY_ON_START, 0) === 1;
+    this.historySyncOn = AppStore.getNumber(Constants.KEY_HISTORY_SYNC, 1) === 1;
     this.interruptResume = AppStore.getNumber(Constants.KEY_INTERRUPT_RESUME, 0) === 1;
     this.wifiOnlyDownload = AppStore.getNumber(Constants.KEY_WIFI_ONLY_DOWNLOAD, 0) === 1;
     this.wifiQuality = this.readStoredTier(Constants.KEY_WIFI_AUDIO_QUALITY, QualityTier.MAX);
@@ -1018,6 +1021,17 @@ export struct SettingsPage {
                     avatarUrl: this.avatarUrl,
                     vipBadge: BiliSession.getInstance().vipStatus === 1,
                     showDivider: true
+                  })
+                  SettingsRow({
+                    title: '历史同步',
+                    subtitle: '播放进度与 B 站云端双向同步，支持跨设备续播',
+                    showToggle: true,
+                    toggleOn: this.historySyncOn,
+                    showDivider: true,
+                    toggleChange: (isOn: boolean): void => {
+                      this.historySyncOn = isOn;
+                      AppStore.putNumber(Constants.KEY_HISTORY_SYNC, isOn ? 1 : 0);
+                    }
                   })
                   SettingsRow({
                     title: '退出登录',

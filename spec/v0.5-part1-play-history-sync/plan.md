@@ -1,6 +1,6 @@
 # Implementation Plan: 播放进度云端同步（v0.5）
 
-**Input**: Feature specification from `spec/v0.5-play-history-sync/spec.md`
+**Input**: Feature specification from `spec/v0.5-part1-play-history-sync/spec.md`
 
 ## Summary
 
@@ -24,7 +24,7 @@
 ### Documentation (this feature)
 
 ```text
-spec/v0.5-play-history-sync/
+spec/v0.5-part1-play-history-sync/
 ├── spec.md
 └── plan.md              # This file
 ```

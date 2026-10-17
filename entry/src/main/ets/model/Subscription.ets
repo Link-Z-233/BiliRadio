@@ -21,6 +21,7 @@ export class Subscription {
   @Trace lastSeenAt: number = 0;     // 秒；上次进入源详情时间，新集计数基准
   @Trace lastRefreshAt: number = 0;  // 毫秒；上次成功刷新时间，TTL 基准
   @Trace latestPubAt: number = 0;    // 秒；最新一集发布时间
+  @Trace totalCount: number = 0;     // 源内总集数（列表接口 total/count 字段），0=未知回退已加载数
   @Trace sortOrder: number = 0;
 
   static makeId(type: string, sourceId: number): string {
@@ -59,6 +60,7 @@ export class Subscription {
       'lastSeenAt': this.lastSeenAt,
       'lastRefreshAt': this.lastRefreshAt,
       'latestPubAt': this.latestPubAt,
+      'totalCount': this.totalCount,
       'sortOrder': this.sortOrder,
     };
     return rec;
@@ -95,6 +97,9 @@ export class Subscription {
     }
     if (rec['latestPubAt'] !== undefined) {
       s.latestPubAt = rec['latestPubAt'] as number;
+    }
+    if (rec['totalCount'] !== undefined) {
+      s.totalCount = rec['totalCount'] as number;
     }
     if (rec['sortOrder'] !== undefined) {
       s.sortOrder = rec['sortOrder'] as number;

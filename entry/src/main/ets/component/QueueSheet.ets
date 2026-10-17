@@ -1072,7 +1072,9 @@ export struct QueueSheet {
           // FR-103：alwaysEnabled 使未铺满面板的短队列仍可拖动过冲（写法对齐 SettingsPage 历史面板）
           .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
           .contentStartOffset(this.headerHeight)
-          .contentEndOffset(LIST_BOTTOM_GAP)
+          // 末行逃出 GlassSheet 底部渐隐带（T018）：SHEET_FADE_HEIGHT 渐变叠加罩住列表底部 80px，
+          // end offset 至少盖过带高再留 LIST_BOTTOM_GAP 视觉间距，末行才能完整滚出渐隐区
+          .contentEndOffset(Constants.SHEET_FADE_HEIGHT + LIST_BOTTOM_GAP)
           .linearGradientBlur(EDGE_BLUR_RADIUS, {
             fractionStops: this.listBlurStops(),
             direction: GradientDirection.Bottom

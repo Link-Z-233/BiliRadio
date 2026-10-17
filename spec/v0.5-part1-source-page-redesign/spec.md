@@ -89,4 +89,4 @@
 
 ## Open Questions
 
-（无——需求澄清已在 Phase 1 完成：封面落点=剧集行、时长位置=封面右下角角标、程度=视觉重排功能不变、目录=v0.5-source-page-redesign。）
+（无——需求澄清已在 Phase 1 完成：封面落点=剧集行、时长位置=封面右下角角标、程度=视觉重排功能不变、目录=v0.5-part1-source-page-redesign。）

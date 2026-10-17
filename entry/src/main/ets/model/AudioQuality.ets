@@ -27,18 +27,25 @@ export class AudioTrack {
 }
 
 // resolveAudioTrack 的解析结果：id/urls 为选中音轨，tracks 为 dash 全量可用音轨（durl 兜底为空数组），
-// source 标记来源（'dash' | 'durl'），供 playIndex/setQualityTier 记录音质状态
+// source 标记来源（'dash' | 'durl'），供 playIndex/setQualityTier 记录音质状态；
+// lastPlayTimeMs/lastPlayCid 为取流响应携带的云端播放进度（last_play_time 毫秒 / last_play_cid；
+// 0=无/未登录/未返回），仅供 playIndex 新起播云端续播合并（lastPlayCid 严格匹配起播分P），换音质路径忽略
 export class ResolvedAudio {
   id: number;
   urls: string[];
   tracks: AudioTrack[];
   source: string;
+  lastPlayTimeMs: number;
+  lastPlayCid: number;
 
-  constructor(id: number, urls: string[], tracks: AudioTrack[], source: string) {
+  constructor(id: number, urls: string[], tracks: AudioTrack[], source: string,
+    lastPlayTimeMs: number = 0, lastPlayCid: number = 0) {
     this.id = id;
     this.urls = urls;
     this.tracks = tracks;
     this.source = source;
+    this.lastPlayTimeMs = lastPlayTimeMs;
+    this.lastPlayCid = lastPlayCid;
   }
 }
 

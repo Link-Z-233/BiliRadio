@@ -141,6 +141,7 @@ export class SubscriptionStore {
         if (disk[i].id === sub.id) {
           disk[i].lastRefreshAt = sub.lastRefreshAt;
           disk[i].latestPubAt = sub.latestPubAt;
+          disk[i].totalCount = sub.totalCount;
           if (sub.cover !== '') {
             disk[i].cover = sub.cover;
           }
@@ -168,6 +169,7 @@ export class SubscriptionStore {
     let items: BiliVideo[] = [];
     if (sub.type === Subscription.TYPE_UP) {
       items = await BiliService.fetchUpVideos(sub.sourceId);
+      sub.totalCount = BiliService.getUpTotalCount(sub.sourceId);
       // US2 双链合并取稠：APP 链结果可能稀疏（服务端钳 ps/条目缺失），Web 头页按 bvid 去重补齐；
       // Web 失败仅记日志，退化为 APP 结果（下方统一 sort 保证时序）
       try {
@@ -189,11 +191,14 @@ export class SubscriptionStore {
       // 只取最新一页（20 条）：播客「近期节目」语义，超大收藏夹不做全量刷新
       const result: FolderFetchResult = await BiliService.fetchFolderVideos(sub.sourceId, 0, undefined, 1);
       items = result.items;
+      sub.totalCount = result.folderTotal;
     } else if (sub.type === Subscription.TYPE_SEASON) {
       // 倒序取最新一页；sort_reverse=true 行为需冒烟确认，若不被支持回退末页策略
       items = await BiliService.fetchSeasonVideos(sub.ownerMid, sub.sourceId, 1, true);
+      sub.totalCount = BiliService.getSeasonTotal(sub.sourceId);
     } else if (sub.type === Subscription.TYPE_SERIES) {
       items = await BiliService.fetchSeriesVideos(sub.ownerMid, sub.sourceId, 1, true);
+      sub.totalCount = BiliService.getSeasonTotal(sub.sourceId);
     } else {
       throw new Error(`未知订阅类型: ${sub.type}`);
     }

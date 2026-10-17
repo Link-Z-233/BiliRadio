@@ -376,8 +376,8 @@ export struct HomePage {
             .fontSize(Constants.TOKEN_FONT_TITLE_L)
             .fontColor([$r('app.color.text_primary')])
         }
-        .width(40)
-        .height(40)
+        .width(Constants.TOKEN_ICON_BTN)
+        .height(Constants.TOKEN_ICON_BTN)
         .borderRadius(Constants.TOKEN_RADIUS_XL)
         .backgroundColor($r('app.color.card_background'))
         .justifyContent(FlexAlign.Center)
@@ -389,8 +389,8 @@ export struct HomePage {
             .fontSize(Constants.TOKEN_FONT_TITLE_L)
             .fontColor([$r('app.color.text_primary')])
         }
-        .width(40)
-        .height(40)
+        .width(Constants.TOKEN_ICON_BTN)
+        .height(Constants.TOKEN_ICON_BTN)
         .borderRadius(Constants.TOKEN_RADIUS_XL)
         .backgroundColor($r('app.color.card_background'))
         .justifyContent(FlexAlign.Center)

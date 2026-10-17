@@ -574,6 +574,8 @@ export struct HistorySheet {
           .width('100%')
           .height('100%')
           .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
+          // 末行逃出 GlassSheet 底部渐隐带（T018）：与 QueueSheet 同根因，此前无任何 end offset 更严重
+          .contentEndOffset(Constants.SHEET_FADE_HEIGHT)
         }
         .width('100%')
         .layoutWeight(1)

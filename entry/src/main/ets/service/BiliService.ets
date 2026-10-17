@@ -65,6 +65,7 @@ export class FolderFetchResult {
   rawCount: number = 0;
   skipped: number = 0;
   partialMsg: string = '';
+  folderTotal: number = 0;
 }
 
 export class UpInfo {
@@ -91,8 +92,25 @@ class UpAppPage {
   hasNext: boolean = false;
 }
 
+// playurl 响应解析载体（v0.5 cloud-history-sync）：业务数据 + 云端播放进度（last_play_time，毫秒）
+class DashFetchResult {
+  tracks: AudioTrack[] = [];
+  lastPlayTimeMs: number = 0;
+  lastPlayCid: number = 0;
+}
+
+class DurlFetchResult {
+  urls: string[] = [];
+  lastPlayTimeMs: number = 0;
+  lastPlayCid: number = 0;
+}
+
 const upAppCursorCache: Map<number, UpAppCursor> = new Map<number, UpAppCursor>();
 const upAppWebSticky: Set<number> = new Set<number>();
+// 源内总集数缓存（页头「N 集」真值）：UP 按 mid（APP 链 data.count 权威覆盖、Web 链 page.count 仅兜底），
+// 合集/系列按 seasonId/seriesId 共用一张表（page.total）
+const upTotalCountCache: Map<number, number> = new Map<number, number>();
+const seasonTotalCache: Map<number, number> = new Map<number, number>();
 
 function buildHeaders(): Record<string, string> {
   const headers: Record<string, string> = {
@@ -432,21 +450,16 @@ export class BiliService {
   }
 
   // T019：合集列表翻页抓取——page_num 自 1 递增，本页返回条数 < page_size 即终止（短页终止），
-  // 安全上限 10 页防异常数据死循环；页间 sleep 参照 fetchSeasonVideos 的 1500ms
+  // 安全上限 10 页防异常数据死循环；页间 sleep 参照 fetchSeasonVideos 的 1500ms；
+  // 该端点不得带 WBI 签名参数，多余 w_rid/wts 触发 -400（BILI_API.md §3.2）
   static async fetchSeasonsList(mid: number): Promise<Season[]> {
     const seasons: Season[] = [];
     const ps: number = 20;
     let pageNum: number = 1;
     const maxPages: number = 10;
     while (pageNum <= maxPages) {
-      const mixinKey: string = await BiliService.fetchMixinKey();
-      const params: Record<string, string> = {
-        'mid': mid.toString(),
-        'page_num': pageNum.toString(),
-        'page_size': ps.toString(),
-      };
-      const signedQuery: string = await WbiSigner.signParams(params, mixinKey);
-      const resultStr: string = await httpGet(`${BILI_SEASONS_SERIES_LIST_URL}?${signedQuery}`);
+      const query: string = `mid=${mid.toString()}&page_num=${pageNum.toString()}&page_size=${ps.toString()}`;
+      const resultStr: string = await httpGet(`${BILI_SEASONS_SERIES_LIST_URL}?${query}`);
       const data: Record<string, Object> = parseApiData(resultStr);
       let rawCount: number = 0;
       const itemsListsRaw: Object = data['items_lists'];
@@ -511,14 +524,8 @@ export class BiliService {
     let pageNum: number = 1;
     const maxPages: number = 10;
     while (pageNum <= maxPages) {
-      const mixinKey: string = await BiliService.fetchMixinKey();
-      const params: Record<string, string> = {
-        'mid': mid.toString(),
-        'page_num': pageNum.toString(),
-        'page_size': ps.toString(),
-      };
-      const signedQuery: string = await WbiSigner.signParams(params, mixinKey);
-      const resultStr: string = await httpGet(`${BILI_SEASONS_SERIES_LIST_URL}?${signedQuery}`);
+      const query: string = `mid=${mid.toString()}&page_num=${pageNum.toString()}&page_size=${ps.toString()}`;
+      const resultStr: string = await httpGet(`${BILI_SEASONS_SERIES_LIST_URL}?${query}`);
       const data: Record<string, Object> = parseApiData(resultStr);
       let rawCount: number = 0;
       const itemsListsRaw: Object = data['items_lists'];
@@ -647,6 +654,9 @@ export class BiliService {
           total = totalRaw as number;
         }
       }
+      if (total > 0) {
+        seasonTotalCache.set(seasonId, total);
+      }
       if (archives.length < ps) {
         break;
       }
@@ -698,6 +708,9 @@ export class BiliService {
           total = totalRaw as number;
         }
       }
+      if (total > 0) {
+        seasonTotalCache.set(seriesId, total);
+      }
       if (archives.length < ps) {
         break;
       }
@@ -737,7 +750,7 @@ export class BiliService {
       'User-Agent': Constants.BILI_APP_USER_AGENT,
     };
     const resultStr: string = await httpGet(`${Constants.BILI_APP_ARCHIVE_URL}?${signedQuery}`, headers);
-    const page: UpAppPage = BiliService.parseAppCursorPage(resultStr);
+    const page: UpAppPage = BiliService.parseAppCursorPage(resultStr, mid);
     if (page.items.length === 0 || !page.hasNext) {
       upAppCursorCache.delete(mid);
     } else {
@@ -748,7 +761,7 @@ export class BiliService {
     return page.items;
   }
 
-  private static parseAppCursorPage(resultStr: string): UpAppPage {
+  private static parseAppCursorPage(resultStr: string, mid: number): UpAppPage {
     const root: Record<string, Object> = JSON.parse(resultStr) as Record<string, Object>;
     const code: number = root['code'] as number;
     if (code !== 0) {
@@ -760,6 +773,10 @@ export class BiliService {
       return page;
     }
     const data: Record<string, Object> = dataRaw as Record<string, Object>;
+    const countRaw: Object = data['count'];
+    if (countRaw !== undefined && countRaw !== null && Number(countRaw) > 0) {
+      upTotalCountCache.set(mid, Number(countRaw));
+    }
     const listRaw: Object = data['list'];
     if (listRaw !== undefined && listRaw !== null) {
       const list: Record<string, Object> = listRaw as Record<string, Object>;
@@ -814,6 +831,16 @@ export class BiliService {
     return upAppCursorCache.has(mid);
   }
 
+  static getUpTotalCount(mid: number): number {
+    const cached: number | undefined = upTotalCountCache.get(mid);
+    return cached === undefined ? 0 : cached;
+  }
+
+  static getSeasonTotal(id: number): number {
+    const cached: number | undefined = seasonTotalCache.get(id);
+    return cached === undefined ? 0 : cached;
+  }
+
   // US1/US2 触底加载更早：APP 签名链 cursor 语义（aid=列表末条 + next=上页服务端游标）；
   // 无游标或链路失败抛错，由调用方降级 fetchUpVideosByPage 同页号 Web 链
   static async fetchUpVideosOlder(mid: number, lastAid: number): Promise<BiliVideo[]> {
@@ -865,25 +892,13 @@ export class BiliService {
       }
       // US3：每轮注入全套 dm_img 风控指纹参数（随机值按轮刷新）
       const params: Record<string, string> = buildUpQueryParams(mid, pn);
-      try {
-        const plainResult: string = await BiliService.fetchUpVideosOnce(`${BILI_SPACE_ARC_URL}`, params, spaceHeaders);
-        const parsed: BiliVideo[] = BiliService.parseUpVideoList(plainResult);
-        Logger.log('net', label, `第${attempt + 1}轮直连成功 mid=${mid} pn=${pn}`);
-        return parsed;
-      } catch (plainErr) {
-        const plainError: Error = plainErr instanceof Error ? plainErr : new Error(String(plainErr));
-        lastError = plainError;
-        Logger.log('error', label, `第${attempt + 1}轮直连失败 mid=${mid} pn=${pn}: ${plainError.message}`);
-        if (isUpQueryFatal(plainError)) {
-          throw plainError;
-        }
-      }
+      // WBI 端点优先：网页/PiliPlus 同源的完整数据端点；旧版 plain 端点实测漏发部分条目，仅作 WBI 被风控时的降级兜底
       try {
         const mixinKey: string = await BiliService.fetchMixinKey();
         const signedQuery: string = await WbiSigner.signParams(params, mixinKey);
         const wbiResult: string = await BiliService.fetchUpVideosOnce(
           `${BILI_SPACE_ARC_SEARCH_URL}?${signedQuery}`, {}, spaceHeaders);
-        const wbiParsed: BiliVideo[] = BiliService.parseUpVideoList(wbiResult);
+        const wbiParsed: BiliVideo[] = BiliService.parseUpVideoList(wbiResult, mid);
         Logger.log('net', label, `第${attempt + 1}轮WBI成功 mid=${mid} pn=${pn}`);
         return wbiParsed;
       } catch (wbiErr) {
@@ -892,6 +907,19 @@ export class BiliService {
         Logger.log('error', label, `第${attempt + 1}轮WBI失败 mid=${mid} pn=${pn}: ${wbiError.message}`);
         if (isUpQueryFatal(wbiError)) {
           throw wbiError;
+        }
+      }
+      try {
+        const plainResult: string = await BiliService.fetchUpVideosOnce(`${BILI_SPACE_ARC_URL}`, params, spaceHeaders);
+        const parsed: BiliVideo[] = BiliService.parseUpVideoList(plainResult, mid);
+        Logger.log('net', label, `第${attempt + 1}轮直连成功 mid=${mid} pn=${pn}`);
+        return parsed;
+      } catch (plainErr) {
+        const plainError: Error = plainErr instanceof Error ? plainErr : new Error(String(plainErr));
+        lastError = plainError;
+        Logger.log('error', label, `第${attempt + 1}轮直连失败 mid=${mid} pn=${pn}: ${plainError.message}`);
+        if (isUpQueryFatal(plainError)) {
+          throw plainError;
         }
       }
     }
@@ -909,7 +937,7 @@ export class BiliService {
     return await httpGet(`${url}${query}`, headers);
   }
 
-  private static parseUpVideoList(resultStr: string): BiliVideo[] {
+  private static parseUpVideoList(resultStr: string, mid: number): BiliVideo[] {
     const root: Record<string, Object> = JSON.parse(resultStr) as Record<string, Object>;
     const code: number = root['code'] as number;
     if (code !== 0) {
@@ -917,6 +945,15 @@ export class BiliService {
       throw new Error(`Bili API error ${code}`);
     }
     const data: Record<string, Object> = root['data'] as Record<string, Object>;
+    // Web 链 page.count 仅兜底：APP 链 data.count 已在则不覆盖（双链 count 语义可能有差）
+    const pageRaw: Object = data['page'];
+    if (pageRaw !== undefined && pageRaw !== null) {
+      const pageRec: Record<string, Object> = pageRaw as Record<string, Object>;
+      const countRaw: Object = pageRec['count'];
+      if (countRaw !== undefined && countRaw !== null && Number(countRaw) > 0 && !upTotalCountCache.has(mid)) {
+        upTotalCountCache.set(mid, Number(countRaw));
+      }
+    }
     const items: BiliVideo[] = [];
     const listRaw: Object = data['list'];
     if (listRaw !== undefined && listRaw !== null) {
@@ -1176,6 +1213,16 @@ export class BiliService {
       if (mediasRaw === undefined || mediasRaw === null) {
         break;
       }
+      if (result.folderTotal === 0) {
+        const infoRaw: Object = data['info'];
+        if (infoRaw !== undefined && infoRaw !== null) {
+          const info: Record<string, Object> = infoRaw as Record<string, Object>;
+          const mcRaw: Object = info['media_count'];
+          if (mcRaw !== undefined && mcRaw !== null && Number(mcRaw) > 0) {
+            result.folderTotal = Number(mcRaw);
+          }
+        }
+      }
       const medias: Object[] = mediasRaw as Object[];
       const parsedPage: BiliVideo[] = BiliService.parseFolderMedias(medias);
       for (let i = 0; i < parsedPage.length; i++) {
@@ -1308,6 +1355,28 @@ export class BiliService {
         `rid=${aid}&type=2&add_media_ids=${mediaIds[i]}&del_media_ids=&csrf=${session.biliJct}`;
       const resultStr: string = await httpPostForm(BILI_FAV_DEAL_URL, body);
       parseApiData(resultStr);
+    }
+  }
+
+  // 播放进度心跳上报（v0.5 cloud-history-sync US1）：web heartbeat 端点 form POST，
+  // 参数 bvid/cid/played_time（秒）/type=3（UGC）/csrf=bili_jct（PiliPlus VideoHttp.heartBeat 同源）；
+  // 请求头复用 httpPostForm 内建 buildHeaders()（web UA + cookie 自动携带）；
+  // best-effort 静默：成功/失败布尔返回，失败不抛错由调用方熔断计数
+  static async reportHeartbeat(bvid: string, cid: number, playedTimeSec: number): Promise<boolean> {
+    const session: BiliSession = BiliSession.getInstance();
+    if (!session.isLogged() || session.biliJct === '') {
+      return false;
+    }
+    const body: string =
+      `bvid=${bvid}&cid=${cid}&played_time=${playedTimeSec}&type=3&csrf=${session.biliJct}`;
+    try {
+      const resultStr: string = await httpPostForm(Constants.BILI_HEARTBEAT_URL, body);
+      parseApiData(resultStr);
+      return true;
+    } catch (err) {
+      const error = err as BusinessError;
+      hilog.warn(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'heartbeat report failed: %{public}s', error.message);
+      return false;
     }
   }
 
@@ -1725,7 +1794,7 @@ export class BiliService {
   // 音轨全量解析（audio-quality-settings）：fnval 由 16 升级为 4048，使响应携带 flac(Hi-Res)/dolby 节点；
   // 常规 dash.audio[] 全量 + flac.audio 单对象（赋 id=30251）+ dolby.audio 数组（赋 id=30250）合并统一列表，
   // 按 bandwidth 降序、同 id 保留高带宽（排序后取首个）去重；无 dash 或音轨为空抛错
-  static async fetchDashAudioTracks(bvid: string, cid: number): Promise<AudioTrack[]> {
+  static async fetchDashAudioTracks(bvid: string, cid: number): Promise<DashFetchResult> {
     const resultStr: string = await httpGet(
       `${BILI_PLAY_URL_API}?bvid=${bvid}&cid=${cid}&qn=16&fnver=0&fnval=4048&fourk=0`
     );
@@ -1769,11 +1838,21 @@ export class BiliService {
         deduped.push(tracks[i]);
       }
     }
+    const result: DashFetchResult = new DashFetchResult();
+    result.tracks = deduped;
+    const lptRaw: Object = data['last_play_time'];
+    if (lptRaw !== undefined && lptRaw !== null) {
+      result.lastPlayTimeMs = lptRaw as number;
+    }
+    const lpcRaw: Object = data['last_play_cid'];
+    if (lpcRaw !== undefined && lpcRaw !== null) {
+      result.lastPlayCid = lpcRaw as number;
+    }
     Logger.log('player', 'fetchDashAudioTracks', `bvid=${bvid} cid=${cid} tracks=${deduped.length}`);
-    return deduped;
+    return result;
   }
 
-  static async fetchDurlCandidates(bvid: string, cid: number): Promise<string[]> {
+  static async fetchDurlCandidates(bvid: string, cid: number): Promise<DurlFetchResult> {
     const resultStr: string = await httpGet(
       `${BILI_PLAY_URL_API}?bvid=${bvid}&cid=${cid}&qn=16&fnver=0&fnval=0&fourk=0`
     );
@@ -1805,7 +1884,17 @@ export class BiliService {
     if (candidates.length === 0) {
       throw new Error('No direct URL found');
     }
-    return candidates;
+    const result: DurlFetchResult = new DurlFetchResult();
+    result.urls = candidates;
+    const lptRaw: Object = data['last_play_time'];
+    if (lptRaw !== undefined && lptRaw !== null) {
+      result.lastPlayTimeMs = lptRaw as number;
+    }
+    const lpcRaw: Object = data['last_play_cid'];
+    if (lpcRaw !== undefined && lpcRaw !== null) {
+      result.lastPlayCid = lpcRaw as number;
+    }
+    return result;
   }
 
   // 回落算法（FR-003，纯函数）：MAX→列表首位（bandwidth 降序即最高带宽，含 Hi-Res/杜比升级）；
@@ -1844,17 +1933,26 @@ export class BiliService {
   }
 
   // 档位化取流（audio-quality-settings）：dash 全量解析失败→原参数重试一次→
-  // 仍失败走既有 durl 降级链，包装为 id=0 的兜底轨道（无档位概念）
+  // 仍失败走既有 durl 降级链，包装为 id=0 的兜底轨道（无档位概念）；
+  // last_play_time/last_play_cid（云端进度，last_play_time 毫秒）随两链响应解析汇聚进 ResolvedAudio
   static async resolveAudioTrack(bvid: string, cid: number, tier: QualityTier): Promise<ResolvedAudio> {
     let tracks: AudioTrack[] = [];
     let dashResolved: boolean = false;
+    let lastPlayTimeMs: number = 0;
+    let lastPlayCid: number = 0;
     try {
-      tracks = await BiliService.fetchDashAudioTracks(bvid, cid);
+      const dashResult: DashFetchResult = await BiliService.fetchDashAudioTracks(bvid, cid);
+      tracks = dashResult.tracks;
+      lastPlayTimeMs = dashResult.lastPlayTimeMs;
+      lastPlayCid = dashResult.lastPlayCid;
       dashResolved = true;
     } catch (e) {
       Logger.log('player', 'dash tracks failed, retry once', `bvid=${bvid} cid=${cid}`);
       try {
-        tracks = await BiliService.fetchDashAudioTracks(bvid, cid);
+        const dashRetry: DashFetchResult = await BiliService.fetchDashAudioTracks(bvid, cid);
+        tracks = dashRetry.tracks;
+        lastPlayTimeMs = dashRetry.lastPlayTimeMs;
+        lastPlayCid = dashRetry.lastPlayCid;
         dashResolved = true;
       } catch (e2) {
         hilog.warn(Constants.LOG_DOMAIN, Constants.LOG_TAG,
@@ -1865,10 +1963,10 @@ export class BiliService {
       const track: AudioTrack = BiliService.pickAudioTrack(tracks, tier);
       Logger.log('player', 'resolveAudioTrack',
         `bvid=${bvid} cid=${cid} tier=${Number(tier)} qn=${track.id} tracks=${tracks.length} source=dash`);
-      return new ResolvedAudio(track.id, track.urls, tracks, 'dash');
+      return new ResolvedAudio(track.id, track.urls, tracks, 'dash', lastPlayTimeMs, lastPlayCid);
     }
-    const urls: string[] = await BiliService.fetchDurlCandidates(bvid, cid);
+    const durlResult: DurlFetchResult = await BiliService.fetchDurlCandidates(bvid, cid);
     Logger.log('player', 'resolveAudioTrack', `bvid=${bvid} cid=${cid} tier=${Number(tier)} source=durl`);
-    return new ResolvedAudio(0, urls, [], 'durl');
+    return new ResolvedAudio(0, durlResult.urls, [], 'durl', durlResult.lastPlayTimeMs, durlResult.lastPlayCid);
   }
 }
