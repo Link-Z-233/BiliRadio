@@ -1,16 +1,20 @@
-import { promptAction } from '@kit.ArkUI';
+import { promptAction, componentUtils } from '@kit.ArkUI';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { Subscription } from '../model/Subscription';
 import { BiliVideo } from '../model/BiliVideo';
 import { SubscriptionStore } from '../service/SubscriptionStore';
 import { BiliService, VideoDetail } from '../service/BiliService';
-import { AppStore } from '../service/AppStore';
 import { PlayHistoryItem } from '../model/PlayHistoryItem';
 import { PlayerController, EnqueueResult } from '../service/PlayerController';
 import { Constants } from '../service/Constants';
 import { dismissOverlaysForBack } from '../service/BackHandler';
+import { SelectLogic, LongPressGuard, SweepSession, EdgeAutoScroller } from '../service/SelectLogic';
 import { connectNum, connectStr, NumState, StrState } from '../service/V2State';
 import { CoverThumb } from '../component/CoverThumb';
+import { SelectCheckbox } from '../component/SelectCheckbox';
+
+// 拖选边缘带定位用 List 组件 id（checkSweepEdge 与 .id() 同源）
+const SWEEP_LIST_ID: string = 'sourcePageList';
 
 function formatDuration(sec: number): string {
   if (sec <= 0) {
@@ -65,6 +69,10 @@ struct SourcePage {
   @Local selectMode: boolean = false;
   // 多选集合不可变整体换引用更新：V2 @Local 赋值观测不观测 Set 内部变更
   @Local selectedKeys: Set<string> = new Set<string>();
+  // 复选框区拖选会话（FR-014）：null=未在拖选；方向性扫选模式按下时锁定，同次拖动不反转
+  private sweepSession: SweepSession | null = null;
+  // 边缘自动滚动器（FR-018）：拖选中手指进入列表可视区边缘带时驱动列表滚动续扫
+  private edgeScroller: EdgeAutoScroller = new EdgeAutoScroller();
   private seenBefore: number = 0;         // 进入时的 lastSeenAt，NEW 徽标基准
   private olderPage: number = 1;          // 已加载的最大页号（sortReverse 语义）
   private olderFailAt: number = 0;        // 加载更早失败时间戳：冷却期内禁止重试（US2）
@@ -73,7 +81,10 @@ struct SourcePage {
   // 最近一次触底页的实际来源：APP 链稀疏（服务端钳 ps 至 20），仅 Web 链短页才是权威到底
   private upOlderViaWeb: boolean = false;
   private sub: Subscription = new Subscription();
-  private playedSet: Set<string> = new Set();
+  // 已播集契约同 selectedKeys：V2 @Local 赋值观测不观测 Set 内部变更，整体换引用驱动行上标记即时刷新
+  @Local playedSet: Set<string> = new Set<string>();
+  // 长按守卫（FR-009）：堵长按后的回退 onClick，三处多选统一模式
+  private longPressGuard: LongPressGuard = new LongPressGuard();
   private scroller: Scroller = new Scroller();
   private navPathStack: NavPathStack = new NavPathStack();
   private controller: PlayerController = PlayerController.getInstance();
@@ -111,39 +122,114 @@ struct SourcePage {
     return this.seenBefore > 0 && item.pubdate > this.seenBefore;
   }
 
-  private enterSelectMode(): void {
-    this.selectMode = true;
+  // 进出多选统一入口（FR-005）：全链路（行首勾选框宽度/透明度、顶栏双态、底部操作条）
+  // 随同一 animateTo 翻转 selectMode 驱动，进出同入口天然互逆；区间选择态与锚点进出时全量重置
+  private enterSelectMode(preselect: string): void {
+    if (this.selectMode) {
+      return;
+    }
+    this.getUIContext().animateTo({ duration: Constants.TOKEN_SELECT_ANIM_MS, curve: Curve.EaseOut }, (): void => {
+      this.selectMode = true;
+      if (preselect !== '') {
+        this.selectedKeys = new Set<string>([preselect]);
+      }
+    });
   }
 
   private exitSelectMode(): void {
-    this.selectMode = false;
-    this.selectedKeys = new Set<string>();
+    if (!this.selectMode) {
+      return;
+    }
+    this.endSweep();
+    this.getUIContext().animateTo({ duration: Constants.TOKEN_SELECT_ANIM_MS, curve: Curve.EaseOut }, (): void => {
+      this.selectMode = false;
+      this.selectedKeys = new Set<string>();
+    });
   }
 
   private toggleSelect(bvid: string): void {
-    const next: Set<string> = new Set<string>(this.selectedKeys);
-    if (next.has(bvid)) {
-      next.delete(bvid);
-    } else {
-      next.add(bvid);
-    }
-    this.selectedKeys = next;
+    this.selectedKeys = SelectLogic.toggle(this.selectedKeys, bvid);
   }
 
-  private isAllSelected(): boolean {
-    return this.episodes.length > 0 && this.selectedKeys.size >= this.episodes.length;
+  // 复选框区拖选（FR-014/FR-018）：方向性扫选——按下采样起点行选中态锁定加/减扫模式，
+  // 按等高步长换算目标行，起点→目标区间按锁定模式整体 Set 换引用；
+  // 手指进入列表边缘带时自动滚动续扫，订阅源触底照常触发加载更早（索引稳定，新载入行可被继续拖选）
+  private sweepStep(): number {
+    return Constants.EPISODE_THUMB_H + 2 * Constants.TOKEN_SPACE_10 + Constants.TOKEN_SPACE_XS;
   }
 
-  private toggleSelectAll(): void {
-    if (this.isAllSelected()) {
-      this.selectedKeys = new Set<string>();
+  private startSweep(index: number, event: GestureEvent): void {
+    if (index < 0 || index >= this.episodes.length) {
       return;
     }
-    const next: Set<string> = new Set<string>();
-    for (let i = 0; i < this.episodes.length; i++) {
-      next.add(this.episodes[i].bvid);
+    this.sweepSession = new SweepSession();
+    this.sweepSession.begin(this.selectedKeys.has(this.episodes[index].bvid), index,
+      event.fingerList[0].globalY, this.scroller.currentOffset().yOffset);
+    this.applySweepRange(index, index);
+  }
+
+  private updateSweep(globalY: number): void {
+    if (this.sweepSession === null) {
+      return;
     }
-    this.selectedKeys = next;
+    const delta: number = this.sweepSession.delta(globalY, this.scroller.currentOffset().yOffset);
+    const start: number = this.sweepSession.getStartIndex();
+    const target: number = Math.max(0, Math.min(this.episodes.length - 1,
+      start + Math.round(delta / this.sweepStep())));
+    this.applySweepRange(start, target);
+  }
+
+  private applySweepRange(from: number, to: number): void {
+    if (this.sweepSession === null) {
+      return;
+    }
+    const lo: number = Math.min(from, to);
+    const hi: number = Math.max(from, to);
+    const next: Set<string> = new Set<string>(this.selectedKeys);
+    let changed: boolean = false;
+    for (let i = lo; i <= hi; i++) {
+      const bvid: string = this.episodes[i].bvid;
+      if (this.sweepSession.isAddMode()) {
+        if (!next.has(bvid)) {
+          next.add(bvid);
+          changed = true;
+        }
+      } else if (next.has(bvid)) {
+        next.delete(bvid);
+        changed = true;
+      }
+    }
+    if (changed) {
+      this.selectedKeys = next;
+    }
+  }
+
+  private endSweep(): void {
+    this.edgeScroller.stop();
+    this.sweepSession = null;
+  }
+
+  private checkSweepEdge(globalY: number): void {
+    if (this.sweepSession === null) {
+      return;
+    }
+    const rect: componentUtils.ComponentInfo =
+      this.getUIContext().getComponentUtils().getRectangleById(SWEEP_LIST_ID);
+    const topY: number = this.getUIContext().px2vp(rect.windowOffset.y);
+    const bottomY: number = topY + this.getUIContext().px2vp(rect.size.height);
+    if (globalY <= topY + Constants.SELECT_SWEEP_EDGE_ZONE) {
+      this.startEdgeScroll(false);
+    } else if (globalY >= bottomY - Constants.SELECT_SWEEP_EDGE_ZONE) {
+      this.startEdgeScroll(true);
+    } else {
+      this.edgeScroller.stop();
+    }
+  }
+
+  private startEdgeScroll(downward: boolean): void {
+    this.edgeScroller.start(this.scroller, downward, (): void => {
+      this.updateSweep(this.sweepSession === null ? 0 : this.sweepSession.getLastGlobalY());
+    });
   }
 
   // 按列表序取选中剧集批量入队（US2）：复用 loadPlaylistAndPlay 全语义（空队列起播/非空追加
@@ -166,6 +252,41 @@ struct SourcePage {
       .catch((): void => {
         this.exitSelectMode();
       });
+  }
+
+  // 标记已看完（FR-007）：二次确认（N 动态替换）→ markWatched 批量写本地历史（bvid 级幂等，仅本地）→
+  // 重载已播集驱动行上标记立即可见 → toast → 退出多选；取消确认留在多选态无副作用
+  private confirmMarkWatched(): void {
+    const count: number = this.selectedKeys.size;
+    if (count === 0) {
+      return;
+    }
+    AlertDialog.show({
+      title: Constants.DIALOG_MARK_WATCHED_TITLE,
+      message: Constants.DIALOG_MARK_WATCHED_MSG.replace('N', `${count}`),
+      autoCancel: true,
+      alignment: DialogAlignment.Center,
+      primaryButton: {
+        value: '标记',
+        action: (): void => {
+          const items: BiliVideo[] = [];
+          for (let i = 0; i < this.episodes.length; i++) {
+            if (this.selectedKeys.has(this.episodes[i].bvid)) {
+              items.push(this.episodes[i]);
+            }
+          }
+          this.controller.markWatched(items);
+          this.loadPlayedSet();
+          promptAction.showToast({ message: Constants.TOAST_MARK_WATCHED.replace('N', `${count}`) });
+          this.exitSelectMode();
+        }
+      },
+      secondaryButton: {
+        value: '取消',
+        action: (): void => {
+        }
+      }
+    });
   }
 
   private loadFromCache(): void {
@@ -210,15 +331,18 @@ struct SourcePage {
     SubscriptionStore.saveSubscriptions(subs);
   }
 
+  // 读内存真相源（controller.playHistory，FR-011）：markWatched 同步更新该数组，
+  // 异步落盘与同步读文件的竞态致已播标记不出现的问题随之消除
   private loadPlayedSet(): void {
-    this.playedSet.clear();
-    const hist: PlayHistoryItem[] = AppStore.loadPlayHistoryFile();
+    const played: Set<string> = new Set<string>();
+    const hist: PlayHistoryItem[] = this.controller.playHistory;
     for (let i = 0; i < hist.length; i++) {
       // 哨兵 -1 = 已听完；中途条目（progress>0）不算已播
       if (hist[i].progress === -1) {
-        this.playedSet.add(hist[i].bvid);
+        played.add(hist[i].bvid);
       }
     }
+    this.playedSet = played;
   }
 
   private refreshSource(): void {
@@ -406,134 +530,195 @@ struct SourcePage {
     });
   }
 
-  // 多选底部操作条（US2）：全选/取消全选 + 加入队列(N)（N=0 禁用）+ 取消；
-  // bottom 避让 MINI_PLAYER_CLEARANCE + navBarHeight，与列表底部预留对齐
+  // 多选底部独立悬浮按钮（FR-016）：不可见全宽 Row 承载两枚独立胶囊——左「标记已看完」
+  // （card 底 + text_primary）/ 右「加入队列 (N)」（accent 底 + fg_on_dark，主按钮）；
+  // 无选中共享禁用（opacity 降档 + enabled false）；bottom 避让 MiniPlayer 与导航区；
+  // 各自底边滑入滑出过渡，随 selectMode 同一 animateTo 驱动（进出互逆）
   @Builder
   private selectActionBar() {
     Row() {
-      Text(this.isAllSelected() ? '取消全选' : '全选')
+      Text('标记已看完')
         .fontSize(Constants.TOKEN_FONT_BODY_M)
+        .fontWeight(FontWeight.Medium)
         .fontColor($r('app.color.text_primary'))
         .padding({
-          left: Constants.TOKEN_SPACE_14,
-          right: Constants.TOKEN_SPACE_14,
-          top: Constants.TOKEN_SPACE_S,
-          bottom: Constants.TOKEN_SPACE_S
+          left: Constants.TOKEN_SPACE_XL,
+          right: Constants.TOKEN_SPACE_XL,
+          top: Constants.TOKEN_SPACE_M,
+          bottom: Constants.TOKEN_SPACE_M
         })
+        .borderRadius(Constants.TOKEN_RADIUS_XXL)
+        .backgroundColor($r('app.color.card_background'))
+        .shadow({
+          radius: Constants.TOKEN_FLOATING_SHADOW_RADIUS,
+          color: $r('app.color.shadow_ball'),
+          offsetX: 0,
+          offsetY: Constants.TOKEN_FLOATING_SHADOW_OFFSET_Y
+        })
+        .opacity(this.selectedKeys.size > 0 ? 1 : Constants.TOKEN_DISABLED_OPACITY)
+        .enabled(this.selectedKeys.size > 0)
         .onClick(() => {
-          this.toggleSelectAll();
+          this.confirmMarkWatched();
         })
-      Blank()
+        .transition(TransitionEffect.move(TransitionEdge.BOTTOM).combine(TransitionEffect.OPACITY))
       Text(`加入队列 (${this.selectedKeys.size})`)
         .fontSize(Constants.TOKEN_FONT_BODY_M)
         .fontWeight(FontWeight.Medium)
-        .fontColor(this.accentColor.value)
+        .fontColor($r('app.color.fg_on_dark'))
         .padding({
-          left: Constants.TOKEN_SPACE_14,
-          right: Constants.TOKEN_SPACE_14,
-          top: Constants.TOKEN_SPACE_S,
-          bottom: Constants.TOKEN_SPACE_S
+          left: Constants.TOKEN_SPACE_XL,
+          right: Constants.TOKEN_SPACE_XL,
+          top: Constants.TOKEN_SPACE_M,
+          bottom: Constants.TOKEN_SPACE_M
         })
-        .opacity(this.selectedKeys.size > 0 ? 1 : 0.4)
+        .borderRadius(Constants.TOKEN_RADIUS_XXL)
+        .backgroundColor(this.accentColor.value)
+        .shadow({
+          radius: Constants.TOKEN_FLOATING_SHADOW_RADIUS,
+          color: $r('app.color.shadow_ball'),
+          offsetX: 0,
+          offsetY: Constants.TOKEN_FLOATING_SHADOW_OFFSET_Y
+        })
+        .opacity(this.selectedKeys.size > 0 ? 1 : Constants.TOKEN_DISABLED_OPACITY)
         .enabled(this.selectedKeys.size > 0)
         .onClick(() => {
           this.enqueueSelected();
         })
-      Text('取消')
-        .fontSize(Constants.TOKEN_FONT_BODY_M)
-        .fontColor($r('app.color.text_secondary'))
-        .padding({
-          left: Constants.TOKEN_SPACE_14,
-          right: Constants.TOKEN_SPACE_14,
-          top: Constants.TOKEN_SPACE_S,
-          bottom: Constants.TOKEN_SPACE_S
-        })
-        .margin({ left: Constants.TOKEN_SPACE_M })
-        .onClick(() => {
-          this.exitSelectMode();
-        })
+        .transition(TransitionEffect.move(TransitionEdge.BOTTOM).combine(TransitionEffect.OPACITY))
     }
     .width('100%')
-    .borderRadius(Constants.TOKEN_RADIUS_L)
-    .backgroundColor($r('app.color.card_background'))
-    .margin({
-      left: Constants.TOKEN_SPACE_S,
-      right: Constants.TOKEN_SPACE_S,
-      bottom: Constants.MINI_PLAYER_CLEARANCE + this.navBarHeight.value
-    })
+    .justifyContent(FlexAlign.SpaceBetween)
+    .padding({ left: Constants.TOKEN_SPACE_M, right: Constants.TOKEN_SPACE_M })
+    .margin({ bottom: Constants.MINI_PLAYER_CLEARANCE + this.navBarHeight.value })
   }
 
-  // 标题栏：系统返回钮样式不可定制，hideBackButton 后经自定义 title 重建；
-  // 返回按钮与设置页/日志页同款 36×36 圆卡；标题样式对齐两页页头（TOKEN_FONT_24 Bold）；
-  // ··· 卡同入此 Row——原 .menus() 容器在 refreshing 内容交换后布局错乱致卡片脱落压住返回卡，
-  // 自控 Row 不依赖框架 menus 布局；placement 显式 BottomRight（默认 BottomLeft 会从左上角展开）
+  // 标题栏双态（FR-001/FR-002）：系统返回钮样式不可定制，hideBackButton 后经自定义 title 重建；
+  // Stack 承载两态 Row 条件渲染 + OPACITY 过渡交叉淡化（进出多选同 animateTo 驱动）——
+  // 常规态：返回卡 + 标题 + 多选图标卡（episodeCount===0 不渲染）+ ··· 卡；
+  // 多选态：取消卡（xmark 替换返回位）+ 居中「已选 N 项」，···/刷新/退订不可达；
+  // 返回卡/取消卡均 36×36 圆卡（对齐设置页/日志页）；placement 显式 BottomRight
+  // （默认 BottomLeft 会从左上角展开）；自控 Row 不依赖框架 menus 布局
   @Builder
   private sourceTitleBuilder() {
-    Row() {
-      Row() {
-        SymbolGlyph($r('sys.symbol.chevron_left'))
-          .fontSize(Constants.TOKEN_FONT_TITLE_L)
-          .fontColor([$r('app.color.text_primary')])
-      }
-      .width(36)
-      .height(36)
-      .borderRadius(Constants.TOKEN_RADIUS_18)
-      .backgroundColor($r('app.color.card_background'))
-      .justifyContent(FlexAlign.Center)
-      .onClick(() => {
-        if (this.selectMode) {
-          this.exitSelectMode();
-          return;
-        }
-        if (!dismissOverlaysForBack()) {
-          this.navPathStack.pop();
-        }
-      })
+    Stack() {
+      if (!this.selectMode) {
+        Row() {
+          Row() {
+            SymbolGlyph($r('sys.symbol.chevron_left'))
+              .fontSize(Constants.TOKEN_FONT_TITLE_L)
+              .fontColor([$r('app.color.text_primary')])
+          }
+          .width(Constants.GLASS_ICON_BTN_SIZE)
+          .height(Constants.GLASS_ICON_BTN_SIZE)
+          .borderRadius(Constants.TOKEN_RADIUS_18)
+          .backgroundColor($r('app.color.card_background'))
+          .justifyContent(FlexAlign.Center)
+          .onClick(() => {
+            if (!dismissOverlaysForBack()) {
+              this.navPathStack.pop();
+            }
+          })
 
-      Text(this.navTitle)
-        .fontSize(Constants.TOKEN_FONT_24)
-        .fontWeight(FontWeight.Bold)
-        .fontColor($r('app.color.text_primary'))
-        .maxLines(1)
-        .textOverflow({ overflow: TextOverflow.Ellipsis })
-        .layoutWeight(1)
-        .margin({ left: Constants.TOKEN_SPACE_10 })
+          Text(this.navTitle)
+            .fontSize(Constants.TOKEN_FONT_24)
+            .fontWeight(FontWeight.Bold)
+            .fontColor($r('app.color.text_primary'))
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .layoutWeight(1)
+            .margin({ left: Constants.TOKEN_SPACE_10 })
 
-      Row() {
-        if (this.refreshing) {
-          LoadingProgress()
-            .width(Constants.TOKEN_FONT_TITLE_L)
-            .height(Constants.TOKEN_FONT_TITLE_L)
-            .color(this.accentColor.value)
-        } else {
-          SymbolGlyph($r('sys.symbol.ellipsis_circle'))
-            .fontSize(Constants.TOKEN_FONT_TITLE_L)
-            .fontColor([$r('app.color.text_primary')])
-            .bindMenu([
-              {
-                value: '刷新',
-                action: (): void => {
-                  this.refreshSource();
-                }
-              },
-              {
-                value: '取消订阅',
-                action: (): void => {
-                  this.unsubscribe();
-                }
-              }
-            ], { placement: Placement.BottomRight })
+          if (this.episodeCount > 0) {
+            Row() {
+              SymbolGlyph($r('sys.symbol.list_checkmark'))
+                .fontSize(Constants.TOKEN_FONT_TITLE_L)
+                .fontColor([$r('app.color.text_primary')])
+            }
+            .width(Constants.TOKEN_ICON_BTN)
+            .height(Constants.TOKEN_ICON_BTN)
+            .borderRadius(Constants.TOKEN_RADIUS_XL)
+            .backgroundColor($r('app.color.card_background'))
+            .justifyContent(FlexAlign.Center)
+            .margin({ left: Constants.TOKEN_SPACE_M })
+            .onClick(() => {
+              this.enterSelectMode('');
+            })
+          }
+
+          Row() {
+            if (this.refreshing) {
+              LoadingProgress()
+                .width(Constants.TOKEN_FONT_TITLE_L)
+                .height(Constants.TOKEN_FONT_TITLE_L)
+                .color(this.accentColor.value)
+            } else {
+              SymbolGlyph($r('sys.symbol.ellipsis_circle'))
+                .fontSize(Constants.TOKEN_FONT_TITLE_L)
+                .fontColor([$r('app.color.text_primary')])
+                .bindMenu([
+                  {
+                    value: '刷新',
+                    action: (): void => {
+                      this.refreshSource();
+                    }
+                  },
+                  {
+                    value: '取消订阅',
+                    action: (): void => {
+                      this.unsubscribe();
+                    }
+                  }
+                ], { placement: Placement.BottomRight })
+            }
+          }
+          .width(Constants.TOKEN_ICON_BTN)
+          .height(Constants.TOKEN_ICON_BTN)
+          .borderRadius(Constants.TOKEN_RADIUS_XL)
+          .backgroundColor($r('app.color.card_background'))
+          .justifyContent(FlexAlign.Center)
+          .margin({ left: Constants.TOKEN_SPACE_M })
         }
+        .width('100%')
+        .alignItems(VerticalAlign.Center)
+        .transition(TransitionEffect.OPACITY)
       }
-      .width(Constants.TOKEN_ICON_BTN)
-      .height(Constants.TOKEN_ICON_BTN)
-      .borderRadius(Constants.TOKEN_RADIUS_XL)
-      .backgroundColor($r('app.color.card_background'))
-      .justifyContent(FlexAlign.Center)
-      .margin({ left: Constants.TOKEN_SPACE_M })
+      if (this.selectMode) {
+        Row() {
+          Row() {
+            SymbolGlyph($r('sys.symbol.xmark'))
+              .fontSize(Constants.TOKEN_FONT_TITLE_L)
+              .fontColor([$r('app.color.text_primary')])
+          }
+          .width(Constants.GLASS_ICON_BTN_SIZE)
+          .height(Constants.GLASS_ICON_BTN_SIZE)
+          .borderRadius(Constants.TOKEN_RADIUS_18)
+          .backgroundColor($r('app.color.card_background'))
+          .justifyContent(FlexAlign.Center)
+          .onClick(() => {
+            this.exitSelectMode();
+          })
+
+          Text(`已选 ${this.selectedKeys.size} 项`)
+            .fontSize(Constants.TOKEN_FONT_24)
+            .fontWeight(FontWeight.Bold)
+            .fontColor($r('app.color.text_primary'))
+            .maxLines(1)
+            .layoutWeight(1)
+            .textAlign(TextAlign.Center)
+            .margin({ left: Constants.TOKEN_SPACE_10 })
+
+          Row()
+            .width(Constants.GLASS_ICON_BTN_SIZE)
+            .height(Constants.GLASS_ICON_BTN_SIZE)
+            .margin({ left: Constants.TOKEN_SPACE_10 })
+        }
+        .width('100%')
+        .alignItems(VerticalAlign.Center)
+        .transition(TransitionEffect.OPACITY)
+      }
     }
     .width('100%')
-    .alignItems(VerticalAlign.Center)
+    .alignContent(Alignment.Center)
     .margin({ top: Constants.TOKEN_SPACE_10 })
     .padding({ left: Constants.TOKEN_SPACE_L, right: Constants.TOKEN_SPACE_M })
   }
@@ -559,19 +744,6 @@ struct SourcePage {
       .height(Constants.SOURCE_HEADER_H)
       .layoutWeight(1)
       .margin({ left: Constants.TOKEN_SPACE_M, right: Constants.TOKEN_SPACE_S })
-      if (this.episodeCount > 0) {
-        Row() {
-          SymbolGlyph($r('sys.symbol.list_checkmark'))
-            .fontSize(Constants.TOKEN_FONT_20)
-            .fontColor([$r('app.color.text_secondary')])
-        }
-        .width(Constants.CONTROL_BTN_SIZE)
-        .height(Constants.CONTROL_BTN_SIZE)
-        .justifyContent(FlexAlign.Center)
-        .onClick(() => {
-          this.enterSelectMode();
-        })
-      }
     }
     .width('100%')
     .alignItems(VerticalAlign.Center)
@@ -604,14 +776,47 @@ struct SourcePage {
             ForEach(this.episodes, (item: BiliVideo, index: number) => {
               ListItem() {
                 Row() {
-                  if (this.selectMode) {
-                    SymbolGlyph(this.selectedKeys.has(item.bvid)
-                      ? $r('sys.symbol.checkmark_circle') : $r('sys.symbol.circle'))
-                      .fontSize(Constants.SELECT_CHECKBOX_SIZE)
-                      .fontColor([this.selectedKeys.has(item.bvid)
-                        ? this.accentColor.value : $r('app.color.text_disabled')])
-                      .margin({ right: Constants.TOKEN_SPACE_S })
+                  // 行首勾选框共用组件（FR-012/FR-013）：恒挂载容器宽度/透明度随 selectMode 动画，
+                  // 行内容随容器宽度真实让位/回位（非 translate 位移），动画由 enter/exit 的 animateTo 驱动；
+                  // 外包 Column 承载复选框区拖选手势（FR-014）：多选态手指在勾选框列上下拖动扫选，
+                  // Pan 位移阈值内为点按（Checkbox onChange 切勾不冲突），行其余区域维持列表滚动
+                  Column() {
+                    SelectCheckbox({
+                      active: this.selectMode,
+                      selected: this.selectedKeys.has(item.bvid),
+                      gap: Constants.TOKEN_SPACE_M,
+                      onChange: (value: boolean): void => {
+                        const inSet: boolean = this.selectedKeys.has(item.bvid);
+                        if (value !== inSet) {
+                          this.toggleSelect(item.bvid);
+                        }
+                      }
+                    })
                   }
+                  .gesture(
+                    PanGesture({ fingers: 1, direction: PanDirection.Vertical })
+                      .onActionStart((event: GestureEvent): void => {
+                        if (!this.selectMode || event.fingerList.length === 0) {
+                          return;
+                        }
+                        this.startSweep(index, event);
+                      })
+                      .onActionUpdate((event: GestureEvent): void => {
+                        if (this.sweepSession === null) {
+                          return;
+                        }
+                        const globalY: number = event.fingerList.length > 0
+                          ? event.fingerList[0].globalY : this.sweepSession.getLastGlobalY();
+                        this.updateSweep(globalY);
+                        this.checkSweepEdge(globalY);
+                      })
+                      .onActionEnd((): void => {
+                        this.endSweep();
+                      })
+                      .onActionCancel((): void => {
+                        this.endSweep();
+                      })
+                  )
                   Stack({ alignContent: Alignment.BottomEnd }) {
                     CoverThumb({
                       cover: item.cover,
@@ -674,18 +879,32 @@ struct SourcePage {
                 .backgroundColor(this.pressedKey === item.bvid ? $r('app.color.item_pressed_background') : $r('app.color.card_background'))
                 .onTouch((e: TouchEvent): void => {
                   if (e.type === TouchType.Down) {
+                    this.longPressGuard.reset();
                     this.pressedKey = item.bvid;
                   } else if (e.type === TouchType.Up || e.type === TouchType.Cancel) {
                     this.pressedKey = '';
                   }
                 })
                 .onClick(() => {
+                  if (this.longPressGuard.shouldSuppressClick()) {
+                    return;
+                  }
                   if (this.selectMode) {
                     this.toggleSelect(item.bvid);
                   } else {
                     this.playEpisode(index);
                   }
                 })
+                // 长按双入口之一（FR-001）：长按进多选并预选该行；守卫堵长按后的回退点击（FR-009）
+                .gesture(
+                  LongPressGesture()
+                    .onAction(() => {
+                      this.longPressGuard.arm();
+                      if (!this.selectMode) {
+                        this.enterSelectMode(item.bvid);
+                      }
+                    })
+                )
               }
             }, (item: BiliVideo) => item.bvid)
             if (this.loadingOlder) {
@@ -718,7 +937,12 @@ struct SourcePage {
             }
             .width('100%')
             .height('100%')
-            .padding({ left: Constants.TOKEN_SPACE_S, right: Constants.TOKEN_SPACE_S, top: Constants.TOKEN_SPACE_XS, bottom: Constants.MINI_PLAYER_CLEARANCE + this.navBarHeight.value })
+            .id(SWEEP_LIST_ID)
+            .padding({ left: Constants.TOKEN_SPACE_S, right: Constants.TOKEN_SPACE_S, top: Constants.TOKEN_SPACE_XS })
+            // MiniPlayer 悬浮化（FR-015）：底部 padding 是内容裁剪边界（内容不能从胶囊下划过的根因），
+            // 改挂 contentEndOffset——视口延伸至屏底、内容滚动时从胶囊下方穿过（毛玻璃透出），
+            // 滚到底最后一条完整露出在胶囊上方；多选悬浮按钮避让值不变（D18/D19 联动）
+            .contentEndOffset(Constants.MINI_PLAYER_CLEARANCE + this.navBarHeight.value)
             .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
             .onReachEnd(() => {
               this.loadOlder();
@@ -762,13 +986,17 @@ struct SourcePage {
       // 无参 pop() 故永不回调，徽标返回首页不清除；改经 AppStorage tick 驱动 HomePage @Watch 重建
       connectNum(Constants.AS_HOME_REFRESH_TICK, 0).value = Date.now();
     })
-    // US5：系统返回先退多选（US2），再经 BackHandler 关队列/浮层，无浮层可关返回 false 放行默认 pop
+    // 系统返回层序（FR-010）：先经 BackHandler 自上而下逐层退出（队列/历史多选与面板），
+    // 返回 false 再动画退自身多选，最后放行默认 pop——多层多选同开时先退最上层
     .onBackPressed((): boolean => {
+      if (dismissOverlaysForBack()) {
+        return true;
+      }
       if (this.selectMode) {
         this.exitSelectMode();
         return true;
       }
-      return dismissOverlaysForBack();
+      return false;
     })
   }
 }

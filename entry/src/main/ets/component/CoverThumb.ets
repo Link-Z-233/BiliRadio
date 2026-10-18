@@ -5,7 +5,7 @@ import { Constants } from '../service/Constants';
 @Component
 export struct CoverThumb {
   @Prop cover: string = '';
-  thumbSize: number = 44;
+  thumbSize: number = Constants.LIST_THUMB_SIZE;
   radius: number = 8;
   // @Prop 化（v0.3-bugfix-round2 US4）：普通成员不随父组件切歌更新，高亮停留首帧是本根因
   @Prop highlight: boolean = false;
@@ -42,6 +42,7 @@ export struct CoverThumb {
         .borderRadius(this.radius)
         .objectFit(ImageFit.Cover)
         .alt($r('app.media.startIcon'))
+        .draggable(false)
         .border(this.highlight ? { width: 2, color: this.accent } : { width: 0 })
     } else {
       Column() {

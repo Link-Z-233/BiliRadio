@@ -763,7 +763,7 @@ export struct SettingsPage {
           .height(30)
           .padding({ left: Constants.TOKEN_SPACE_M, right: Constants.TOKEN_SPACE_M })
           .backgroundColor($r('app.color.btn_glass'))
-          .backdropBlur(20)
+          .backdropBlur(Constants.GLASS_BLUR)
           .border({ width: 1, color: $r('app.color.btn_border') })
           .fontColor(this.textPrimary())
           .borderRadius(15)
@@ -901,7 +901,7 @@ export struct SettingsPage {
     .width('100%')
     .height('100%')
     .backgroundColor($r('app.color.sheet_panel_background'))
-    .backdropBlur(20)
+    .backdropBlur(Constants.GLASS_BLUR)
     .border({ width: { top: 1 }, color: $r('app.color.sheet_top_separator') })
   }
 

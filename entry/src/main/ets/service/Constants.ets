@@ -123,6 +123,21 @@ export class Constants {
   // 设置/日志层滑入时长（v0.4-Part2 z-layer-refactor）：x 轴 translate 转场，曲线 Friction，对齐原导航 push 手感
   static readonly PAGE_LAYER_SLIDE_MS: number = 350;
 
+  // —— 多选进出过渡（v0.5-part2 multiselect-rework）：订阅源/队列/历史三处多选共用动效档 ——
+  // 进出多选全链路过渡时长（ms）：行首勾选框宽度/透明度、顶栏与面板头部双态、底部操作条滑入滑出
+  static readonly TOKEN_SELECT_ANIM_MS: number = 300;
+
+  // —— 复选框区拖选（v0.5-part2 multiselect-rework 追加2 US4）：方向性扫选与边缘自动滚动参数 ——
+  // 拖选手指进入列表可视区上下边缘带（vp）时启动对应方向自动滚动
+  static readonly SELECT_SWEEP_EDGE_ZONE: number = 48;
+  // 自动滚动每 tick 位移（vp）
+  static readonly SELECT_SWEEP_SPEED: number = 10;
+  // 自动滚动时钟周期（ms）
+  static readonly SELECT_SWEEP_TICK_MS: number = 16;
+  // 悬浮胶囊阴影档（独立悬浮按钮投影，对齐 MiniPlayer 既有阴影；色值资源 shadow_ball）
+  static readonly TOKEN_FLOATING_SHADOW_RADIUS: number = 12;
+  static readonly TOKEN_FLOATING_SHADOW_OFFSET_Y: number = 2;
+
   // —— 玻璃浮层（GlassSheet，v0.4-Part1 sheet-visual-redesign）：动画/渐隐/投影参数唯一来源 ——
   // 浮层滑入+渐显动画时长（ms）：遮罩 OPACITY 过渡同步此值
   static readonly SHEET_SLIDE_MS: number = 300;
@@ -158,8 +173,9 @@ export class Constants {
 
   // —— 玻璃图标按钮（v0.4-Part1-ux-fixes US4）：队列/历史面板头部 36×36 图标按钮公式唯一来源 ——
   static readonly GLASS_ICON_BTN_SIZE: number = 36;
-  static readonly GLASS_ICON_BTN_BLUR: number = 20;
+  static readonly GLASS_BLUR: number = 20;
   static readonly GLASS_ICON_BTN_BORDER: number = 1;
+  static readonly TOKEN_DISABLED_OPACITY: number = 0.4;
   // 多选行首 Checkbox 尺寸
   static readonly SELECT_CHECKBOX_SIZE: number = 20;
 
@@ -194,6 +210,10 @@ export class Constants {
   static readonly DIALOG_DELETE_SUB_MSG: string = '确定删除该订阅吗？';
   static readonly DIALOG_REMOVE_SELECTED_TITLE: string = '移除所选';
   static readonly DIALOG_REMOVE_SELECTED_MSG: string = '确定移除所选条目吗？';
+  // —— 标记已看完（v0.5-part2 multiselect-rework US1）：订阅源多选批量本地标记，二次确认与 toast（N 由选中数代入）
+  static readonly DIALOG_MARK_WATCHED_TITLE: string = '标记已看完';
+  static readonly DIALOG_MARK_WATCHED_MSG: string = '确定标记 N 集为已看完吗？';
+  static readonly TOAST_MARK_WATCHED: string = '已标记 N 集为已看完';
   // —— 关于页外链二次确认（v0.4-Part1-ux-fixes US7）：确认后 openLink 拉起系统浏览器 ——
   static readonly DIALOG_OPEN_LINK_TITLE: string = '跳转到外部浏览器？';
   // —— 队列空态引导（queue-redesign US1） ——
@@ -242,6 +262,9 @@ export class Constants {
   static readonly HEARTBEAT_FAIL_FUSE: number = 3;
   // 状态变化（暂停/切分P）补报最小前进量（秒）；播放中周期上报前进阈值复用 PROGRESS_SAVE_INTERVAL_MS 换算
   static readonly HEARTBEAT_MIN_GAP_SEC: number = 2;
+
+  // 行内小封面尺寸——CoverThumb 默认值，队列/历史扫选步长推导引用，改它需同步核对步长换算
+  static readonly LIST_THUMB_SIZE: number = 44;
 
   // —— 订阅详情页剧集行缩略图（v0.5-part1-source-page-redesign）：16:9 左图右文行，显示档 vp / 请求档 px ——
   static readonly EPISODE_THUMB_W: number = 121;

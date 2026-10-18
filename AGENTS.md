@@ -66,7 +66,7 @@
 - **真机自查事项**（如有）：在轮次结束总结中集中输出，不写入 PROJECT_NOTES.md；PROJECT_NOTES 待验登记（VR-*）仅按用户明确指示新增
 - **bugfix 记录**：直接修复的 bug（不走 SDD 的）统一记入活跃 spec 目录（`spec/feature.json` 所指）的单份 `bugfix.md`，按发生顺序编号分节追加（`## 1.` 起递增）；跟 SDD 流程走的修复不进 `bugfix.md`（任务/验证工件已承载）
 - **当前轮功能再优化**：对本轮 spec 已增添或修改的功能做进一步优化时，以追加项计入当前轮 spec（活跃目录三工件追加 US/FR/D/Phase，标题与 Input 同步标「追加」），不另开轮次、不进 `bugfix.md`；先例：v0.5-part2 追加 US7 剧集行 68 等高（封面 `EPISODE_THUMB_W/H` 121×68、文字列固定 68 贴顶/贴底）
-- **输出内容默认不带时间戳**：注释只写机制/动机/约束，不写日期——时间信息由 git 历史与文档（bugfix.md、spec 工件）承载
+- **输出内容默认不带时间戳**：注释只写机制/动机/约束，不写日期；spec 工件（spec.md/plan.md/tasks.md）同样**不带任何日期戳**（Created/Status/Changelog/追加标注一律省略日期）——时间信息由 git 历史承载，bugfix.md 仅按编号分节承载顺序
 
 ### SDD 五阶段
 

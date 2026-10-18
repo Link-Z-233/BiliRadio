@@ -3,9 +3,18 @@ import { PlayHistoryItem } from '../model/PlayHistoryItem';
 import { BiliVideo } from '../model/BiliVideo';
 import { Constants } from '../service/Constants';
 import { connectBool, connectStr, BoolState, StrState } from '../service/V2State';
+import { registerHistorySelectExit } from '../service/BackHandler';
+import { SelectLogic, LongPressGuard, SweepSession, EdgeAutoScroller } from '../service/SelectLogic';
 import { CoverThumb } from './CoverThumb';
-import { promptAction } from '@kit.ArkUI';
+import { SelectCheckbox } from './SelectCheckbox';
+import { promptAction, componentUtils } from '@kit.ArkUI';
 import { BusinessError } from '@kit.BasicServicesKit';
+
+// 拖选等高步长（FR-014）：归并行固定 44 高 + 上下 padding TOKEN_SPACE_10（List space 0），
+// 沿 QueueSheet EST_* 文件级常量先例
+const HISTORY_SWEEP_STEP: number = Constants.LIST_THUMB_SIZE + 2 * Constants.TOKEN_SPACE_10;
+// 拖选边缘带定位用 List 组件 id（checkSweepEdge 与 .id() 同源）
+const SWEEP_LIST_ID: string = 'historySheetList';
 
 // 历史归并行（US6 纯展示层派生视图，不落盘）：bvid 聚合为一行，
 // latest = 该视频 viewAt 最新的分P 历史（行状态源，点行续播目标）
@@ -70,7 +79,8 @@ export struct HistorySheet {
   @Local playHistoryVersion: number = -1;
   // 多选管理：面板关闭/退出多选时清空，交互对齐队列
   @Local selectMode: BoolState = connectBool(Constants.AS_HISTORY_SELECT_MODE, false);
-  @Local selectedHistoryIds: string[] = [];
+  // 多选集合不可变整体换引用更新：V2 @Local 赋值观测不观测 Set 内部变更
+  @Local selectedKeys: Set<string> = new Set<string>();
   @Local pressedKey: string = '';
   // 面板显隐同源：与 GlassSheet/Index 共享同键实例，关闭时驱动多选复位
   @Local showPlayHistory: BoolState = connectBool(Constants.AS_SHOW_PLAY_HISTORY, false);
@@ -80,6 +90,12 @@ export struct HistorySheet {
   private playHistorySource: HistoryDataSource = new HistoryDataSource();
   // ListScroller（extends Scroller）：取消确认后经 closeAllSwipeActions 复位滑动行（US1）
   private historyScroller: ListScroller = new ListScroller();
+  // 长按守卫（FR-009）：堵长按后的回退 onClick，统一三处模式
+  private longPressGuard: LongPressGuard = new LongPressGuard();
+  // 复选框区拖选会话（FR-014）：null=未在拖选；方向性扫选模式按下时锁定，同次拖动不反转
+  private sweepSession: SweepSession | null = null;
+  // 边缘自动滚动器（FR-018）：拖选中手指进入列表可视区边缘带时驱动列表滚动续扫
+  private edgeScroller: EdgeAutoScroller = new EdgeAutoScroller();
   // 进度广播退订句柄：aboutToDisappear 中调用，避免监听器累积
   private unsubscribePlayer: () => void = (): void => {};
 
@@ -88,11 +104,15 @@ export struct HistorySheet {
     this.unsubscribePlayer = this.controller.subscribe((): void => {
       this.syncFrom(this.controller);
     }, 'HistorySheet');
+    registerHistorySelectExit((): void => {
+      this.exitSelectModeAnimated();
+    });
   }
 
   aboutToDisappear(): void {
     this.unsubscribePlayer();
     this.unsubscribePlayer = (): void => {};
+    registerHistorySelectExit(undefined);
   }
 
   // US6 归并派生（D11）：按 bvid 聚合、viewAt 最新分P 为代表、按代表 viewAt 倒序；
@@ -129,7 +149,7 @@ export struct HistorySheet {
   @Monitor('showPlayHistory.value')
   onPlayHistoryVisibilityChanged(): void {
     if (!this.showPlayHistory.value) {
-      this.exitHistorySelectMode();
+      this.exitSelectModeAnimated();
     }
   }
 
@@ -137,7 +157,7 @@ export struct HistorySheet {
   @Monitor('selectMode.value')
   onSelectModeChanged(): void {
     if (!this.selectMode.value) {
-      this.selectedHistoryIds = [];
+      this.selectedKeys = new Set<string>();
     } else {
       this.historyScroller.closeAllSwipeActions();
     }
@@ -302,42 +322,135 @@ export struct HistorySheet {
     .padding({ left: Constants.TOKEN_SPACE_M, right: Constants.TOKEN_SPACE_M })
   }
 
-  private toggleHistorySelect(key: string): void {
-    const idx: number = this.selectedHistoryIds.indexOf(key);
-    if (idx >= 0) {
-      this.selectedHistoryIds.splice(idx, 1);
-    } else {
-      this.selectedHistoryIds.push(key);
-    }
-    this.selectedHistoryIds = this.selectedHistoryIds.slice(0);
+  private toggleSelect(key: string): void {
+    this.selectedKeys = SelectLogic.toggle(this.selectedKeys, key);
   }
 
   private isAllHistorySelected(): boolean {
-    return this.historyRows.length > 0 && this.selectedHistoryIds.length === this.historyRows.length;
+    return this.historyRows.length > 0 && this.selectedKeys.size === this.historyRows.length;
   }
 
   private toggleHistorySelectAll(): void {
     if (this.isAllHistorySelected()) {
-      this.selectedHistoryIds = [];
+      this.selectedKeys = new Set<string>();
     } else {
-      const all: string[] = [];
+      const all: Set<string> = new Set<string>();
       for (let i = 0; i < this.historyRows.length; i++) {
-        all.push(this.historyRows[i].bvid);
+        all.add(this.historyRows[i].bvid);
       }
-      this.selectedHistoryIds = all;
+      this.selectedKeys = all;
     }
   }
 
-  private exitHistorySelectMode(): void {
+  private exitSelectMode(): void {
+    this.endSweep();
     this.selectMode.value = false;
-    this.selectedHistoryIds = [];
+    this.selectedKeys = new Set<string>();
+  }
+
+  // 复选框区拖选（FR-014/FR-018）：方向性扫选——按下按 bvid 实时查行号采样选中态锁定加/减扫模式
+  // （LazyForEach 不取 index 闭包，删除后键查找天然容忍行号漂移），等高步长换算目标行，
+  // 起点→目标区间按锁定模式整体 Set 换引用；手指进入列表边缘带时自动滚动续扫
+  private startSweep(bvid: string, event: GestureEvent): void {
+    let idx: number = -1;
+    for (let i = 0; i < this.historyRows.length; i++) {
+      if (this.historyRows[i].bvid === bvid) {
+        idx = i;
+        break;
+      }
+    }
+    if (idx < 0) {
+      return;
+    }
+    this.sweepSession = new SweepSession();
+    this.sweepSession.begin(this.selectedKeys.has(bvid), idx,
+      event.fingerList[0].globalY, this.historyScroller.currentOffset().yOffset);
+    this.applySweepRange(idx, idx);
+  }
+
+  private updateSweep(globalY: number): void {
+    if (this.sweepSession === null) {
+      return;
+    }
+    const delta: number = this.sweepSession.delta(globalY, this.historyScroller.currentOffset().yOffset);
+    const start: number = this.sweepSession.getStartIndex();
+    const target: number = Math.max(0, Math.min(this.historyRows.length - 1,
+      start + Math.round(delta / HISTORY_SWEEP_STEP)));
+    this.applySweepRange(start, target);
+  }
+
+  private applySweepRange(from: number, to: number): void {
+    if (this.sweepSession === null) {
+      return;
+    }
+    const lo: number = Math.min(from, to);
+    const hi: number = Math.max(from, to);
+    const next: Set<string> = new Set<string>(this.selectedKeys);
+    let changed: boolean = false;
+    for (let i = lo; i <= hi; i++) {
+      const bvid: string = this.historyRows[i].bvid;
+      if (this.sweepSession.isAddMode()) {
+        if (!next.has(bvid)) {
+          next.add(bvid);
+          changed = true;
+        }
+      } else if (next.has(bvid)) {
+        next.delete(bvid);
+        changed = true;
+      }
+    }
+    if (changed) {
+      this.selectedKeys = next;
+    }
+  }
+
+  private endSweep(): void {
+    this.edgeScroller.stop();
+    this.sweepSession = null;
+  }
+
+  private checkSweepEdge(globalY: number): void {
+    if (this.sweepSession === null) {
+      return;
+    }
+    const rect: componentUtils.ComponentInfo =
+      this.getUIContext().getComponentUtils().getRectangleById(SWEEP_LIST_ID);
+    const topY: number = this.getUIContext().px2vp(rect.windowOffset.y);
+    const bottomY: number = topY + this.getUIContext().px2vp(rect.size.height);
+    if (globalY <= topY + Constants.SELECT_SWEEP_EDGE_ZONE) {
+      this.startEdgeScroll(false);
+    } else if (globalY >= bottomY - Constants.SELECT_SWEEP_EDGE_ZONE) {
+      this.startEdgeScroll(true);
+    } else {
+      this.edgeScroller.stop();
+    }
+  }
+
+  private startEdgeScroll(downward: boolean): void {
+    this.edgeScroller.start(this.historyScroller, downward, (): void => {
+      this.updateSweep(this.sweepSession === null ? 0 : this.sweepSession.getLastGlobalY());
+    });
+  }
+
+  // 进出多选统一动画入口（FR-006）：行首勾选框宽度/透明度与头部双态随同一 animateTo 翻转
+  // selectMode 驱动，进出互逆；动画中断终态以 selectMode 状态为准
+  private enterSelectMode(): void {
+    this.getUIContext().animateTo({ duration: Constants.TOKEN_SELECT_ANIM_MS, curve: Curve.EaseOut }, (): void => {
+      this.selectMode.value = true;
+    });
+  }
+
+  private exitSelectModeAnimated(): void {
+    this.getUIContext().animateTo({ duration: Constants.TOKEN_SELECT_ANIM_MS, curve: Curve.EaseOut }, (): void => {
+      this.exitSelectMode();
+    });
   }
 
   // 删除所选归并行（US6 bvid 级，D11）：二次确认后 UI 层把每个选中 bvid 展开为该视频全部分P
   // 复合键（itemKeyOf 合成）调既有 removeSelectedHistory（controller 存储零变化），
   // 先退多选再高→低增量补位动画，交互对齐队列
   private removeSelectedHistory(): void {
-    const count: number = this.selectedHistoryIds.length;
+    const count: number = this.selectedKeys.size;
     if (count === 0) {
       return;
     }
@@ -350,12 +463,13 @@ export struct HistorySheet {
         value: '删除',
         fontColor: $r('app.color.danger_red'),
         action: (): void => {
-          const bvids: string[] = this.selectedHistoryIds.slice(0);
-          this.exitHistorySelectMode();
+          // 先快照选中集再退多选（退出即清选中）
+          const bvids: Set<string> = new Set<string>(this.selectedKeys);
+          this.exitSelectModeAnimated();
           const keys: string[] = [];
           const history: PlayHistoryItem[] = this.controller.playHistory;
           for (let i = 0; i < history.length; i++) {
-            if (bvids.indexOf(history[i].bvid) >= 0) {
+            if (bvids.has(history[i].bvid)) {
               keys.push(BiliVideo.itemKeyOf(history[i].bvid, history[i].page));
             }
           }
@@ -364,7 +478,7 @@ export struct HistorySheet {
           this.getUIContext().animateTo({ duration: Constants.TOKEN_DELETE_ANIM_MS, curve: Curve.EaseOut }, (): void => {
             const idxList: number[] = [];
             for (let i = 0; i < this.historyRows.length; i++) {
-              if (bvids.indexOf(this.historyRows[i].bvid) >= 0) {
+              if (bvids.has(this.historyRows[i].bvid)) {
                 idxList.push(i);
               }
             }
@@ -373,7 +487,7 @@ export struct HistorySheet {
               this.playHistorySource.notifyDataDelete(idxList[k]);
             }
             if (this.historyRows.length === 0) {
-              this.exitHistorySelectMode();
+              this.exitSelectMode();
             }
           });
         }
@@ -388,7 +502,8 @@ export struct HistorySheet {
 
   build() {
     Column() {
-      Column() {
+      // Stack 承载双态条件渲染 + OPACITY 过渡交叉淡化（进出多选同 animateTo 驱动，FR-006）
+      Stack() {
         if (!this.selectMode.value) {
           Row() {
             Text('播放历史')
@@ -407,16 +522,17 @@ export struct HistorySheet {
               .height(Constants.GLASS_ICON_BTN_SIZE)
               .justifyContent(FlexAlign.Center)
               .backgroundColor($r('app.color.btn_glass'))
-              .backdropBlur(Constants.GLASS_ICON_BTN_BLUR)
+              .backdropBlur(Constants.GLASS_BLUR)
               .border({ width: Constants.GLASS_ICON_BTN_BORDER, color: $r('app.color.btn_border') })
               .borderRadius(Constants.TOKEN_RADIUS_18)
               .onClick(() => {
-                this.selectMode.value = true;
-                this.selectedHistoryIds = [];
+                this.enterSelectMode();
+                this.selectedKeys = new Set<string>();
               })
             }
           }
           .width('100%')
+          .transition(TransitionEffect.OPACITY)
         } else {
           // 多选操作行（US4，对齐队列）：全选/删除所选(计数)/返回
           Row() {
@@ -429,7 +545,7 @@ export struct HistorySheet {
             .height(Constants.GLASS_ICON_BTN_SIZE)
             .justifyContent(FlexAlign.Center)
             .backgroundColor($r('app.color.btn_glass'))
-            .backdropBlur(Constants.GLASS_ICON_BTN_BLUR)
+            .backdropBlur(Constants.GLASS_BLUR)
             .border({ width: Constants.GLASS_ICON_BTN_BORDER, color: $r('app.color.btn_border') })
             .borderRadius(Constants.TOKEN_RADIUS_18)
             .onClick(() => {
@@ -442,7 +558,7 @@ export struct HistorySheet {
               SymbolGlyph($r('sys.symbol.trash_fill'))
                 .fontSize(Constants.TOKEN_FONT_18)
                 .fontColor([$r('app.color.danger_red')])
-              Text(`${this.selectedHistoryIds.length}`)
+              Text(`${this.selectedKeys.size}`)
                 .fontSize(Constants.TOKEN_FONT_BODY_S)
                 .fontColor($r('app.color.danger_red'))
             }
@@ -451,10 +567,10 @@ export struct HistorySheet {
             .justifyContent(FlexAlign.Center)
             .alignItems(VerticalAlign.Center)
             .backgroundColor($r('app.color.btn_glass'))
-            .backdropBlur(Constants.GLASS_ICON_BTN_BLUR)
+            .backdropBlur(Constants.GLASS_BLUR)
             .border({ width: Constants.GLASS_ICON_BTN_BORDER, color: $r('app.color.btn_border') })
             .borderRadius(Constants.TOKEN_RADIUS_18)
-            .opacity(this.selectedHistoryIds.length > 0 ? 1 : 0.4)
+            .opacity(this.selectedKeys.size > 0 ? 1 : Constants.TOKEN_DISABLED_OPACITY)
             .onClick(() => {
               this.removeSelectedHistory();
             })
@@ -468,15 +584,16 @@ export struct HistorySheet {
             .height(Constants.GLASS_ICON_BTN_SIZE)
             .justifyContent(FlexAlign.Center)
             .backgroundColor($r('app.color.btn_glass'))
-            .backdropBlur(Constants.GLASS_ICON_BTN_BLUR)
+            .backdropBlur(Constants.GLASS_BLUR)
             .border({ width: Constants.GLASS_ICON_BTN_BORDER, color: $r('app.color.btn_border') })
             .borderRadius(Constants.TOKEN_RADIUS_18)
             .margin({ left: Constants.TOKEN_SPACE_S })
             .onClick(() => {
-              this.exitHistorySelectMode();
+              this.exitSelectModeAnimated();
             })
           }
           .width('100%')
+          .transition(TransitionEffect.OPACITY)
         }
       }
       .width('100%')
@@ -498,20 +615,45 @@ export struct HistorySheet {
             LazyForEach(this.playHistorySource, (row: HistoryRow) => {
               ListItem() {
                 Row() {
-                  if (this.selectMode.value) {
-                    Checkbox()
-                      .select(this.selectedHistoryIds.indexOf(row.bvid) >= 0)
-                      .selectedColor(this.accentColor.value)
-                      .width(Constants.SELECT_CHECKBOX_SIZE)
-                      .height(Constants.SELECT_CHECKBOX_SIZE)
-                      .margin({ right: Constants.TOKEN_SPACE_S })
-                      .onChange((value: boolean) => {
-                        const inList: boolean = this.selectedHistoryIds.indexOf(row.bvid) >= 0;
-                        if (value !== inList) {
-                          this.toggleHistorySelect(row.bvid);
+                  // 勾选框区拖选（FR-014）：外包 Column 承载扫选手势，热区限勾选框列，
+                  // Pan 位移阈值内为点按（Checkbox onChange 切勾不冲突），行其余区域维持列表滚动
+                  Column() {
+                    SelectCheckbox({
+                      active: this.selectMode.value,
+                      selected: this.selectedKeys.has(row.bvid),
+                      gap: Constants.TOKEN_SPACE_L,
+                      onChange: (value: boolean): void => {
+                        const inSet: boolean = this.selectedKeys.has(row.bvid);
+                        if (value !== inSet) {
+                          this.toggleSelect(row.bvid);
                         }
-                      })
+                      }
+                    })
                   }
+                  .gesture(
+                    PanGesture({ fingers: 1, direction: PanDirection.Vertical })
+                      .onActionStart((event: GestureEvent): void => {
+                        if (!this.selectMode.value || event.fingerList.length === 0) {
+                          return;
+                        }
+                        this.startSweep(row.bvid, event);
+                      })
+                      .onActionUpdate((event: GestureEvent): void => {
+                        if (this.sweepSession === null) {
+                          return;
+                        }
+                        const globalY: number = event.fingerList.length > 0
+                          ? event.fingerList[0].globalY : this.sweepSession.getLastGlobalY();
+                        this.updateSweep(globalY);
+                        this.checkSweepEdge(globalY);
+                      })
+                      .onActionEnd((): void => {
+                        this.endSweep();
+                      })
+                      .onActionCancel((): void => {
+                        this.endSweep();
+                      })
+                  )
 
                   CoverThumb({ cover: row.latest.cover })
 
@@ -535,14 +677,18 @@ export struct HistorySheet {
                 .backgroundColor(this.pressedKey === row.bvid ? $r('app.color.item_pressed_background') : Color.Transparent)
                 .onTouch((e: TouchEvent): void => {
                   if (e.type === TouchType.Down) {
+                    this.longPressGuard.reset();
                     this.pressedKey = row.bvid;
                   } else if (e.type === TouchType.Up || e.type === TouchType.Cancel) {
                     this.pressedKey = '';
                   }
                 })
                 .onClick(() => {
+                  if (this.longPressGuard.shouldSuppressClick()) {
+                    return;
+                  }
                   if (this.selectMode.value) {
-                    this.toggleHistorySelect(row.bvid);
+                    this.toggleSelect(row.bvid);
                   } else {
                     this.replayHistory(row.latest);
                   }
@@ -550,9 +696,10 @@ export struct HistorySheet {
                 .gesture(
                   LongPressGesture()
                     .onAction(() => {
+                      this.longPressGuard.arm();
                       if (!this.selectMode.value) {
-                        this.selectMode.value = true;
-                        this.selectedHistoryIds = [row.bvid];
+                        this.enterSelectMode();
+                        this.selectedKeys = new Set<string>([row.bvid]);
                       }
                     })
                 )
@@ -573,6 +720,7 @@ export struct HistorySheet {
           }
           .width('100%')
           .height('100%')
+          .id(SWEEP_LIST_ID)
           .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
           // 末行逃出 GlassSheet 底部渐隐带（T018）：与 QueueSheet 同根因，此前无任何 end offset 更严重
           .contentEndOffset(Constants.SHEET_FADE_HEIGHT)

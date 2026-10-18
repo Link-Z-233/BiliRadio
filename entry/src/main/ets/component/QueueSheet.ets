@@ -5,21 +5,25 @@ import { PlayHistoryItem } from '../model/PlayHistoryItem';
 
 import { Constants } from '../service/Constants';
 import { connectBool, connectStr, BoolState, StrState } from '../service/V2State';
-import { closeBothLayersNow } from '../service/BackHandler';
+import { closeBothLayersNow, registerQueueSelectExit } from '../service/BackHandler';
+import { SelectLogic, LongPressGuard, SweepSession, EdgeAutoScroller } from '../service/SelectLogic';
 import { CoverThumb } from './CoverThumb';
-import { promptAction } from '@kit.ArkUI';
+import { SelectCheckbox } from './SelectCheckbox';
+import { promptAction, componentUtils } from '@kit.ArkUI';
 
 // 颜色全部使用 base/dark 双份颜色资源：浅色/深色外观下自动匹配（见 resources/base|dark/element/color.json）
 
 // 列表上下边缘渐变模糊半径；sheet 底部安全留白
 const EDGE_BLUR_RADIUS: number = 48;
 const LIST_BOTTOM_GAP: number = 12;
-// 条目估算高度（拖选位移换算用）：单条目整行沿用 68（封面 44 + 上下各 12 内边距）；
-// 组头行 ≈ 封面 44 + 上 12 下 8；分P 窄行 ≈ 字号 14 行高 + 上下各 8
+// 条目估算高度（拖选位移换算用）：单条目整行沿用 68（封面 LIST_THUMB_SIZE + 上下各 TOKEN_SPACE_M 内边距）；
+// 组头行 ≈ 封面 LIST_THUMB_SIZE + 上 TOKEN_SPACE_M 下 TOKEN_SPACE_S；分P 窄行 ≈ 字号 14 行高 + 上下各 8
 // ponytail: 估算偏保守只影响拖选效率不影响正确性；需精确时改按 onAreaChange 逐条目回填实际高度
-const EST_FULL_ROW_HEIGHT: number = 68;
-const EST_GROUP_HEADER_HEIGHT: number = 64;
+const EST_FULL_ROW_HEIGHT: number = Constants.LIST_THUMB_SIZE + 2 * Constants.TOKEN_SPACE_M;
+const EST_GROUP_HEADER_HEIGHT: number = Constants.LIST_THUMB_SIZE + Constants.TOKEN_SPACE_M + Constants.TOKEN_SPACE_S;
 const EST_PART_ROW_HEIGHT: number = 36;
+// 拖选边缘带定位用 List 组件 id（checkSweepEdge 与 .id() 同源）
+const SWEEP_LIST_ID: string = 'queueSheetList';
 
 // 展示条目（plan D1）：队列渲染与交互的最小单位，随 playlistVersion 整体重建、不落盘。
 // 组条目 = 相邻（≥2）同 bvid 且页号≥1 的分P（头行+分P 窄行同属一个 ListItem、一体滑动）；
@@ -159,7 +163,8 @@ export struct QueueSheet {
   @Local currentItemEnded: boolean = false;
   @Local playlistVersion: number = -1;
   @Local selectMode: BoolState = connectBool(Constants.AS_PLAYLIST_SELECT_MODE, false);
-  @Local selectedEntryKeys: string[] = [];
+  // 多选集合不可变整体换引用更新：V2 @Local 赋值观测不观测 Set 内部变更
+  @Local selectedKeys: Set<string> = new Set<string>();
   @Local pressedKey: string = '';
   // 面板显隐同源（v0.3 US7）：与 GlassSheet/Index 共享同键实例，关闭时驱动多选复位
   @Local showQueueSheet: BoolState = connectBool(Constants.AS_SHOW_QUEUE_SHEET, false);
@@ -190,6 +195,12 @@ export struct QueueSheet {
   private listScroller: ListScroller = new ListScroller();
   // 拖选起始条目下标（长按进入多选时记录，Pan 拖选换算起点）
   private dragStartEntryIndex: number = -1;
+  // 长按守卫（FR-009）：堵 Sequence 组失败后的回退 onClick 取消预选，拖选路径不受影响
+  private longPressGuard: LongPressGuard = new LongPressGuard();
+  // 复选框区拖选会话（FR-014）：null=未在拖选；方向性扫选模式按下时锁定，同次拖动不反转
+  private sweepSession: SweepSession | null = null;
+  // 边缘自动滚动器（FR-018）：拖选中手指进入列表可视区边缘带时驱动列表滚动续扫
+  private edgeScroller: EdgeAutoScroller = new EdgeAutoScroller();
   // 进度广播退订句柄（US2/KI-1）：aboutToDisappear 中调用，避免监听器累积
   private unsubscribePlayer: () => void = (): void => {};
 
@@ -198,18 +209,22 @@ export struct QueueSheet {
     this.unsubscribePlayer = this.controller.subscribe((): void => {
       this.syncFrom(this.controller);
     }, 'QueueSheet');
+    registerQueueSelectExit((): void => {
+      this.exitSelectModeAnimated();
+    });
   }
 
   aboutToDisappear(): void {
     this.unsubscribePlayer();
     this.unsubscribePlayer = (): void => {};
+    registerQueueSelectExit(undefined);
   }
 
   // 面板关闭（遮罩/返回/滑出任一方式）自动退出多选（v0.3 US7 FR-009）
   @Monitor('showQueueSheet.value')
   onQueueSheetVisibilityChanged(): void {
     if (!this.showQueueSheet.value) {
-      this.exitSelectMode();
+      this.exitSelectModeAnimated();
     }
   }
 
@@ -217,7 +232,7 @@ export struct QueueSheet {
   @Monitor('selectMode.value')
   onSelectModeChanged(): void {
     if (!this.selectMode.value) {
-      this.selectedEntryKeys = [];
+      this.selectedKeys = new Set<string>();
     } else {
       // 进入多选即收起已滑出的行（v0.4-Part1-ux-fixes US5）：多选态不再挂载左滑删除动作
       this.listScroller.closeAllSwipeActions();
@@ -256,13 +271,14 @@ export struct QueueSheet {
         }
       }
       if (this.selectMode.value) {
-        const valid: string[] = [];
-        for (let i = 0; i < this.selectedEntryKeys.length; i++) {
-          if (this.hasEntryKey(this.selectedEntryKeys[i])) {
-            valid.push(this.selectedEntryKeys[i]);
+        // 引用替换：仅保留仍存在的条目键（批删/清空后选中集失效项剔除）
+        const valid: Set<string> = new Set<string>();
+        for (let i = 0; i < this.entries.length; i++) {
+          if (this.selectedKeys.has(this.entries[i].key)) {
+            valid.add(this.entries[i].key);
           }
         }
-        this.selectedEntryKeys = valid;
+        this.selectedKeys = valid;
         if (this.entries.length === 0) {
           this.selectMode.value = false;
         }
@@ -270,15 +286,6 @@ export struct QueueSheet {
     }
     this.currentIndex = c.currentIndex;
     this.currentItemEnded = c.currentItemEnded;
-  }
-
-  private hasEntryKey(key: string): boolean {
-    for (let i = 0; i < this.entries.length; i++) {
-      if (this.entries[i].key === key) {
-        return true;
-      }
-    }
-    return false;
   }
 
   // 组头标题：纯视频标题（videoTitle，旧数据/占位回退 title）
@@ -358,30 +365,24 @@ export struct QueueSheet {
   }
 
   private toggleSelect(key: string): void {
-    const idx: number = this.selectedEntryKeys.indexOf(key);
-    if (idx >= 0) {
-      this.selectedEntryKeys.splice(idx, 1);
-    } else {
-      this.selectedEntryKeys.push(key);
-    }
-    this.selectedEntryKeys = this.selectedEntryKeys.slice(0);
+    this.selectedKeys = SelectLogic.toggle(this.selectedKeys, key);
   }
 
   private selectAll(): void {
-    const all: string[] = [];
+    const all: Set<string> = new Set<string>();
     for (let i = 0; i < this.entries.length; i++) {
-      all.push(this.entries[i].key);
+      all.add(this.entries[i].key);
     }
-    this.selectedEntryKeys = all;
+    this.selectedKeys = all;
   }
 
   private isAllSelected(): boolean {
-    return this.entries.length > 0 && this.selectedEntryKeys.length === this.entries.length;
+    return this.entries.length > 0 && this.selectedKeys.size === this.entries.length;
   }
 
   private toggleSelectAll(): void {
     if (this.isAllSelected()) {
-      this.selectedEntryKeys = [];
+      this.selectedKeys = new Set<string>();
     } else {
       this.selectAll();
     }
@@ -391,16 +392,17 @@ export struct QueueSheet {
   private selectRange(from: number, to: number): void {
     const lo: number = Math.max(0, Math.min(from, to));
     const hi: number = Math.min(this.entries.length - 1, Math.max(from, to));
+    const next: Set<string> = new Set<string>(this.selectedKeys);
     let changed: boolean = false;
     for (let i = lo; i <= hi; i++) {
       const key: string = this.entries[i].key;
-      if (this.selectedEntryKeys.indexOf(key) < 0) {
-        this.selectedEntryKeys.push(key);
+      if (!next.has(key)) {
+        next.add(key);
         changed = true;
       }
     }
     if (changed) {
-      this.selectedEntryKeys = this.selectedEntryKeys.slice(0);
+      this.selectedKeys = next;
     }
   }
 
@@ -436,14 +438,105 @@ export struct QueueSheet {
     return idx;
   }
 
+  // 复选框区拖选（FR-014/FR-018）：方向性扫选——按下采样起点条目选中态锁定加/减扫模式，
+  // 按条目估算高度换算目标条目（组条目高度可变，复用既有 targetEntryIndex），
+  // 起点→目标区间按锁定模式整体 Set 换引用；手指进入列表边缘带时自动滚动续扫；
+  // 与行级 Sequence 长按拖选（只增不减）并存，二者手势热区互斥（勾选框列 vs 行主体）
+  private startSweep(index: number, event: GestureEvent): void {
+    if (index < 0 || index >= this.entries.length) {
+      return;
+    }
+    this.sweepSession = new SweepSession();
+    this.sweepSession.begin(this.selectedKeys.has(this.entries[index].key), index,
+      event.fingerList[0].globalY, this.listScroller.currentOffset().yOffset);
+    this.applySweepRange(index, index);
+  }
+
+  private updateSweep(globalY: number): void {
+    if (this.sweepSession === null) {
+      return;
+    }
+    const delta: number = this.sweepSession.delta(globalY, this.listScroller.currentOffset().yOffset);
+    const target: number = this.targetEntryIndex(this.sweepSession.getStartIndex(), delta);
+    this.applySweepRange(this.sweepSession.getStartIndex(), target);
+  }
+
+  private applySweepRange(from: number, to: number): void {
+    if (this.sweepSession === null) {
+      return;
+    }
+    const lo: number = Math.max(0, Math.min(from, to));
+    const hi: number = Math.min(this.entries.length - 1, Math.max(from, to));
+    const next: Set<string> = new Set<string>(this.selectedKeys);
+    let changed: boolean = false;
+    for (let i = lo; i <= hi; i++) {
+      const key: string = this.entries[i].key;
+      if (this.sweepSession.isAddMode()) {
+        if (!next.has(key)) {
+          next.add(key);
+          changed = true;
+        }
+      } else if (next.has(key)) {
+        next.delete(key);
+        changed = true;
+      }
+    }
+    if (changed) {
+      this.selectedKeys = next;
+    }
+  }
+
+  private endSweep(): void {
+    this.edgeScroller.stop();
+    this.sweepSession = null;
+  }
+
+  private checkSweepEdge(globalY: number): void {
+    if (this.sweepSession === null) {
+      return;
+    }
+    const rect: componentUtils.ComponentInfo =
+      this.getUIContext().getComponentUtils().getRectangleById(SWEEP_LIST_ID);
+    const topY: number = this.getUIContext().px2vp(rect.windowOffset.y);
+    const bottomY: number = topY + this.getUIContext().px2vp(rect.size.height);
+    if (globalY <= topY + Constants.SELECT_SWEEP_EDGE_ZONE) {
+      this.startEdgeScroll(false);
+    } else if (globalY >= bottomY - Constants.SELECT_SWEEP_EDGE_ZONE) {
+      this.startEdgeScroll(true);
+    } else {
+      this.edgeScroller.stop();
+    }
+  }
+
+  private startEdgeScroll(downward: boolean): void {
+    this.edgeScroller.start(this.listScroller, downward, (): void => {
+      this.updateSweep(this.sweepSession === null ? 0 : this.sweepSession.getLastGlobalY());
+    });
+  }
+
   private exitSelectMode(): void {
+    this.endSweep();
     this.selectMode.value = false;
-    this.selectedEntryKeys = [];
+    this.selectedKeys = new Set<string>();
+  }
+
+  // 进出多选统一动画入口（FR-006）：行首勾选框宽度/透明度与头部双态随同一 animateTo 翻转
+  // selectMode 驱动，进出互逆；动画中断终态以 selectMode 状态为准
+  private enterSelectMode(): void {
+    this.getUIContext().animateTo({ duration: Constants.TOKEN_SELECT_ANIM_MS, curve: Curve.EaseOut }, (): void => {
+      this.selectMode.value = true;
+    });
+  }
+
+  private exitSelectModeAnimated(): void {
+    this.getUIContext().animateTo({ duration: Constants.TOKEN_SELECT_ANIM_MS, curve: Curve.EaseOut }, (): void => {
+      this.exitSelectMode();
+    });
   }
 
   // 多选移除（US2）：二次确认防误触；确认后选中条目键展开为分P 键批量移除（US6 补位动画）
   private removeSelected(): void {
-    const count: number = this.selectedEntryKeys.length;
+    const count: number = this.selectedKeys.size;
     if (count === 0) {
       return;
     }
@@ -458,14 +551,14 @@ export struct QueueSheet {
         action: (): void => {
           const keys: string[] = [];
           for (let i = 0; i < this.entries.length; i++) {
-            if (this.selectedEntryKeys.indexOf(this.entries[i].key) >= 0) {
+            if (this.selectedKeys.has(this.entries[i].key)) {
               const parts: string[] = this.entryPartKeys(this.entries[i]);
               for (let p = 0; p < parts.length; p++) {
                 keys.push(parts[p]);
               }
             }
           }
-          this.exitSelectMode();
+          this.exitSelectModeAnimated();
           this.getUIContext().animateTo({ duration: Constants.TOKEN_DELETE_ANIM_MS, curve: Curve.EaseOut }, (): void => {
             this.controller.removeSelectedFromPlaylist(keys);
           });
@@ -647,26 +740,52 @@ export struct QueueSheet {
     .padding({ left: Constants.TOKEN_SPACE_M, right: Constants.TOKEN_SPACE_M })
   }
 
-  // 组条目视频头行（plan D4/D9）：封面 + 视频标题 + 共 nP 独占一行；多选态前置换 Checkbox
-  // （整组切换，选择单位=条目）；按压高亮 + 长按进多选（选中本组条目）+ Pan 拖选与单条目整行同构；
+  // 组条目视频头行（plan D4/D9）：封面 + 视频标题 + 共 nP 独占一行；多选态行首恒挂载 Checkbox
+  // 容器（宽度/透明度随 selectMode 动画，整组切换，选择单位=条目）；
+  // 按压高亮 + 长按进多选（选中本组条目）+ Pan 拖选与单条目整行同构；
   // 非多选点击整组续播（两段判定），多选点击整组切换
   @Builder
   videoHeaderRow(entry: QueueEntry, index: number) {
     Row() {
-      if (this.selectMode.value) {
-        Checkbox()
-          .select(this.selectedEntryKeys.indexOf(entry.key) >= 0)
-          .selectedColor(this.accentColor.value)
-          .width(20)
-          .height(20)
-          .margin({ right: Constants.TOKEN_SPACE_S })
-          .onChange((value: boolean) => {
-            const inList: boolean = this.selectedEntryKeys.indexOf(entry.key) >= 0;
-            if (value !== inList) {
+      // 勾选框区拖选（FR-014）：外包 Column 承载扫选手势，热区限勾选框列，
+      // 行主体 Sequence 拖选（只增不减）与勾选框扫选（可加可减）并存互不冲突
+      Column() {
+        SelectCheckbox({
+          active: this.selectMode.value,
+          selected: this.selectedKeys.has(entry.key),
+          gap: Constants.TOKEN_SPACE_L,
+          onChange: (value: boolean): void => {
+            const inSet: boolean = this.selectedKeys.has(entry.key);
+            if (value !== inSet) {
               this.toggleSelect(entry.key);
             }
-          })
+          }
+        })
       }
+      .gesture(
+        PanGesture({ fingers: 1, direction: PanDirection.Vertical })
+          .onActionStart((event: GestureEvent): void => {
+            if (!this.selectMode.value || event.fingerList.length === 0) {
+              return;
+            }
+            this.startSweep(index, event);
+          })
+          .onActionUpdate((event: GestureEvent): void => {
+            if (this.sweepSession === null) {
+              return;
+            }
+            const globalY: number = event.fingerList.length > 0
+              ? event.fingerList[0].globalY : this.sweepSession.getLastGlobalY();
+            this.updateSweep(globalY);
+            this.checkSweepEdge(globalY);
+          })
+          .onActionEnd((): void => {
+            this.endSweep();
+          })
+          .onActionCancel((): void => {
+            this.endSweep();
+          })
+      )
       CoverThumb({ cover: entry.videos[0].cover, highlight: false, accent: this.accentColor.value })
       Text(this.groupHeaderTitle(entry.videos[0]))
         .fontSize(Constants.TOKEN_FONT_BODY_M)
@@ -687,12 +806,16 @@ export struct QueueSheet {
     .borderRadius(Constants.TOKEN_RADIUS_M)
     .onTouch((e: TouchEvent): void => {
       if (e.type === TouchType.Down) {
+        this.longPressGuard.reset();
         this.pressedKey = entry.key;
       } else if (e.type === TouchType.Up || e.type === TouchType.Cancel) {
         this.pressedKey = '';
       }
     })
     .onClick(() => {
+      if (this.longPressGuard.shouldSuppressClick()) {
+        return;
+      }
       if (this.selectMode.value) {
         this.toggleSelect(entry.key);
       } else {
@@ -703,9 +826,10 @@ export struct QueueSheet {
       GestureGroup(GestureMode.Sequence,
         LongPressGesture()
           .onAction(() => {
+            this.longPressGuard.arm();
             if (!this.selectMode.value) {
-              this.selectMode.value = true;
-              this.selectedEntryKeys = [entry.key];
+              this.enterSelectMode();
+              this.selectedKeys = new Set<string>([entry.key]);
               this.dragStartEntryIndex = index;
             }
           }),
@@ -752,12 +876,16 @@ export struct QueueSheet {
     .borderRadius(Constants.TOKEN_RADIUS_M)
     .onTouch((e: TouchEvent): void => {
       if (e.type === TouchType.Down) {
+        this.longPressGuard.reset();
         this.pressedKey = BiliVideo.itemKeyOf(part.bvid, part.page);
       } else if (e.type === TouchType.Up || e.type === TouchType.Cancel) {
         this.pressedKey = '';
       }
     })
     .onClick(() => {
+      if (this.longPressGuard.shouldSuppressClick()) {
+        return;
+      }
       if (this.selectMode.value) {
         this.toggleSelect(entry.key);
       } else {
@@ -768,9 +896,10 @@ export struct QueueSheet {
       GestureGroup(GestureMode.Sequence,
         LongPressGesture()
           .onAction(() => {
+            this.longPressGuard.arm();
             if (!this.selectMode.value) {
-              this.selectMode.value = true;
-              this.selectedEntryKeys = [entry.key];
+              this.enterSelectMode();
+              this.selectedKeys = new Set<string>([entry.key]);
               this.dragStartEntryIndex = entryIndex;
             }
           }),
@@ -786,24 +915,50 @@ export struct QueueSheet {
     )
   }
 
-  // 单条目整行（原有渲染原样保留）：封面 + 标题 + UP 主/时长；选择/按压/手势改条目键
+  // 单条目整行（原有渲染原样保留）：封面 + 标题 + UP 主/时长；多选态行首恒挂载 Checkbox
+  // 容器（宽度/透明度随 selectMode 动画）；选择/按压/手势改条目键
   @Builder
   queueFullRow(entry: QueueEntry, index: number) {
     Row() {
-      if (this.selectMode.value) {
-        Checkbox()
-          .select(this.selectedEntryKeys.indexOf(entry.key) >= 0)
-          .selectedColor(this.accentColor.value)
-          .width(20)
-          .height(20)
-          .margin({ right: Constants.TOKEN_SPACE_S })
-          .onChange((value: boolean) => {
-            const inList: boolean = this.selectedEntryKeys.indexOf(entry.key) >= 0;
-            if (value !== inList) {
+      // 勾选框区拖选（FR-014）：外包 Column 承载扫选手势，热区限勾选框列，
+      // 行主体 Sequence 拖选（只增不减）与勾选框扫选（可加可减）并存互不冲突
+      Column() {
+        SelectCheckbox({
+          active: this.selectMode.value,
+          selected: this.selectedKeys.has(entry.key),
+          gap: Constants.TOKEN_SPACE_L,
+          onChange: (value: boolean): void => {
+            const inSet: boolean = this.selectedKeys.has(entry.key);
+            if (value !== inSet) {
               this.toggleSelect(entry.key);
             }
-          })
+          }
+        })
       }
+      .gesture(
+        PanGesture({ fingers: 1, direction: PanDirection.Vertical })
+          .onActionStart((event: GestureEvent): void => {
+            if (!this.selectMode.value || event.fingerList.length === 0) {
+              return;
+            }
+            this.startSweep(index, event);
+          })
+          .onActionUpdate((event: GestureEvent): void => {
+            if (this.sweepSession === null) {
+              return;
+            }
+            const globalY: number = event.fingerList.length > 0
+              ? event.fingerList[0].globalY : this.sweepSession.getLastGlobalY();
+            this.updateSweep(globalY);
+            this.checkSweepEdge(globalY);
+          })
+          .onActionEnd((): void => {
+            this.endSweep();
+          })
+          .onActionCancel((): void => {
+            this.endSweep();
+          })
+      )
 
       CoverThumb({ cover: entry.videos[0].cover, highlight: entry.startIndex === this.currentIndex, accent: this.accentColor.value })
 
@@ -845,12 +1000,16 @@ export struct QueueSheet {
     .borderRadius(Constants.TOKEN_RADIUS_M)
     .onTouch((e: TouchEvent): void => {
       if (e.type === TouchType.Down) {
+        this.longPressGuard.reset();
         this.pressedKey = entry.key;
       } else if (e.type === TouchType.Up || e.type === TouchType.Cancel) {
         this.pressedKey = '';
       }
     })
     .onClick(() => {
+      if (this.longPressGuard.shouldSuppressClick()) {
+        return;
+      }
       if (this.selectMode.value) {
         this.toggleSelect(entry.key);
       } else {
@@ -862,9 +1021,10 @@ export struct QueueSheet {
       GestureGroup(GestureMode.Sequence,
         LongPressGesture()
           .onAction(() => {
+            this.longPressGuard.arm();
             if (!this.selectMode.value) {
-              this.selectMode.value = true;
-              this.selectedEntryKeys = [entry.key];
+              this.enterSelectMode();
+              this.selectedKeys = new Set<string>([entry.key]);
               this.dragStartEntryIndex = index;
             }
           }),
@@ -882,8 +1042,9 @@ export struct QueueSheet {
 
   build() {
     Stack({ alignContent: Alignment.Top }) {
-      // 单行头部（US1）：标题 + 清除已播/多选/清空三图标；多选态整行替换为多选操作行
-      Column() {
+      // 单行头部（US1）：标题 + 清除已播/多选/清空三图标；多选态整行替换为多选操作行；
+      // Stack 承载双态条件渲染 + OPACITY 过渡交叉淡化（进出多选同 animateTo 驱动，FR-006）
+      Stack() {
         if (!this.selectMode.value) {
           Row() {
             Text(`播放队列 (${this.entries.length})`)
@@ -898,11 +1059,11 @@ export struct QueueSheet {
                   .fontSize(Constants.TOKEN_FONT_18)
                   .fontColor([$r('app.color.danger_red')])
               }
-              .width(36)
-              .height(36)
+              .width(Constants.GLASS_ICON_BTN_SIZE)
+              .height(Constants.GLASS_ICON_BTN_SIZE)
               .justifyContent(FlexAlign.Center)
               .backgroundColor($r('app.color.btn_glass'))
-              .backdropBlur(20)
+              .backdropBlur(Constants.GLASS_BLUR)
               .border({ width: 1, color: $r('app.color.btn_border') })
               .borderRadius(Constants.TOKEN_RADIUS_18)
               .onClick(() => {
@@ -914,17 +1075,17 @@ export struct QueueSheet {
                   .fontSize(Constants.TOKEN_FONT_18)
                   .fontColor([$r('app.color.text_primary')])
               }
-              .width(36)
-              .height(36)
+              .width(Constants.GLASS_ICON_BTN_SIZE)
+              .height(Constants.GLASS_ICON_BTN_SIZE)
               .justifyContent(FlexAlign.Center)
               .backgroundColor($r('app.color.btn_glass'))
-              .backdropBlur(20)
+              .backdropBlur(Constants.GLASS_BLUR)
               .border({ width: 1, color: $r('app.color.btn_border') })
               .borderRadius(Constants.TOKEN_RADIUS_18)
               .margin({ left: Constants.TOKEN_SPACE_S })
               .onClick(() => {
-                this.selectMode.value = true;
-                this.selectedEntryKeys = [];
+                this.enterSelectMode();
+                this.selectedKeys = new Set<string>();
               })
 
               Row() {
@@ -932,11 +1093,11 @@ export struct QueueSheet {
                   .fontSize(Constants.TOKEN_FONT_18)
                   .fontColor([$r('app.color.danger_red')])
               }
-              .width(36)
-              .height(36)
+              .width(Constants.GLASS_ICON_BTN_SIZE)
+              .height(Constants.GLASS_ICON_BTN_SIZE)
               .justifyContent(FlexAlign.Center)
               .backgroundColor($r('app.color.btn_glass'))
-              .backdropBlur(20)
+              .backdropBlur(Constants.GLASS_BLUR)
               .border({ width: 1, color: $r('app.color.btn_border') })
               .borderRadius(Constants.TOKEN_RADIUS_18)
               .margin({ left: Constants.TOKEN_SPACE_S })
@@ -946,6 +1107,7 @@ export struct QueueSheet {
             }
           }
           .width('100%')
+          .transition(TransitionEffect.OPACITY)
         } else {
           // 多选操作行（US1 FR-006/FR-011/FR-012）：全选/移除所选(计数)/返回全部图标化
           Row() {
@@ -954,11 +1116,11 @@ export struct QueueSheet {
                 .fontSize(Constants.TOKEN_FONT_18)
                 .fontColor([this.isAllSelected() ? this.accentColor.value : $r('app.color.text_primary')])
             }
-            .width(36)
-            .height(36)
+            .width(Constants.GLASS_ICON_BTN_SIZE)
+            .height(Constants.GLASS_ICON_BTN_SIZE)
             .justifyContent(FlexAlign.Center)
             .backgroundColor($r('app.color.btn_glass'))
-            .backdropBlur(20)
+            .backdropBlur(Constants.GLASS_BLUR)
             .border({ width: 1, color: $r('app.color.btn_border') })
             .borderRadius(Constants.TOKEN_RADIUS_18)
             .onClick(() => {
@@ -971,19 +1133,19 @@ export struct QueueSheet {
               SymbolGlyph($r('sys.symbol.trash_fill'))
                 .fontSize(Constants.TOKEN_FONT_18)
                 .fontColor([$r('app.color.danger_red')])
-              Text(`${this.selectedEntryKeys.length}`)
+              Text(`${this.selectedKeys.size}`)
                 .fontSize(Constants.TOKEN_FONT_BODY_S)
                 .fontColor($r('app.color.danger_red'))
             }
-            .height(36)
+            .height(Constants.GLASS_ICON_BTN_SIZE)
             .padding({ left: Constants.TOKEN_SPACE_10, right: Constants.TOKEN_SPACE_10 })
             .justifyContent(FlexAlign.Center)
             .alignItems(VerticalAlign.Center)
             .backgroundColor($r('app.color.btn_glass'))
-            .backdropBlur(20)
+            .backdropBlur(Constants.GLASS_BLUR)
             .border({ width: 1, color: $r('app.color.btn_border') })
             .borderRadius(Constants.TOKEN_RADIUS_18)
-            .opacity(this.selectedEntryKeys.length > 0 ? 1 : 0.4)
+            .opacity(this.selectedKeys.size > 0 ? 1 : Constants.TOKEN_DISABLED_OPACITY)
             .onClick(() => {
               this.removeSelected();
             })
@@ -993,19 +1155,20 @@ export struct QueueSheet {
                 .fontSize(Constants.TOKEN_FONT_18)
                 .fontColor([$r('app.color.text_primary')])
             }
-            .width(36)
-            .height(36)
+            .width(Constants.GLASS_ICON_BTN_SIZE)
+            .height(Constants.GLASS_ICON_BTN_SIZE)
             .justifyContent(FlexAlign.Center)
             .backgroundColor($r('app.color.btn_glass'))
-            .backdropBlur(20)
+            .backdropBlur(Constants.GLASS_BLUR)
             .border({ width: 1, color: $r('app.color.btn_border') })
             .borderRadius(Constants.TOKEN_RADIUS_18)
             .margin({ left: Constants.TOKEN_SPACE_S })
             .onClick(() => {
-              this.exitSelectMode();
+              this.exitSelectModeAnimated();
             })
           }
           .width('100%')
+          .transition(TransitionEffect.OPACITY)
         }
       }
       .width('100%')
@@ -1069,6 +1232,7 @@ export struct QueueSheet {
           }
           .width('100%')
           .height('100%')
+          .id(SWEEP_LIST_ID)
           // FR-103：alwaysEnabled 使未铺满面板的短队列仍可拖动过冲（写法对齐 SettingsPage 历史面板）
           .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
           .contentStartOffset(this.headerHeight)

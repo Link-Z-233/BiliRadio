@@ -430,7 +430,11 @@ export struct HomePage {
           }
           .width('100%')
           .height('100%')
-          .padding({ left: Constants.TOKEN_SPACE_M, right: Constants.TOKEN_SPACE_M, top: Constants.TOKEN_SPACE_XS, bottom: Constants.MINI_PLAYER_CLEARANCE + this.navBarHeight.value })
+          .padding({ left: Constants.TOKEN_SPACE_M, right: Constants.TOKEN_SPACE_M, top: Constants.TOKEN_SPACE_XS })
+          // MiniPlayer 悬浮化（FR-015）：底部 padding 是内容裁剪边界（内容不能从胶囊下划过的根因），
+          // 改挂 contentEndOffset——视口延伸至屏底、内容滚动时从胶囊下方穿过（毛玻璃透出），
+          // 滚到底最后一条完整露出在胶囊上方
+          .contentEndOffset(Constants.MINI_PLAYER_CLEARANCE + this.navBarHeight.value)
           // US9：内容不足一屏时 List 默认不开启边缘效果，须显式 alwaysEnabled 才有过冲物理回弹
           .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
         }

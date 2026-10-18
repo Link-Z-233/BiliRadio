@@ -109,7 +109,7 @@ export struct GlassSheet {
       .constraintSize({ minWidth: 320 })
       .height(this.panelHeight)
       .backgroundColor($r('app.color.sheet_panel_background'))
-      .backdropBlur(20)
+      .backdropBlur(Constants.GLASS_BLUR)
       .borderRadius({ topLeft: Constants.TOKEN_RADIUS_XXL, topRight: Constants.TOKEN_RADIUS_XXL })
       .border({ width: { top: 1 }, color: $r('app.color.sheet_top_separator') })
       .shadow({

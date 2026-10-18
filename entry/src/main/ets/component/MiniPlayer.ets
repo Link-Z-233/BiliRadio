@@ -59,7 +59,7 @@ export struct MiniPlayer {
     if (this.hasContent) {
       Row() {
         Row() {
-          CoverThumb({ cover: this.cover, thumbSize: 44, radius: 8 })
+          CoverThumb({ cover: this.cover, radius: 8 })
           Column() {
             Text(this.title)
               .fontSize(Constants.TOKEN_FONT_BODY_M)
@@ -120,14 +120,14 @@ export struct MiniPlayer {
       .backdropBlur(24)
       .borderRadius(Constants.TOKEN_RADIUS_XXL)
       .margin({ bottom: this.navBarHeight.value + 8 })
-      .shadow({ radius: 12, color: '#33000000', offsetX: 0, offsetY: 2 })
+      .shadow({ radius: Constants.TOKEN_FLOATING_SHADOW_RADIUS, color: $r('app.color.shadow_ball'), offsetX: 0, offsetY: Constants.TOKEN_FLOATING_SHADOW_OFFSET_Y })
       .onClick(() => {
         connectBool(Constants.AS_SHOW_PLAYER_OVERLAY, false).value = true;
       })
     } else {
       // 空态占位条（US2）：队列无内容时显示占位封面+提示，不显示残留歌曲信息；点按无动作（R3 US4）
       Row() {
-        CoverThumb({ cover: '', thumbSize: 44, radius: 8 })
+        CoverThumb({ cover: '', radius: 8 })
         Text('暂无播放内容')
           .fontSize(Constants.TOKEN_FONT_BODY_M)
           .fontColor($r('app.color.text_secondary'))
@@ -142,7 +142,7 @@ export struct MiniPlayer {
       .backdropBlur(24)
       .borderRadius(Constants.TOKEN_RADIUS_XXL)
       .margin({ bottom: this.navBarHeight.value + 8 })
-      .shadow({ radius: 12, color: '#33000000', offsetX: 0, offsetY: 2 })
+      .shadow({ radius: Constants.TOKEN_FLOATING_SHADOW_RADIUS, color: $r('app.color.shadow_ball'), offsetX: 0, offsetY: Constants.TOKEN_FLOATING_SHADOW_OFFSET_Y })
     }
   }
 }

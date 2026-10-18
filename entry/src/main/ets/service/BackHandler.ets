@@ -8,6 +8,10 @@ import { connectBool, BoolState } from './V2State';
 let queueCloseHandle: (() => void) | undefined = undefined;
 let historyCloseHandle: (() => void) | undefined = undefined;
 let settingsBackHandle: (() => boolean) | undefined = undefined;
+// 多选动画退选句柄（FR-008）：队列/历史组件注册组件内动画退出（BackHandler 无 UIContext 不能
+// animateTo），未注册回退直翻保证异常时序不崩溃
+let queueSelectExitHandle: (() => void) | undefined = undefined;
+let historySelectExitHandle: (() => void) | undefined = undefined;
 
 export function registerQueueClose(handle: (() => void) | undefined): void {
   queueCloseHandle = handle;
@@ -21,13 +25,25 @@ export function registerSettingsBack(handle: (() => boolean) | undefined): void 
   settingsBackHandle = handle;
 }
 
+export function registerQueueSelectExit(handle: (() => void) | undefined): void {
+  queueSelectExitHandle = handle;
+}
+
+export function registerHistorySelectExit(handle: (() => void) | undefined): void {
+  historySelectExitHandle = handle;
+}
+
 // true=已消化一次返回；false=无层可关，调用方走默认行为
 export function dismissOverlaysForBack(): boolean {
   const showQueueSheet: BoolState = connectBool(Constants.AS_SHOW_QUEUE_SHEET, false);
   if (showQueueSheet.value) {
     const selectMode: BoolState = connectBool(Constants.AS_PLAYLIST_SELECT_MODE, false);
     if (selectMode.value) {
-      selectMode.value = false;
+      if (queueSelectExitHandle !== undefined) {
+        queueSelectExitHandle();
+      } else {
+        selectMode.value = false;
+      }
       return true;
     }
     if (queueCloseHandle !== undefined) {
@@ -42,7 +58,11 @@ export function dismissOverlaysForBack(): boolean {
   if (showPlayHistory.value) {
     const historySelectMode: BoolState = connectBool(Constants.AS_HISTORY_SELECT_MODE, false);
     if (historySelectMode.value) {
-      historySelectMode.value = false;
+      if (historySelectExitHandle !== undefined) {
+        historySelectExitHandle();
+      } else {
+        historySelectMode.value = false;
+      }
       return true;
     }
     if (historyCloseHandle !== undefined) {

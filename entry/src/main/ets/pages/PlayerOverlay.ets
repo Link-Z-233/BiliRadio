@@ -497,7 +497,7 @@ export struct PlayerOverlay {
               .width('30%')
               .height(40)
               .backgroundColor(rate === this.playbackRate ? this.tintBg() : $r('app.color.btn_glass'))
-              .backdropBlur(20)
+              .backdropBlur(Constants.GLASS_BLUR)
               .fontColor(rate === this.playbackRate ? $r('app.color.text_primary') : this.textPrimary())
               .borderRadius(Constants.TOKEN_RADIUS_XL)
               .fontSize(Constants.TOKEN_FONT_BODY_M)
@@ -542,7 +542,7 @@ export struct PlayerOverlay {
               .width('44%')
               .height(40)
               .backgroundColor(mode === this.playMode ? this.tintBg() : $r('app.color.btn_glass'))
-              .backdropBlur(20)
+              .backdropBlur(Constants.GLASS_BLUR)
               .fontColor(mode === this.playMode ? $r('app.color.text_primary') : this.textPrimary())
               .borderRadius(Constants.TOKEN_RADIUS_XL)
               .fontSize(Constants.TOKEN_FONT_BODY_M)
@@ -593,7 +593,7 @@ export struct PlayerOverlay {
               .width('30%')
               .height(40)
               .backgroundColor($r('app.color.btn_glass'))
-              .backdropBlur(20)
+              .backdropBlur(Constants.GLASS_BLUR)
               .fontColor(this.textPrimary())
               .borderRadius(Constants.TOKEN_RADIUS_XL)
               .fontSize(Constants.TOKEN_FONT_BODY_M)
@@ -608,7 +608,7 @@ export struct PlayerOverlay {
             .width('30%')
             .height(40)
             .backgroundColor($r('app.color.btn_glass'))
-            .backdropBlur(20)
+            .backdropBlur(Constants.GLASS_BLUR)
             .fontColor(this.textPrimary())
             .borderRadius(Constants.TOKEN_RADIUS_XL)
             .fontSize(Constants.TOKEN_FONT_BODY_M)
@@ -623,7 +623,7 @@ export struct PlayerOverlay {
             .width('30%')
             .height(40)
             .backgroundColor(this.sleepTimerPlayToEof ? this.tintBg() : $r('app.color.btn_glass'))
-            .backdropBlur(20)
+            .backdropBlur(Constants.GLASS_BLUR)
             .fontColor($r('app.color.text_primary'))
             .borderRadius(Constants.TOKEN_RADIUS_XL)
             .fontSize(Constants.TOKEN_FONT_BODY_M)
@@ -645,7 +645,7 @@ export struct PlayerOverlay {
             .width('100%')
             .height(40)
             .backgroundColor($r('app.color.btn_glass'))
-            .backdropBlur(20)
+            .backdropBlur(Constants.GLASS_BLUR)
             .fontColor($r('app.color.text_primary'))
             .borderRadius(Constants.TOKEN_RADIUS_XL)
             .fontSize(Constants.TOKEN_FONT_BODY_M)
@@ -690,7 +690,7 @@ export struct PlayerOverlay {
                 .width('44%')
                 .height(40)
                 .backgroundColor(track.id === this.currentQualityCode ? this.tintBg() : $r('app.color.btn_glass'))
-                .backdropBlur(20)
+                .backdropBlur(Constants.GLASS_BLUR)
                 .fontColor(track.id === this.currentQualityCode ? $r('app.color.text_primary') : this.textPrimary())
                 .borderRadius(Constants.TOKEN_RADIUS_XL)
                 .fontSize(Constants.TOKEN_FONT_BODY_M)
@@ -717,7 +717,7 @@ export struct PlayerOverlay {
             .width('44%')
             .height(40)
             .backgroundColor(this.tintBg())
-            .backdropBlur(20)
+            .backdropBlur(Constants.GLASS_BLUR)
             .fontColor($r('app.color.text_primary'))
             .borderRadius(Constants.TOKEN_RADIUS_XL)
             .fontSize(Constants.TOKEN_FONT_BODY_M)
@@ -785,7 +785,7 @@ export struct PlayerOverlay {
             .layoutWeight(1)
             .height(40)
             .backgroundColor($r('app.color.btn_glass'))
-            .backdropBlur(20)
+            .backdropBlur(Constants.GLASS_BLUR)
             .fontColor(this.textPrimary())
             .borderRadius(Constants.TOKEN_RADIUS_XL)
             .fontSize(Constants.TOKEN_FONT_BODY_M)
@@ -798,7 +798,7 @@ export struct PlayerOverlay {
             .layoutWeight(1)
             .height(40)
             .backgroundColor(this.tintBg())
-            .backdropBlur(20)
+            .backdropBlur(Constants.GLASS_BLUR)
             .fontColor($r('app.color.text_primary'))
             .borderRadius(Constants.TOKEN_RADIUS_XL)
             .fontSize(Constants.TOKEN_FONT_BODY_M)
@@ -887,7 +887,7 @@ export struct PlayerOverlay {
     .padding({ left: Constants.TOKEN_SPACE_XL, right: Constants.TOKEN_SPACE_XL, top: Constants.TOKEN_SPACE_XS, bottom: Constants.TOKEN_SPACE_XL })
     // 玻璃公式（v0.4-Part1-ux-fixes US6）：与队列面板同款面板色+顶部分隔线，blur 作用于 sheet 底色已转透明的下层内容
     .backgroundColor($r('app.color.sheet_panel_background'))
-    .backdropBlur(20)
+    .backdropBlur(Constants.GLASS_BLUR)
     .border({ width: { top: 1 }, color: $r('app.color.sheet_top_separator') })
   }
 
@@ -969,11 +969,11 @@ export struct PlayerOverlay {
                   .height(26)
                   .padding({ left: Constants.TOKEN_SPACE_10, right: Constants.TOKEN_SPACE_10 })
                   .backgroundColor($r('app.color.btn_glass'))
-                  .backdropBlur(20)
+                  .backdropBlur(Constants.GLASS_BLUR)
                   .borderRadius(13)
                   .margin(Constants.TOKEN_SPACE_S)
                   .enabled(this.trackBvid !== '')
-                  .opacity(this.trackBvid !== '' ? 1.0 : 0.4)
+                  .opacity(this.trackBvid !== '' ? 1.0 : Constants.TOKEN_DISABLED_OPACITY)
                   .onClick(() => {
                     this.openOriginal();
                   })
@@ -1148,12 +1148,12 @@ export struct PlayerOverlay {
                   .fontSize(Constants.TOKEN_FONT_TITLE_L)
                   .fontColor([this.textPrimary()])
               }
-              .width(44)
-              .height(44)
+              .width(Constants.CONTROL_BTN_SIZE)
+              .height(Constants.CONTROL_BTN_SIZE)
               .justifyContent(FlexAlign.Center)
               .scale({ x: this.prevBtnScale, y: this.prevBtnScale })
               .enabled(this.playlistCount > 0)
-              .opacity(this.playlistCount > 0 ? 1.0 : 0.4)
+              .opacity(this.playlistCount > 0 ? 1.0 : Constants.TOKEN_DISABLED_OPACITY)
               .onClick(() => {
                 this.popPrev();
                 this.controller.prev();
@@ -1164,11 +1164,11 @@ export struct PlayerOverlay {
                   .fontSize(Constants.TOKEN_FONT_TITLE_L)
                   .fontColor([this.textPrimary()])
               }
-              .width(44)
-              .height(44)
+              .width(Constants.CONTROL_BTN_SIZE)
+              .height(Constants.CONTROL_BTN_SIZE)
               .justifyContent(FlexAlign.Center)
               .enabled(this.isPrepared)
-              .opacity(this.isPrepared ? 1.0 : 0.4)
+              .opacity(this.isPrepared ? 1.0 : Constants.TOKEN_DISABLED_OPACITY)
               .onClick(() => {
                 this.controller.seekBy(-Constants.SEEK_STEP_MS);
               })
@@ -1198,7 +1198,7 @@ export struct PlayerOverlay {
               .borderRadius(Constants.PLAY_BTN_DIAMETER / 2)
               .scale({ x: this.playBtnScale, y: this.playBtnScale })
               .enabled(this.isPrepared || this.trackIndex >= 0 || this.playlistCount > 0)
-              .opacity(this.isPrepared || this.trackIndex >= 0 || this.playlistCount > 0 ? 1.0 : 0.4)
+              .opacity(this.isPrepared || this.trackIndex >= 0 || this.playlistCount > 0 ? 1.0 : Constants.TOKEN_DISABLED_OPACITY)
               .onClick(() => {
                 this.popPlay();
                 this.controller.togglePlay();
@@ -1209,11 +1209,11 @@ export struct PlayerOverlay {
                   .fontSize(Constants.TOKEN_FONT_TITLE_L)
                   .fontColor([this.textPrimary()])
               }
-              .width(44)
-              .height(44)
+              .width(Constants.CONTROL_BTN_SIZE)
+              .height(Constants.CONTROL_BTN_SIZE)
               .justifyContent(FlexAlign.Center)
               .enabled(this.isPrepared)
-              .opacity(this.isPrepared ? 1.0 : 0.4)
+              .opacity(this.isPrepared ? 1.0 : Constants.TOKEN_DISABLED_OPACITY)
               .onClick(() => {
                 this.controller.seekBy(Constants.SEEK_STEP_MS);
               })
@@ -1223,12 +1223,12 @@ export struct PlayerOverlay {
                   .fontSize(Constants.TOKEN_FONT_TITLE_L)
                   .fontColor([this.textPrimary()])
               }
-              .width(44)
-              .height(44)
+              .width(Constants.CONTROL_BTN_SIZE)
+              .height(Constants.CONTROL_BTN_SIZE)
               .justifyContent(FlexAlign.Center)
               .scale({ x: this.nextBtnScale, y: this.nextBtnScale })
               .enabled(this.playlistCount > 0)
-              .opacity(this.playlistCount > 0 ? 1.0 : 0.4)
+              .opacity(this.playlistCount > 0 ? 1.0 : Constants.TOKEN_DISABLED_OPACITY)
               .onClick(() => {
                 this.popNext();
                 this.controller.next();
@@ -1249,7 +1249,7 @@ export struct PlayerOverlay {
                   .fontSize(Constants.TOKEN_FONT_BODY)
                   .fontColor(this.playbackRate === 1.0 ? this.textPrimary() : this.accentColor.value)
               }
-              .height(36)
+              .height(Constants.GLASS_ICON_BTN_SIZE)
               .padding({ left: Constants.TOKEN_SPACE_14, right: Constants.TOKEN_SPACE_14 })
               .onClick(() => {
                 this.showSpeed.value = true;
@@ -1261,7 +1261,7 @@ export struct PlayerOverlay {
                   .fontColor([this.accentColor.value])
                   .rotate({ angle: this.playModeRotate() })
               }
-              .height(36)
+              .height(Constants.GLASS_ICON_BTN_SIZE)
               .padding({ left: Constants.TOKEN_SPACE_14, right: Constants.TOKEN_SPACE_14 })
               .onClick(() => {
                 this.showMode.value = true;
@@ -1275,7 +1275,7 @@ export struct PlayerOverlay {
                   .fontWeight(FontWeight.Medium)
                   .fontColor(this.currentTrackSource === 'dash' ? this.accentColor.value : this.textPrimary())
               }
-              .height(36)
+              .height(Constants.GLASS_ICON_BTN_SIZE)
               .padding({ left: Constants.TOKEN_SPACE_14, right: Constants.TOKEN_SPACE_14 })
               .onClick(() => {
                 this.showQuality = true;
@@ -1291,7 +1291,7 @@ export struct PlayerOverlay {
                     .fontColor(this.accentColor.value)
                 }
               }
-              .height(36)
+              .height(Constants.GLASS_ICON_BTN_SIZE)
               .padding({ left: Constants.TOKEN_SPACE_14, right: Constants.TOKEN_SPACE_14 })
               .onClick(() => {
                 this.showSleepTimer.value = true;
@@ -1302,8 +1302,8 @@ export struct PlayerOverlay {
                   .fontSize(Constants.TOKEN_FONT_TITLE_L)
                   .fontColor([this.textPrimary()])
               }
-              .width(44)
-              .height(44)
+              .width(Constants.CONTROL_BTN_SIZE)
+              .height(Constants.CONTROL_BTN_SIZE)
               .justifyContent(FlexAlign.Center)
               .onClick(() => {
                 connectBool(Constants.AS_SHOW_QUEUE_SHEET, false).value = true;

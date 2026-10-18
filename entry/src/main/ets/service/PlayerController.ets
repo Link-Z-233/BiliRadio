@@ -1654,6 +1654,45 @@ export class PlayerController {
     this.savePlayHistoryFileAsync();
   }
 
+  // 批量标记已看完（v0.5-part2 multiselect-rework）：bvid 级幂等——isPlayed 命中跳过（不重复建条目）；
+  // 未命中查 bvid:page 复合键历史条目，有则置 progress=-1，无则 fromVideo 新建置 -1 后 unshift；
+  // 仅本地写史，不向 B 站云端上报完播心跳；批量只落一次盘（HISTORY_MAX 截断 → 版本计数 → 广播）
+  markWatched(items: BiliVideo[]): void {
+    if (items.length === 0) {
+      return;
+    }
+    let changed: boolean = false;
+    for (let i = 0; i < items.length; i++) {
+      const video: BiliVideo = items[i];
+      if (video.bvid === '' || this.isPlayed(video.bvid)) {
+        continue;
+      }
+      const idx: number = this.indexOfPlayHistory(video.bvid, video.page);
+      if (idx >= 0) {
+        const entry: PlayHistoryItem = this.playHistory[idx];
+        if (entry.progress !== -1) {
+          entry.progress = -1;
+          changed = true;
+        }
+      } else {
+        const entry: PlayHistoryItem = PlayHistoryItem.fromVideo(video, this.resolveSourceType(video), Date.now());
+        entry.progress = -1;
+        this.playHistory.unshift(entry);
+        changed = true;
+      }
+    }
+    if (!changed) {
+      return;
+    }
+    if (this.playHistory.length > Constants.HISTORY_MAX) {
+      this.playHistory = this.playHistory.slice(0, Constants.HISTORY_MAX);
+    }
+    this.playHistoryVersion++;
+    Logger.log('player', 'markWatched', `count=${items.length} total=${this.playHistory.length}`);
+    this.savePlayHistoryFileAsync();
+    this.emitUi();
+  }
+
   // 入参为复合键（bvid:page，经 BiliVideo.itemKeyOf 合成）
   async removeSelectedFromPlaylist(keys: string[]): Promise<void> {    if (keys.length === 0) {
       return;
