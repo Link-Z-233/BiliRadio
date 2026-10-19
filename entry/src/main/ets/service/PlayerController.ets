@@ -105,6 +105,16 @@ export class PlayerController {
   // 心跳连续失败计数：≥HEARTBEAT_FAIL_FUSE 熔断本分P 上报，切分P/重新起播复位
   private heartbeatFailCount: number = 0;
 
+  // —— 播放错误事件（v0.5-part3 US6）：零装饰器，快照字段 + errorTick 版本计数随 emitUi 广播，
+  // 消费方（Index）订阅回调内比对 tick 变化触发系统 toast ——
+  // stage：'prepare'（取流/准备失败）| 'play'（播放器运行时错误）；
+  // time-window 去重见 playbackError
+  errorStage: string = '';
+  errorBvid: string = '';
+  errorCode: number = 0;
+  errorTick: number = 0;
+  private errorLastAt: Map<string, number> = new Map<string, number>();
+
   isWifiNow(): boolean {
     return this.wifiNow;
   }
@@ -199,6 +209,32 @@ export class PlayerController {
     this.emitUi();
   }
 
+  private currentBvid(): string {
+    return this.currentIndex >= 0 && this.currentIndex < this.playlist.length
+      ? this.playlist[this.currentIndex].bvid : '';
+  }
+
+  // 播放错误统一入口（US6）：hilog+应用日志恒记（可追溯）；stage+bvid 时间窗去重仅门控广播，
+  // 防「重试连环失败/播放器反复 error」刷屏；去重通过才更新错误快照并递增 errorTick，
+  // 消费方比对 tick 弹一次性 toast；Map 无淘汰，键空间=实际播放过的 bvid×2 阶段，量级可忽略
+  playbackError(stage: string, code: number, bvid: string): void {
+    hilog.warn(Constants.LOG_DOMAIN, Constants.LOG_TAG,
+      'playback error: stage=%{public}s code=%{public}d bvid=%{public}s', stage, code, bvid);
+    Logger.log('player', 'playbackError', `stage=${stage} code=${code} bvid=${bvid}`);
+    const key: string = `${stage}_${bvid}`;
+    const now: number = Date.now();
+    const last: number = this.errorLastAt.get(key) ?? 0;
+    if (now - last < Constants.PLAYBACK_ERROR_DEDUP_MS) {
+      return;
+    }
+    this.errorLastAt.set(key, now);
+    this.errorStage = stage;
+    this.errorBvid = bvid;
+    this.errorCode = code;
+    this.errorTick++;
+    this.emitUi();
+  }
+
   async init(): Promise<void> {
     if (this.inited) {
       return;
@@ -283,12 +319,13 @@ export class PlayerController {
         }
         this.onPlayerTime(time);
       };
-      this.player.onError = (msg: string): void => {
+      this.player.onError = (code: number, msg: string): void => {
         this.isPreparing = false;
         this.isPrepared = false;
         this.playIntent = false;
         this.setPlaying(false);
         this.statusMsg = `播放错误: ${msg}`;
+        this.playbackError('play', code, this.currentBvid());
         this.mediaSession.updateState(false, this.currentTime);
         this.mediaSession.stopBackground();
         this.emitUi();
@@ -884,6 +921,9 @@ export class PlayerController {
       const error = err as BusinessError;
       this.isPreparing = false;
       this.statusMsg = `播放失败: ${error.message}`;
+      // BiliService 抛 plain Error 时 code 为 undefined，typeof 归一为 0（取流失败通常无错误码语义）
+      const code: number = typeof error.code === 'number' ? error.code : 0;
+      this.playbackError('prepare', code, item.bvid);
       this.emitUi();
     }
   }

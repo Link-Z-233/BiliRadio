@@ -31,6 +31,8 @@ struct Index {
   private navPathStack: NavPathStack = new NavPathStack();
   private pageWidth: number = 0;
   private wideListener: mediaquery.MediaQueryListener | undefined = undefined;
+  private unsubPlayer: (() => void) | undefined = undefined;
+  private lastErrorTick: number = 0;
 
   aboutToAppear(): void {
     this.wideListener = mediaquery.matchMediaSync('(min-width: 600vp)');
@@ -64,6 +66,16 @@ struct Index {
         });
       });
     };
+    // 播放出错提醒（v0.5-part3 US6）：emitUi 广播内比对 errorTick 版本计数，变化即弹系统 toast；
+    // 须在 init() 前订阅，冷启动自动续播（init 内起播路径）的早期错误不漏；
+    // emitUi 每秒进度节流也会进此回调，tick 比对恒假零开销
+    this.lastErrorTick = controller.errorTick;
+    this.unsubPlayer = controller.subscribe((): void => {
+      if (controller.errorTick !== this.lastErrorTick) {
+        this.lastErrorTick = controller.errorTick;
+        promptAction.showToast({ message: Constants.TOAST_PLAYBACK_ERROR });
+      }
+    }, 'Index');
     controller.init().then((): void => {
       // debug 恢复前移冷启动（v0.4-Part1-ux-fixes US10）：AppStore 就绪后恢复 Logger 并提醒，
       // 修复「不进设置页 debug 不生效」；开启时冷启动 toast 一次
@@ -98,6 +110,7 @@ struct Index {
   }
 
   aboutToDisappear(): void {
+    this.unsubPlayer?.();
     this.wideListener?.off('change');
     GripDetector.stop();
   }

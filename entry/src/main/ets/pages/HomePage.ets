@@ -261,7 +261,8 @@ export struct HomePage {
     Row() {
       CoverThumb({ cover: row.sub.cover, thumbSize: 52, radius: 12 })
       Column() {
-        Text(row.sub.title)
+        // 订阅列表条目剥「合集·」前缀（US4 FR-011 展示层，与详情页/导航标题同源）
+        Text(row.sub.displayTitle())
           .fontSize(Constants.TOKEN_FONT_TITLE)
           .fontWeight(FontWeight.Medium)
           .fontColor($r('app.color.text_primary'))
@@ -281,6 +282,7 @@ export struct HomePage {
         Text(row.newCount > 99 ? '99+' : `${row.newCount}`)
           .fontSize(Constants.TOKEN_FONT_BODY_S)
           .fontColor($r('app.color.fg_on_dark'))
+          .textAlign(TextAlign.Center)
           .backgroundColor(this.accentColor.value)
           .borderRadius(Constants.TOKEN_RADIUS_10)
           .constraintSize({ minWidth: 20 })

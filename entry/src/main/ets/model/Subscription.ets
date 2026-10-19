@@ -48,6 +48,26 @@ export class Subscription {
     return lastRefreshAt > 0 && now - lastRefreshAt < Subscription.CACHE_TTL_MS;
   }
 
+  // 合集·前缀展示层剥除（US4 FR-011 纯函数）：仅剥「合集·」起头前缀，剥后为空返回原值；
+  // 兜底命名（「合集 ${seasonId}」空格分隔）不匹配前缀自然保留
+  static stripSeasonPrefix(title: string): string {
+    if (title.startsWith('合集·')) {
+      const stripped: string = title.substring('合集·'.length);
+      if (stripped !== '') {
+        return stripped;
+      }
+    }
+    return title;
+  }
+
+  // 展示标题（US4）：合集类型剥「合集·」前缀，其余类型原样；存储与解析零变化，旧订阅免迁移
+  displayTitle(): string {
+    if (this.type === Subscription.TYPE_SEASON) {
+      return Subscription.stripSeasonPrefix(this.title);
+    }
+    return this.title;
+  }
+
   toRecord(): Record<string, Object> {
     const rec: Record<string, Object> = {
       'id': this.id,

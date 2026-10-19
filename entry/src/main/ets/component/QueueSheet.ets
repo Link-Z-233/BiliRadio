@@ -175,7 +175,6 @@ export struct QueueSheet {
   // 主题色（T016）：强调色运行时跟随外观设置（Appearance 写入 AppStorage），衍生色一律经 hexWithAlpha
   @Local accentColor: StrState =
     connectStr(Constants.AS_ACCENT_COLOR, Constants.ACCENT_DEFAULT);
-  @Local isWideScreen: BoolState = connectBool(Constants.AS_IS_WIDE_SCREEN, false);
   private controller: PlayerController = PlayerController.getInstance();
 
   private textPrimary(): Resource {
@@ -835,7 +834,7 @@ export struct QueueSheet {
           }),
         PanGesture({ fingers: 1, direction: PanDirection.Vertical })
           .onActionUpdate((event: GestureEvent) => {
-            if (!this.selectMode.value || this.isWideScreen.value) {
+            if (!this.selectMode.value) {
               return;
             }
             const target: number = this.targetEntryIndex(this.dragStartEntryIndex, event.offsetY);
@@ -905,7 +904,7 @@ export struct QueueSheet {
           }),
         PanGesture({ fingers: 1, direction: PanDirection.Vertical })
           .onActionUpdate((event: GestureEvent) => {
-            if (!this.selectMode.value || this.isWideScreen.value) {
+            if (!this.selectMode.value) {
               return;
             }
             const target: number = this.targetEntryIndex(this.dragStartEntryIndex, event.offsetY);
@@ -1030,7 +1029,7 @@ export struct QueueSheet {
           }),
         PanGesture({ fingers: 1, direction: PanDirection.Vertical })
           .onActionUpdate((event: GestureEvent) => {
-            if (!this.selectMode.value || this.isWideScreen.value) {
+            if (!this.selectMode.value) {
               return;
             }
             const target: number = this.targetEntryIndex(this.dragStartEntryIndex, event.offsetY);

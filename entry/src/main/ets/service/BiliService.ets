@@ -613,6 +613,9 @@ export class BiliService {
           item.ownerName = owner['name'] as string;
         }
       }
+      // 充电/付费标记（US4）：合集/系列 archives 仅 ugc_pay 可判，只认明确非 0
+      const ugcPayRaw: Object = rec['ugc_pay'];
+      item.isUpowerExclusive = ugcPayRaw !== undefined && ugcPayRaw !== null && Number(ugcPayRaw) > 0;
       items.push(item);
     }
     return items;
@@ -1009,6 +1012,17 @@ export class BiliService {
       if (rec['author'] !== undefined && rec['author'] !== null) {
         item.ownerName = rec['author'] as string;
       }
+      // 充电/付费标记（US4）：只认明确 True/非 0——
+      // Web 链 is_charging_arc/elec_arc_type，APP 链 ugc_pay/is_ugcpay，两种 vlist 形态共用此解析
+      const chargingArcRaw: Object = rec['is_charging_arc'];
+      const elecTypeRaw: Object = rec['elec_arc_type'];
+      const ugcPayRaw: Object = rec['ugc_pay'];
+      const ugcPayFlagRaw: Object = rec['is_ugcpay'];
+      item.isUpowerExclusive =
+        (chargingArcRaw !== undefined && chargingArcRaw !== null && Boolean(chargingArcRaw)) ||
+        (elecTypeRaw !== undefined && elecTypeRaw !== null && Number(elecTypeRaw) > 0) ||
+        (ugcPayRaw !== undefined && ugcPayRaw !== null && Number(ugcPayRaw) > 0) ||
+        (ugcPayFlagRaw !== undefined && ugcPayFlagRaw !== null && Boolean(ugcPayFlagRaw));
       items.push(item);
     }
   }
@@ -1947,7 +1961,9 @@ export class BiliService {
       lastPlayCid = dashResult.lastPlayCid;
       dashResolved = true;
     } catch (e) {
-      Logger.log('player', 'dash tracks failed, retry once', `bvid=${bvid} cid=${cid}`);
+      const firstErr = e as BusinessError;
+      Logger.log('player', 'dash tracks failed, retry once',
+        `bvid=${bvid} cid=${cid} err=${firstErr.message}`);
       try {
         const dashRetry: DashFetchResult = await BiliService.fetchDashAudioTracks(bvid, cid);
         tracks = dashRetry.tracks;
@@ -1955,8 +1971,10 @@ export class BiliService {
         lastPlayCid = dashRetry.lastPlayCid;
         dashResolved = true;
       } catch (e2) {
+        const secondErr = e2 as BusinessError;
         hilog.warn(Constants.LOG_DOMAIN, Constants.LOG_TAG,
-          'dash audio failed, fallback to durl: %{public}s', bvid);
+          'dash audio failed, fallback to durl: %{public}s bvid=%{public}s err=%{public}s',
+          bvid, secondErr.message);
       }
     }
     if (dashResolved) {

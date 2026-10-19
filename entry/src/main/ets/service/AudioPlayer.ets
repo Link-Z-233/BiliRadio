@@ -21,7 +21,7 @@ export class AudioPlayer {
   private generation: number = 0;
   onStateChange: ((state: string) => void) | undefined = undefined;
   onTimeUpdate: ((time: number) => void) | undefined = undefined;
-  onError: ((msg: string) => void) | undefined = undefined;
+  onError: ((code: number, msg: string) => void) | undefined = undefined;
   onAudioInterrupt: ((eventType: 'INTERRUPT' | 'END_INTERRUPT') => void) | undefined = undefined;
 
   get isPlaying(): boolean { return this._isPlaying; }
@@ -77,7 +77,7 @@ export class AudioPlayer {
       this._isPrepared = false;
       this._isPlaying = false;
       if (this.onError !== undefined) {
-        this.onError(`Player error: ${err.code} - ${err.message}`);
+        this.onError(err.code, `Player error: ${err.code} - ${err.message}`);
       }
     });
     this.avPlayer.on('audioInterrupt', (event: audio.InterruptEvent) => {

@@ -3,12 +3,13 @@ import { BusinessError } from '@kit.BasicServicesKit';
 import { Subscription } from '../model/Subscription';
 import { BiliVideo } from '../model/BiliVideo';
 import { SubscriptionStore } from '../service/SubscriptionStore';
-import { BiliService, VideoDetail } from '../service/BiliService';
+import { BiliService, VideoDetail, UpInfo } from '../service/BiliService';
 import { PlayHistoryItem } from '../model/PlayHistoryItem';
 import { PlayerController, EnqueueResult } from '../service/PlayerController';
 import { Constants } from '../service/Constants';
 import { dismissOverlaysForBack } from '../service/BackHandler';
-import { SelectLogic, LongPressGuard, SweepSession, EdgeAutoScroller } from '../service/SelectLogic';
+import { SelectLogic, LongPressGuard, SweepSession, RowDragSession, EdgeAutoScroller } from '../service/SelectLogic';
+import { Appearance } from '../service/Appearance';
 import { connectNum, connectStr, NumState, StrState } from '../service/V2State';
 import { CoverThumb } from '../component/CoverThumb';
 import { SelectCheckbox } from '../component/SelectCheckbox';
@@ -71,6 +72,8 @@ struct SourcePage {
   @Local selectedKeys: Set<string> = new Set<string>();
   // 复选框区拖选会话（FR-014）：null=未在拖选；方向性扫选模式按下时锁定，同次拖动不反转
   private sweepSession: SweepSession | null = null;
+  // 整行拖选会话（US1）：null=未在拖选；与 sweepSession 单指手势互斥，新建另一方时先清本方
+  private rowDrag: RowDragSession | null = null;
   // 边缘自动滚动器（FR-018）：拖选中手指进入列表可视区边缘带时驱动列表滚动续扫
   private edgeScroller: EdgeAutoScroller = new EdgeAutoScroller();
   private seenBefore: number = 0;         // 进入时的 lastSeenAt，NEW 徽标基准
@@ -80,7 +83,7 @@ struct SourcePage {
   private upWebLastPage: number = 0;
   // 最近一次触底页的实际来源：APP 链稀疏（服务端钳 ps 至 20），仅 Web 链短页才是权威到底
   private upOlderViaWeb: boolean = false;
-  private sub: Subscription = new Subscription();
+  @Local sub: Subscription = new Subscription();
   // 已播集契约同 selectedKeys：V2 @Local 赋值观测不观测 Set 内部变更，整体换引用驱动行上标记即时刷新
   @Local playedSet: Set<string> = new Set<string>();
   // 长按守卫（FR-009）：堵长按后的回退 onClick，三处多选统一模式
@@ -100,13 +103,6 @@ struct SourcePage {
       return '合集';
     }
     return '系列';
-  }
-
-  private subtitle(): string {
-    if (this.sub.upperName !== '') {
-      return `${this.typeLabel()} · ${this.sub.upperName}`;
-    }
-    return this.typeLabel();
   }
 
   // 源内总集数（接口 total/count 真值）优先；未知回退已加载数（近期一页 + 滚动追加）
@@ -141,6 +137,7 @@ struct SourcePage {
       return;
     }
     this.endSweep();
+    this.endRowDrag();
     this.getUIContext().animateTo({ duration: Constants.TOKEN_SELECT_ANIM_MS, curve: Curve.EaseOut }, (): void => {
       this.selectMode = false;
       this.selectedKeys = new Set<string>();
@@ -162,6 +159,8 @@ struct SourcePage {
     if (index < 0 || index >= this.episodes.length) {
       return;
     }
+    // 整行拖选与扫选单指互斥：扫选起手即作废可能残留的整行会话
+    this.rowDrag = null;
     this.sweepSession = new SweepSession();
     this.sweepSession.begin(this.selectedKeys.has(this.episodes[index].bvid), index,
       event.fingerList[0].globalY, this.scroller.currentOffset().yOffset);
@@ -209,8 +208,56 @@ struct SourcePage {
     this.sweepSession = null;
   }
 
-  private checkSweepEdge(globalY: number): void {
-    if (this.sweepSession === null) {
+  // 整行拖选（US1 D2）：长按完成翻转起点行并锁定画笔方向（原未选=加扫、原已选=减扫），
+  // 普通态长按同时进多选（翻转即预选）；ForEach 闭包 index 传递，越界守卫容忍触底加载后的行号漂移
+  private beginRowDrag(index: number, event: GestureEvent): void {
+    if (index < 0 || index >= this.episodes.length) {
+      return;
+    }
+    const bvid: string = this.episodes[index].bvid;
+    const snapshot: Set<string> = new Set<string>(this.selectedKeys);
+    const paintAdd: boolean = !snapshot.has(bvid);
+    if (!this.selectMode) {
+      this.enterSelectMode('');
+    }
+    this.selectedKeys = SelectLogic.toggle(snapshot, bvid);
+    this.endSweep();
+    this.rowDrag = new RowDragSession(
+      (i: number): string => this.rowKeyAt(i),
+      (s: Set<string>): void => {
+        this.selectedKeys = s;
+      }
+    );
+    this.rowDrag.begin(index, paintAdd, snapshot,
+      event.fingerList[0].globalY, this.scroller.currentOffset().yOffset);
+  }
+
+  private rowKeyAt(i: number): string {
+    if (i < 0 || i >= this.episodes.length) {
+      return '';
+    }
+    return this.episodes[i].bvid;
+  }
+
+  private updateRowDrag(globalY: number): void {
+    if (this.rowDrag === null) {
+      return;
+    }
+    const delta: number = this.rowDrag.delta(globalY, this.scroller.currentOffset().yOffset);
+    const start: number = this.rowDrag.getStartIndex();
+    const target: number = Math.max(0, Math.min(this.episodes.length - 1,
+      start + Math.round(delta / this.sweepStep())));
+    this.rowDrag.applyAt(target);
+  }
+
+  private endRowDrag(): void {
+    this.edgeScroller.stop();
+    this.rowDrag = null;
+  }
+
+  // 拖选/扫选共用边缘带检查：任一会话活跃即驱动对应方向自动滚动
+  private checkEdge(globalY: number): void {
+    if (this.sweepSession === null && this.rowDrag === null) {
       return;
     }
     const rect: componentUtils.ComponentInfo =
@@ -226,10 +273,23 @@ struct SourcePage {
     }
   }
 
+  // 尽头检测（US1 FR-003/FR-004）：顶部零偏移；底部 isAtEnd 且无可加载更早才算尽头——
+  // canLoadOlder 时滚轮保持空转 tick，触底 onReachEnd 照常触发加载更早，新行追加后自然续滚续选
+  private edgeAtEnd(downward: boolean): boolean {
+    if (downward) {
+      return this.scroller.isAtEnd() && !this.canLoadOlder;
+    }
+    return this.scroller.currentOffset().yOffset <= 0;
+  }
+
   private startEdgeScroll(downward: boolean): void {
     this.edgeScroller.start(this.scroller, downward, (): void => {
-      this.updateSweep(this.sweepSession === null ? 0 : this.sweepSession.getLastGlobalY());
-    });
+      if (this.rowDrag !== null) {
+        this.updateRowDrag(this.rowDrag.getLastGlobalY());
+      } else {
+        this.updateSweep(this.sweepSession === null ? 0 : this.sweepSession.getLastGlobalY());
+      }
+    }, (down: boolean): boolean => this.edgeAtEnd(down));
   }
 
   // 按列表序取选中剧集批量入队（US2）：复用 loadPlaylistAndPlay 全语义（空队列起播/非空追加
@@ -316,6 +376,25 @@ struct SourcePage {
       return Constants.SEASON_PAGE_SIZE;
     }
     return 30;
+  }
+
+  // FR-009 数据路径兜底：合集/系列剧集接口上游不返回作者（biliRelay 实测），剧集缓存/刷新回填不可行；
+  // 存量订阅 upperName 为空时经 ownerMid → fetchUpInfo（acc/info→card 降级链）拉取并持久化，失败下次进入再试
+  private backfillUpperName(): void {
+    if (this.sub.type !== Subscription.TYPE_SEASON && this.sub.type !== Subscription.TYPE_SERIES) {
+      return;
+    }
+    if (this.sub.upperName !== '' || this.sub.ownerMid <= 0) {
+      return;
+    }
+    BiliService.fetchUpInfo(this.sub.ownerMid).then((info: UpInfo): void => {
+      if (info.name === '') {
+        return;
+      }
+      this.sub.upperName = info.name;
+      SubscriptionStore.persistRefreshedSub(this.sub, true);
+    }).catch((): void => {
+    });
   }
 
   private markSeen(): void {
@@ -503,7 +582,7 @@ struct SourcePage {
   private unsubscribe(): void {
     AlertDialog.show({
       title: '取消订阅',
-      message: `确定取消订阅「${this.sub.title}」吗？`,
+      message: `确定取消订阅「${this.sub.displayTitle()}」吗？`,
       autoCancel: true,
       alignment: DialogAlignment.Center,
       primaryButton: {
@@ -556,11 +635,12 @@ struct SourcePage {
           offsetY: Constants.TOKEN_FLOATING_SHADOW_OFFSET_Y
         })
         .opacity(this.selectedKeys.size > 0 ? 1 : Constants.TOKEN_DISABLED_OPACITY)
+        .animation({ duration: Constants.TOKEN_SELECT_ANIM_MS, curve: Curve.EaseOut })
         .enabled(this.selectedKeys.size > 0)
         .onClick(() => {
           this.confirmMarkWatched();
         })
-        .transition(TransitionEffect.move(TransitionEdge.BOTTOM).combine(TransitionEffect.OPACITY))
+        .transition(TransitionEffect.move(TransitionEdge.START).combine(TransitionEffect.OPACITY))
       Text(`加入队列 (${this.selectedKeys.size})`)
         .fontSize(Constants.TOKEN_FONT_BODY_M)
         .fontWeight(FontWeight.Medium)
@@ -580,11 +660,12 @@ struct SourcePage {
           offsetY: Constants.TOKEN_FLOATING_SHADOW_OFFSET_Y
         })
         .opacity(this.selectedKeys.size > 0 ? 1 : Constants.TOKEN_DISABLED_OPACITY)
+        .animation({ duration: Constants.TOKEN_SELECT_ANIM_MS, curve: Curve.EaseOut })
         .enabled(this.selectedKeys.size > 0)
         .onClick(() => {
           this.enqueueSelected();
         })
-        .transition(TransitionEffect.move(TransitionEdge.BOTTOM).combine(TransitionEffect.OPACITY))
+        .transition(TransitionEffect.move(TransitionEdge.END).combine(TransitionEffect.OPACITY))
     }
     .width('100%')
     .justifyContent(FlexAlign.SpaceBetween)
@@ -723,31 +804,63 @@ struct SourcePage {
     .padding({ left: Constants.TOKEN_SPACE_L, right: Constants.TOKEN_SPACE_M })
   }
 
-  // 页头（US3/US5）：List 首个 ListItem 随列表滚动离屏/回顶再现；横向留白由所在容器统一控制
+  // 页头（US3 FR-008/009/010）：List 首个 ListItem 随列表滚动离屏/回顶再现；
+  // 水平 padding 与剧集行同令牌（List S + 行 M），封面左缘与剧集缩略图对齐；
+  // 名称大字（displayTitle，合集·前缀已剥）+ 集数同行右对齐 + 标签行（类型胶囊 + UP 主）；
+  // 收藏夹不渲染 UP 主行（FR-009），胶囊为 accent 淡底内联实现（单使用点不抽组件）
   @Builder
   private headerRow() {
     Row() {
       CoverThumb({ cover: this.sub.cover, thumbSize: Constants.SOURCE_HEADER_H, radius: Constants.TOKEN_RADIUS_14 })
       Column() {
-        Text(this.subtitle())
-          .fontSize(Constants.TOKEN_FONT_BODY)
-          .fontColor($r('app.color.text_secondary'))
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-        Text(`${this.headerCount()} 集`)
-          .fontSize(Constants.TOKEN_FONT_BODY_S)
-          .fontColor($r('app.color.text_disabled'))
-          .margin({ top: Constants.TOKEN_SPACE_XS })
+        Row() {
+          Text(this.sub.displayTitle())
+            .fontSize(Constants.TOKEN_FONT_20)
+            .fontWeight(FontWeight.Bold)
+            .fontColor($r('app.color.text_primary'))
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .layoutWeight(1)
+          Text(`${this.headerCount()} 集`)
+            .fontSize(Constants.TOKEN_FONT_BODY_M)
+            .fontColor($r('app.color.text_disabled'))
+            .margin({ left: Constants.TOKEN_SPACE_S })
+        }
+        .width('100%')
+        .alignItems(VerticalAlign.Center)
+        Row({ space: Constants.TOKEN_SPACE_S }) {
+          Text(this.typeLabel())
+            .fontSize(Constants.TOKEN_FONT_BODY_S)
+            .fontColor(this.accentColor.value)
+            .padding({
+              left: Constants.TOKEN_SPACE_S,
+              right: Constants.TOKEN_SPACE_S,
+              top: Constants.TOKEN_SPACE_XXS,
+              bottom: Constants.TOKEN_SPACE_XXS
+            })
+            .backgroundColor(Appearance.hexWithAlpha(this.accentColor.value, 0.12))
+            .borderRadius(Constants.TOKEN_RADIUS_S)
+          if ((this.sub.type === Subscription.TYPE_SEASON || this.sub.type === Subscription.TYPE_SERIES) &&
+            this.sub.upperName !== '') {
+            Text(this.sub.upperName)
+              .fontSize(Constants.TOKEN_FONT_BODY_S)
+              .fontColor($r('app.color.text_secondary'))
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+              .layoutWeight(1)
+          }
+        }
+        .width('100%')
+        .margin({ top: Constants.TOKEN_SPACE_XS })
+        .alignItems(VerticalAlign.Center)
       }
       .alignItems(HorizontalAlign.Start)
-      .justifyContent(FlexAlign.Center)
-      .height(Constants.SOURCE_HEADER_H)
       .layoutWeight(1)
       .margin({ left: Constants.TOKEN_SPACE_M, right: Constants.TOKEN_SPACE_S })
     }
     .width('100%')
     .alignItems(VerticalAlign.Center)
-    .padding({ top: Constants.TOKEN_SPACE_XS, bottom: Constants.TOKEN_SPACE_10 })
+    .padding({ left: Constants.TOKEN_SPACE_M, right: Constants.TOKEN_SPACE_M, top: Constants.TOKEN_SPACE_XS, bottom: Constants.TOKEN_SPACE_10 })
   }
 
   build() {
@@ -808,7 +921,7 @@ struct SourcePage {
                         const globalY: number = event.fingerList.length > 0
                           ? event.fingerList[0].globalY : this.sweepSession.getLastGlobalY();
                         this.updateSweep(globalY);
-                        this.checkSweepEdge(globalY);
+                        this.checkEdge(globalY);
                       })
                       .onActionEnd((): void => {
                         this.endSweep();
@@ -826,7 +939,7 @@ struct SourcePage {
                     })
                     if (item.duration > 0) {
                       Text(formatDuration(item.duration))
-                        .fontSize(Constants.TOKEN_FONT_AUX)
+                        .fontSize(Constants.TOKEN_FONT_BODY)
                         .fontColor($r('app.color.fg_on_dark'))
                         .maxLines(1)
                         .padding({
@@ -851,17 +964,24 @@ struct SourcePage {
                         .fontSize(Constants.TOKEN_FONT_BODY_S)
                         .fontColor($r('app.color.text_disabled'))
                       Blank()
+                      if (item.isUpowerExclusive) {
+                        Text('充电')
+                          .fontSize(Constants.TOKEN_FONT_AUX)
+                          .fontWeight(FontWeight.Bold)
+                          .fontColor($r('app.color.gold_accent'))
+                      }
                       if (this.isNew(item)) {
                         Text('NEW')
                           .fontSize(Constants.TOKEN_FONT_AUX)
                           .fontWeight(FontWeight.Bold)
                           .fontColor(this.accentColor.value)
+                          .margin({ left: item.isUpowerExclusive ? Constants.TOKEN_SPACE_S : 0 })
                       }
                       if (this.isPlayed(item)) {
                         SymbolGlyph($r('sys.symbol.checkmark_circle'))
                           .fontSize(Constants.TOKEN_FONT_TITLE)
                           .fontColor([$r('app.color.success_green')])
-                          .margin({ left: this.isNew(item) ? Constants.TOKEN_SPACE_S : 0 })
+                          .margin({ left: this.isNew(item) || item.isUpowerExclusive ? Constants.TOKEN_SPACE_S : 0 })
                       }
                     }
                     .width('100%')
@@ -895,15 +1015,39 @@ struct SourcePage {
                     this.playEpisode(index);
                   }
                 })
-                // 长按双入口之一（FR-001）：长按进多选并预选该行；守卫堵长按后的回退点击（FR-009）
+                // 整行拖选（US1 D2）：Sequence(长按→拖) 常挂两态——普通竖滑未长按不触发归列表滚动；
+                // 长按翻转起点行进多选/切选，随后拖动区间涂刷（双向画笔，多选态长按已选行起拖为减扫）；
+                // 长按事件取不到触点时回退纯多选预选（不建会话）
                 .gesture(
-                  LongPressGesture()
-                    .onAction(() => {
-                      this.longPressGuard.arm();
-                      if (!this.selectMode) {
-                        this.enterSelectMode(item.bvid);
-                      }
-                    })
+                  GestureGroup(GestureMode.Sequence,
+                    LongPressGesture()
+                      .onAction((event?: GestureEvent) => {
+                        this.longPressGuard.arm();
+                        if (event === undefined || event.fingerList.length === 0) {
+                          if (!this.selectMode) {
+                            this.enterSelectMode(item.bvid);
+                          }
+                          return;
+                        }
+                        this.beginRowDrag(index, event);
+                      }),
+                    PanGesture({ fingers: 1, direction: PanDirection.Vertical })
+                      .onActionUpdate((event: GestureEvent): void => {
+                        if (this.rowDrag === null) {
+                          return;
+                        }
+                        const globalY: number = event.fingerList.length > 0
+                          ? event.fingerList[0].globalY : this.rowDrag.getLastGlobalY();
+                        this.updateRowDrag(globalY);
+                        this.checkEdge(globalY);
+                      })
+                      .onActionEnd((): void => {
+                        this.endRowDrag();
+                      })
+                      .onActionCancel((): void => {
+                        this.endRowDrag();
+                      })
+                  )
                 )
               }
             }, (item: BiliVideo) => item.bvid)
@@ -957,6 +1101,7 @@ struct SourcePage {
       }
     .title(this.sourceTitleBuilder())
     .hideBackButton(true)
+    .backgroundColor($r('app.color.page_background'))
     .onReady((ctx: NavDestinationContext) => {
       this.navPathStack = ctx.pathStack;
       if (ctx.pathInfo.param === undefined || ctx.pathInfo.param === null) {
@@ -975,9 +1120,10 @@ struct SourcePage {
         this.navPathStack.pop();
         return;
       }
-      this.navTitle = this.sub.title;
+      this.navTitle = this.sub.displayTitle();
       this.markSeen();
       this.loadPlayedSet();
+      this.backfillUpperName();
       this.loadFromCache();
     })
     .onHidden(() => {

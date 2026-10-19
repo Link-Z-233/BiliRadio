@@ -16,6 +16,7 @@
     { "name": "text_disabled", "value": "#999999" },
     { "name": "track_color", "value": "#E5E5EE" },
     { "name": "placeholder_color", "value": "#BBBBBB" },
+    { "name": "gold_accent", "value": "#B8860B" },
     { "name": "danger_red", "value": "#D9534F" },
     { "name": "detail_text", "value": "#444444" },
     { "name": "mask_heavy", "value": "#59000000" },

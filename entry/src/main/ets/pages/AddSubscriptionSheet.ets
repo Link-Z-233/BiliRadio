@@ -102,7 +102,7 @@ export struct AddSubscriptionSheet {
       return;
     }
     this.onSubscribed(sub);
-    promptAction.showToast({ message: `已订阅「${sub.title}」` });
+    promptAction.showToast({ message: `已订阅「${sub.displayTitle()}」` });
   }
 
   // 识别结果 → 既有六分支分发（bv/av/up/fav/season/series；六个动作方法零改动；bv/av 透传 page）
@@ -299,6 +299,7 @@ export struct AddSubscriptionSheet {
     sub.type = Subscription.TYPE_SEASON;
     sub.sourceId = s.seasonId;
     sub.ownerMid = info.mid;
+    sub.upperName = info.name;
     sub.title = s.title === '' ? `合集 ${s.seasonId}` : s.title;
     sub.cover = s.cover;
     this.emitSub(sub);
@@ -313,6 +314,7 @@ export struct AddSubscriptionSheet {
     sub.type = Subscription.TYPE_SERIES;
     sub.sourceId = s.seasonId;
     sub.ownerMid = info.mid;
+    sub.upperName = info.name;
     sub.title = s.title === '' ? `系列 ${s.seasonId}` : s.title;
     sub.cover = s.cover;
     this.emitSub(sub);
@@ -673,7 +675,8 @@ export struct AddSubscriptionSheet {
           // 合集封面 URL 拼缩略后缀会 404，raw=true 直接加载原图
           CoverThumb({ cover: s.cover, thumbSize: 40, radius: 8, raw: true })
           Column() {
-            Text(s.title)
+            // 合集条目标题剥「合集·」前缀（US4 FR-011 展示层，订阅后 toast/详情页同源）
+            Text(Subscription.stripSeasonPrefix(s.title))
               .fontSize(Constants.TOKEN_FONT_BODY_M)
               .fontColor($r('app.color.text_primary'))
               .maxLines(1)

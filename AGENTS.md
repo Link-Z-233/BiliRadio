@@ -52,6 +52,7 @@
 - **Constants.ets 是唯一真相源**：所有魔法数字、存储键、AppStorage 键、色值、超时值只在此定义，禁止他处重复
 - **禁 `any`/`unknown`/`as` 类型断言**——ArkTS 严格模式
 - **B 站 API 坑**：APP 端点（`BILI_APP_ARCHIVE_URL`）须 BiliDroid UA（在 `Constants`），非浏览器 cookie；Web 端点须 WBI 签名（`WbiSigner`）；`@ohos.net.http` 的 `maxRedirects: 0` 是「零配额」而非「禁重定向」——短链解析用 `@kit.RemoteCommunicationKit` rcp + `autoRedirect`
+- **B 站 API 知识唯一真相源**：仓库根 `BILI_API.md`（§1 本项目在用端点与坑、§2 biliRelay 历史探索迁移、§3 新增实测）——API 行为/字段/风控问题**先查它再动源码**；该文档未覆盖的内容（新端点实测、字段/风控新发现）**须补录进对应章节**再收尾；`../bili/PiliPlus` 仅在 `BILI_API.md` 未覆盖时作旁证，禁止跳过它直接翻外部项目文档
 - **令牌/数值规范**（engineering-refactor 轮已落地，2026-10-11）：令牌替换**数值不变**（纯标准化不改观感）；色彩一律 `$r('app.color.*')`、数值一律 `Constants.TOKEN_*`，禁裸数字硬编码（豁免登记 `spec/v0.3-engineering-refactor/token-exemptions.md`）；组件规范（列表行/卡片/弹窗/空态）跨页面一致
 - **文档引用一律相对路径**：文档中引用仓库内路径相对仓库根（如 `entry/src/main/ets/`），引用仓库外路径相对仓库根上级（如 `../bili/PiliPlus`），禁绝对路径
 
@@ -95,7 +96,6 @@ feat: v0.4.0-Part1（浮层视觉重设计 + UX 修复轮）
 ## 参考项目
 
 - `../bili/PiliPlus` — Flutter 哔哩哔哩客户端（音质档位/设置交互参考）
-- `../bili/biliRelay` — B 站 API 取流参考（QUALITY_MAP / fnval）
 
 ## 沟通偏好
 

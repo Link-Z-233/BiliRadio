@@ -4,7 +4,7 @@ import { BiliVideo } from '../model/BiliVideo';
 import { Constants } from '../service/Constants';
 import { connectBool, connectStr, BoolState, StrState } from '../service/V2State';
 import { registerHistorySelectExit } from '../service/BackHandler';
-import { SelectLogic, LongPressGuard, SweepSession, EdgeAutoScroller } from '../service/SelectLogic';
+import { SelectLogic, LongPressGuard, SweepSession, RowDragSession, EdgeAutoScroller } from '../service/SelectLogic';
 import { CoverThumb } from './CoverThumb';
 import { SelectCheckbox } from './SelectCheckbox';
 import { promptAction, componentUtils } from '@kit.ArkUI';
@@ -94,6 +94,8 @@ export struct HistorySheet {
   private longPressGuard: LongPressGuard = new LongPressGuard();
   // 复选框区拖选会话（FR-014）：null=未在拖选；方向性扫选模式按下时锁定，同次拖动不反转
   private sweepSession: SweepSession | null = null;
+  // 整行拖选会话（US1）：null=未在拖选；与 sweepSession 单指手势互斥，新建另一方时先清本方
+  private rowDrag: RowDragSession | null = null;
   // 边缘自动滚动器（FR-018）：拖选中手指进入列表可视区边缘带时驱动列表滚动续扫
   private edgeScroller: EdgeAutoScroller = new EdgeAutoScroller();
   // 进度广播退订句柄：aboutToDisappear 中调用，避免监听器累积
@@ -344,6 +346,7 @@ export struct HistorySheet {
 
   private exitSelectMode(): void {
     this.endSweep();
+    this.endRowDrag();
     this.selectMode.value = false;
     this.selectedKeys = new Set<string>();
   }
@@ -362,6 +365,8 @@ export struct HistorySheet {
     if (idx < 0) {
       return;
     }
+    // 整行拖选与扫选单指互斥：扫选起手即作废可能残留的整行会话
+    this.rowDrag = null;
     this.sweepSession = new SweepSession();
     this.sweepSession.begin(this.selectedKeys.has(bvid), idx,
       event.fingerList[0].globalY, this.historyScroller.currentOffset().yOffset);
@@ -409,8 +414,63 @@ export struct HistorySheet {
     this.sweepSession = null;
   }
 
-  private checkSweepEdge(globalY: number): void {
-    if (this.sweepSession === null) {
+  // 整行拖选（US1 D2）：长按完成翻转起点行并锁定画笔方向（原未选=加扫、原已选=减扫），
+  // 普通态长按同时进多选（翻转即预选）；bvid 实时查行号（LazyForEach 不取 index 闭包，
+  // 删除后键查找天然容忍行号漂移）；会话重建即取代可能残留的扫选会话
+  private beginRowDrag(bvid: string, event: GestureEvent): void {
+    let idx: number = -1;
+    for (let i = 0; i < this.historyRows.length; i++) {
+      if (this.historyRows[i].bvid === bvid) {
+        idx = i;
+        break;
+      }
+    }
+    if (idx < 0) {
+      return;
+    }
+    const snapshot: Set<string> = new Set<string>(this.selectedKeys);
+    const paintAdd: boolean = !snapshot.has(bvid);
+    if (!this.selectMode.value) {
+      this.enterSelectMode();
+    }
+    this.selectedKeys = SelectLogic.toggle(snapshot, bvid);
+    this.endSweep();
+    this.rowDrag = new RowDragSession(
+      (i: number): string => this.rowKeyAt(i),
+      (s: Set<string>): void => {
+        this.selectedKeys = s;
+      }
+    );
+    this.rowDrag.begin(idx, paintAdd, snapshot,
+      event.fingerList[0].globalY, this.historyScroller.currentOffset().yOffset);
+  }
+
+  private rowKeyAt(i: number): string {
+    if (i < 0 || i >= this.historyRows.length) {
+      return '';
+    }
+    return this.historyRows[i].bvid;
+  }
+
+  private updateRowDrag(globalY: number): void {
+    if (this.rowDrag === null) {
+      return;
+    }
+    const delta: number = this.rowDrag.delta(globalY, this.historyScroller.currentOffset().yOffset);
+    const start: number = this.rowDrag.getStartIndex();
+    const target: number = Math.max(0, Math.min(this.historyRows.length - 1,
+      start + Math.round(delta / HISTORY_SWEEP_STEP)));
+    this.rowDrag.applyAt(target);
+  }
+
+  private endRowDrag(): void {
+    this.edgeScroller.stop();
+    this.rowDrag = null;
+  }
+
+  // 拖选/扫选共用边缘带检查：任一会话活跃即驱动对应方向自动滚动
+  private checkEdge(globalY: number): void {
+    if (this.sweepSession === null && this.rowDrag === null) {
       return;
     }
     const rect: componentUtils.ComponentInfo =
@@ -426,10 +486,22 @@ export struct HistorySheet {
     }
   }
 
+  // 尽头检测（US1 FR-003）：顶部零偏移、底部 isAtEnd，到尽头停滚清理
+  private edgeAtEnd(downward: boolean): boolean {
+    if (downward) {
+      return this.historyScroller.isAtEnd();
+    }
+    return this.historyScroller.currentOffset().yOffset <= 0;
+  }
+
   private startEdgeScroll(downward: boolean): void {
     this.edgeScroller.start(this.historyScroller, downward, (): void => {
-      this.updateSweep(this.sweepSession === null ? 0 : this.sweepSession.getLastGlobalY());
-    });
+      if (this.rowDrag !== null) {
+        this.updateRowDrag(this.rowDrag.getLastGlobalY());
+      } else {
+        this.updateSweep(this.sweepSession === null ? 0 : this.sweepSession.getLastGlobalY());
+      }
+    }, (down: boolean): boolean => this.edgeAtEnd(down));
   }
 
   // 进出多选统一动画入口（FR-006）：行首勾选框宽度/透明度与头部双态随同一 animateTo 翻转
@@ -645,7 +717,7 @@ export struct HistorySheet {
                         const globalY: number = event.fingerList.length > 0
                           ? event.fingerList[0].globalY : this.sweepSession.getLastGlobalY();
                         this.updateSweep(globalY);
-                        this.checkSweepEdge(globalY);
+                        this.checkEdge(globalY);
                       })
                       .onActionEnd((): void => {
                         this.endSweep();
@@ -693,15 +765,40 @@ export struct HistorySheet {
                     this.replayHistory(row.latest);
                   }
                 })
+                // 整行拖选（US1 D2）：Sequence(长按→拖) 常挂两态——普通竖滑未长按不触发归列表滚动；
+                // 长按翻转起点行进多选/切选，随后拖动区间涂刷（双向画笔）；
+                // 长按事件取不到触点时回退纯多选预选（不建会话）
                 .gesture(
-                  LongPressGesture()
-                    .onAction(() => {
-                      this.longPressGuard.arm();
-                      if (!this.selectMode.value) {
-                        this.enterSelectMode();
-                        this.selectedKeys = new Set<string>([row.bvid]);
-                      }
-                    })
+                  GestureGroup(GestureMode.Sequence,
+                    LongPressGesture()
+                      .onAction((event?: GestureEvent) => {
+                        this.longPressGuard.arm();
+                        if (event === undefined || event.fingerList.length === 0) {
+                          if (!this.selectMode.value) {
+                            this.enterSelectMode();
+                            this.selectedKeys = new Set<string>([row.bvid]);
+                          }
+                          return;
+                        }
+                        this.beginRowDrag(row.bvid, event);
+                      }),
+                    PanGesture({ fingers: 1, direction: PanDirection.Vertical })
+                      .onActionUpdate((event: GestureEvent): void => {
+                        if (this.rowDrag === null) {
+                          return;
+                        }
+                        const globalY: number = event.fingerList.length > 0
+                          ? event.fingerList[0].globalY : this.rowDrag.getLastGlobalY();
+                        this.updateRowDrag(globalY);
+                        this.checkEdge(globalY);
+                      })
+                      .onActionEnd((): void => {
+                        this.endRowDrag();
+                      })
+                      .onActionCancel((): void => {
+                        this.endRowDrag();
+                      })
+                  )
                 )
               }
               // 左滑删除（US1 双触发，US6 bvid 级）：SwipeActionItem——点垃圾桶/滑过阈值均进确认弹窗；
@@ -717,6 +814,16 @@ export struct HistorySheet {
                 }
               })
             }, (row: HistoryRow) => `${row.bvid}_${row.latest.viewAt}`)
+            // 容量尾注（US7 FR-017）：列表非空恒显（空态走外层分支不渲染本 List）、不可交互、
+            // 多选/删除后仍居队尾；N 动态引用 HISTORY_MAX（上限同源）；contentEndOffset 保证可完整滚出渐隐带
+            ListItem() {
+              Text(`仅保留最近 ${Constants.HISTORY_MAX} 条播放记录`)
+                .fontSize(Constants.TOKEN_FONT_BODY_S)
+                .fontColor($r('app.color.text_disabled'))
+                .width('100%')
+                .textAlign(TextAlign.Center)
+                .padding({ top: Constants.TOKEN_SPACE_L, bottom: Constants.TOKEN_SPACE_L })
+            }
           }
           .width('100%')
           .height('100%')

@@ -16,9 +16,9 @@ B 站 API 探索唯一沉淀点。三段式：§1 本项目（BiliRadio）在用
 | `GET api.bilibili.com/x/web-interface/nav` | 登录态校验 + WBI 密钥源 | 匿名需 buvid cookie | 签名钥在 `data.wbi_img`（属性名非 `wbi`）；匿名返回需 buvid cookie + Referer `https://www.bilibili.com/`；未登录时 `data` 非空、wbi_img 仍在 |
 | `GET api.bilibili.com/x/frontend/finger/spi` | buvid3/buvid4 设备指纹 | 匿名 | `BiliSession` 暖场用 |
 | `POST api.bilibili.com/x/internal/gaia-gateway/ExClimbWuzhi` | 风控激活 | 匿名 | buvid 激活后才可过部分风控；`Constants.BILI_EXCLIMB_WUZHI_URL`，复刻验证 code 0 |
-| `GET app.bilibili.com/x/v2/space/archive/cursor` | UP 投稿列表 APP 签名链（主链） | TV appkey APP 签名 + BiliDroid UA | 无 cookie/WBI 依赖；响应 `data.list.vlist` 与 `data.item` 双形状共用解析；翻页 `aid`=列表末条（int64）+ `has_next` 门控，响应已无 `data.next`；顶层 `data.count`=投稿总数（页头「N 集」真值来源） |
-| `GET api.bilibili.com/x/space/wbi/arc/search` | UP 投稿 Web 补稠链（首选） | WBI 签名 + buvid cookie + space 头 | 与网页/PiliPlus 同源的完整数据端点；APP 签名链失败粘性降级至此 |
-| `GET api.bilibili.com/x/space/arc/search` | UP plain 端点（降级兜底） | 无签名 | WBI 被风控时兜底；实测数据完整性次于 WBI（部分条目不下发） |
+| `GET app.bilibili.com/x/v2/space/archive/cursor` | UP 投稿列表 APP 签名链（主链） | TV appkey APP 签名 + BiliDroid UA | 无 cookie/WBI 依赖；响应 `data.list.vlist` 与 `data.item` 双形状共用解析；翻页 `aid`=列表末条（int64）+ `has_next` 门控，响应已无 `data.next`；顶层 `data.count`=投稿总数（页头「N 集」真值来源，计入充电稿）；列表不下发充电条目（§3.2） |
+| `GET api.bilibili.com/x/space/wbi/arc/search` | UP 投稿 Web 补稠链（首选） | WBI 签名 + buvid cookie + space 头 | 与网页/PiliPlus 同源的完整数据端点；APP 签名链失败粘性降级至此；vlist 唯一下发充电专属条目（`is_charging_arc`/`elec_arc_type`/`elec_arc_badge`，§3.2），`special_type=charging` 可单拉充电列表 |
+| `GET api.bilibili.com/x/space/arc/search` | UP plain 端点（降级兜底） | 无签名 | WBI 被风控时兜底；实测数据完整性次于 WBI（部分条目不下发）；充电条目被过滤不下发（§3.2） |
 | `GET api.bilibili.com/x/space/wbi/acc/info` | UP 主信息 | WBI 签名 | `-352` 频发：最多 3 轮「WBI acc/info → card 兜底」，轮间重置 buvid 指数退避 |
 | `GET api.bilibili.com/x/web-interface/card` | UP 信息兜底 | WBI 签名 | acc/info 风控失败后的降级 |
 | `GET api.bilibili.com/x/v3/fav/folder/created/list-all` | 收藏夹列表 | 登录 Cookie | AddSubscriptionSheet |
@@ -46,6 +46,7 @@ B 站 API 探索唯一沉淀点。三段式：§1 本项目（BiliRadio）在用
 - **密集请求风控会升级**（412 → 352 → 403/799 梯度，见 §2.3 实验 8）：实测脚本请求间隔 ≥3s；各端点风控强度不同，`view` 最松、`space` 最严。
 - **分 P：顶层 `cid` 永远等于 P1 的 cid**，取哪一 P 只能读 `pages[].cid` 或用户指定的 `?p=N`（§2.3 实验 19）。
 - **列表源字段名各不相同**，勿写一条回落链硬套（§2.3 实验 20）。
+- **充电专属稿件只在 WBI `arc/search` vlist 下发**（§3.2）：判定只认明确 True/非 0——Web 链 `is_charging_arc`/`elec_arc_type`（充电条目无 `ugc_pay`/`is_ugcpay`，缺失不计入）、APP 链 `ugc_pay`/`is_ugcpay`，合集/系列仅 `ugc_pay`，收藏夹无字段不判；plain 端点与 APP cursor 链均漏发充电条目；角标仅提示不拦截点击，禁列表逐条拉 `view` 详情补偿（必吃风控）。
 - **登录态下 `data` 可能为 null**（如 nav 未登录回 `-101`），解析必须判空兜底（§2.2 速查表）。
 
 ## §2 biliRelay API 探索迁移
@@ -384,3 +385,22 @@ csrf 用**新** bili_jct。落盘前必须 nav 验证（本项目现有事务）
 
 - 匿名 `nav` 接口仅在带 buvid cookie + Referer 时返回 `wbi_img` 签名钥（裸请求 `data` 为 null）。
 - APP cursor 翻页：响应已无 `data.next`，翻页靠 `aid` 参数（上一页末条 `param`）+ `has_next` 判断；本项目 `fetchUpVideosViaApp` 的 aid/next 双参容错写法兼容现状。
+
+### 3.2 WBI vlist 充电专属条目实测（探针轮）
+
+**探针**：浏览器侧（小约翰可汗 mid=23947287），报告 `../wbi-charging-probe-report.md`（仓库外）；应用侧（本项目 WBI 请求）放行未验证。
+
+- WBI `x/space/wbi/arc/search` vlist 首页 40 条含 16 条充电专属；目标稿 BV12RYx6TE9r「告别伊玛目 伊朗篇（终）」即真序列第 3 位充电稿（非「两条之间另夹一条」）。
+- 充电条目字段：`is_charging_arc: true`、`elec_arc_type: 1`、`elec_arc_badge: "充电专属"`；**无** `ugc_pay`/`is_ugcpay` 字段（缺失非 0）——四字段判据（undefined 不计入）仍安全，实际起作用的是 `is_charging_arc` + `elec_arc_type`。
+- 旁路 `special_type=charging`：16/16 全 true、`page.count=16`，单页拉全（PiliPlus `searchArchive` 同参，网页空间页「充电专属」筛选即它）。
+- plain `x/space/arc/search` vlist 不含充电条目（数据被过滤，非风控）；APP cursor 链 `data.count` 计入充电稿但列表不下发。
+- 本项目落地：代码按失效安全还原——WBI 被拦时 plain 兜底数据本就不含充电条目，「充电」角标不出现，无行为回归；功能性验证待应用侧 WBI 放行。
+
+### 3.3 应用侧 WBI/plain 端点真机状态（US8 还原后验证轮）
+
+**探针**：真机登录态（无线调试设备），应用内调试模式 hilog；刷新小约翰可汗订阅触发 `fetchUpVideosViaWeb` 三轮循环。
+
+- WBI `x/space/wbi/arc/search`：3 轮均 `-403`——应用侧风控未放行（请求形状与 PiliPlus 对齐后无变化，维持「差异在设备级指纹评分」结论）。
+- plain `x/space/arc/search`：3 轮均 `-799`（请求被拦截）——**较 2026-10-16 模拟器登录态「第 1 轮即 200」为新变化**；plain 兜底在该真机环境不可用，UP Web 双链全断。
+- APP 签名链 `app.bilibili.com/x/v2/space/archive/cursor`：成功（count=20、续游标=true），继续承担供数；充电稿维持 count 计入、列表不下发。
+- 结论：充电角标维持失效安全未显示（既定登记状态，非缺陷）；WBI 放行前 US8 功能性验收继续悬置。

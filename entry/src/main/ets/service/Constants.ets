@@ -82,7 +82,7 @@ export class Constants {
     ['#FB7299', '#4C8DFF', '#9C6BFF', '#2EC8B4', '#FF9F43', '#5FBF6B'];
 
   // —— 魔法数字 ——
-  static readonly HISTORY_MAX: number = 200;
+  static readonly HISTORY_MAX: number = 300;
   static readonly PROGRESS_SAVE_INTERVAL_MS: number = 5000;
   // 完播阈值（play-history-progress FR-003/FR-004）：进度 ≥ 时长×该比例视为已听完（progress=-1），不暴露为设置
   static readonly PLAY_COMPLETE_RATIO: number = 0.95;
@@ -214,6 +214,9 @@ export class Constants {
   static readonly DIALOG_MARK_WATCHED_TITLE: string = '标记已看完';
   static readonly DIALOG_MARK_WATCHED_MSG: string = '确定标记 N 集为已看完吗？';
   static readonly TOAST_MARK_WATCHED: string = '已标记 N 集为已看完';
+  // —— 播放出错提醒（US6）：同一 bvid+阶段时间窗内去重（仅广播提醒去重，日志恒记）与 toast 文案 ——
+  static readonly PLAYBACK_ERROR_DEDUP_MS: number = 3000;
+  static readonly TOAST_PLAYBACK_ERROR: string = '播放出错，请稍后重试';
   // —— 关于页外链二次确认（v0.4-Part1-ux-fixes US7）：确认后 openLink 拉起系统浏览器 ——
   static readonly DIALOG_OPEN_LINK_TITLE: string = '跳转到外部浏览器？';
   // —— 队列空态引导（queue-redesign US1） ——

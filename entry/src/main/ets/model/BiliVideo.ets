@@ -17,6 +17,7 @@ export class BiliVideo {
   @Trace page: number = 0;
   @Trace partTitle: string = '';
   @Trace videoTitle: string = '';
+  @Trace isUpowerExclusive: boolean = false;
 
   static create(bvid: string, aid: number, cid: number, title: string, cover: string, duration: number): BiliVideo {
     const v = new BiliVideo();
@@ -48,6 +49,7 @@ export class BiliVideo {
       'page': this.page,
       'partTitle': this.partTitle,
       'videoTitle': this.videoTitle,
+      'isUpowerExclusive': this.isUpowerExclusive,
     };
     return rec;
   }
@@ -104,6 +106,9 @@ export class BiliVideo {
     }
     if (rec['videoTitle'] !== undefined) {
       v.videoTitle = rec['videoTitle'] as string;
+    }
+    if (rec['isUpowerExclusive'] !== undefined) {
+      v.isUpowerExclusive = rec['isUpowerExclusive'] as boolean;
     }
     if (v.videoTitle === '') {
       v.videoTitle = v.title;
