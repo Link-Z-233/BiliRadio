@@ -3,11 +3,11 @@ import { BiliSession } from '../service/BiliSession';
 import { SecureStore } from '../service/SecureStore';
 import { PlayerController } from '../service/PlayerController';
 import { QrCode, QrEcc } from '../service/QrCode';
+import { AppContext } from '../service/AppContext';
 import { AppStore } from '../service/AppStore';
 import { Appearance } from '../service/Appearance';
 import { BusinessError } from '@kit.BasicServicesKit';
-import { common, OpenLinkOptions, bundleManager } from '@kit.AbilityKit';
-import { componentSnapshot, promptAction } from '@kit.ArkUI';
+import { OpenLinkOptions, bundleManager } from '@kit.AbilityKit';
 import { image } from '@kit.ImageKit';
 import { photoAccessHelper } from '@kit.MediaLibraryKit';
 import { fileIo as fs } from '@kit.CoreFileKit';
@@ -185,17 +185,17 @@ export struct SettingsPage {
     }
     this.tapCount = 0;
     if (Logger.debugEnabled) {
-      promptAction.showToast({ message: '调试模式已开启，可在下方开关关闭' });
+      this.getUIContext().getPromptAction().showToast({ message: '调试模式已开启，可在下方开关关闭' });
       return;
     }
     Logger.setDebugMode(true);
     AppStore.putNumber(Constants.KEY_DEBUG_MODE, 1);
     this.debugModeOn = true;
-    promptAction.showToast({ message: '已开启调试模式' });
+    this.getUIContext().getPromptAction().showToast({ message: '已开启调试模式' });
   }
 
   private confirmExitDebug(): void {
-    AlertDialog.show({
+    this.getUIContext().showAlertDialog({
       title: '退出调试模式',
       message: '确定退出调试模式吗？关闭后日志将不再写入系统日志。',
       autoCancel: true,
@@ -206,7 +206,7 @@ export struct SettingsPage {
           Logger.setDebugMode(false);
           AppStore.putNumber(Constants.KEY_DEBUG_MODE, 0);
           this.debugModeOn = false;
-          promptAction.showToast({ message: '已退出调试模式' });
+          this.getUIContext().getPromptAction().showToast({ message: '已退出调试模式' });
         }
       },
       secondaryButton: {
@@ -228,8 +228,8 @@ export struct SettingsPage {
 
   // 外链统一跳转（US7）：四链接复用——二次确认后 openLink 拉起系统浏览器，失败 toast
   private confirmOpenLink(url: string): void {
-    const ctx = getContext(this) as common.UIAbilityContext;
-    AlertDialog.show({
+    const ctx = AppContext.require();
+    this.getUIContext().showAlertDialog({
       title: Constants.DIALOG_OPEN_LINK_TITLE,
       message: url,
       autoCancel: true,
@@ -240,7 +240,7 @@ export struct SettingsPage {
         action: (): void => {
           const opts: OpenLinkOptions = { appLinkingOnly: false };
           ctx.openLink(url, opts).catch((error: BusinessError) => {
-            promptAction.showToast({ message: '打开链接失败' });
+            this.getUIContext().getPromptAction().showToast({ message: '打开链接失败' });
           });
         }
       },
@@ -348,7 +348,7 @@ export struct SettingsPage {
     if (!this.qrReady()) {
       return false;
     }
-    const ctx = getContext(this) as common.UIAbilityContext;
+    const ctx = AppContext.require();
     const options: OpenLinkOptions = { appLinkingOnly: false };
     const deepLink: string = `bilibili://browser/?url=${encodeURIComponent(this.qrUrl)}`;
     let opened: boolean = false;
@@ -423,9 +423,9 @@ export struct SettingsPage {
       return;
     }
     try {
-      const pixelMap: image.PixelMap = await componentSnapshot.get('bili_qr_canvas');
+      const pixelMap: image.PixelMap = await this.getUIContext().getComponentSnapshot().get('bili_qr_canvas');
       const helper: photoAccessHelper.PhotoAccessHelper =
-        photoAccessHelper.getPhotoAccessHelper(getContext(this));
+        photoAccessHelper.getPhotoAccessHelper(AppContext.require());
       const uri: string = await helper.createAsset(photoAccessHelper.PhotoType.IMAGE, 'png');
       const file: fs.File = await fs.open(uri, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE);
       const packer: image.ImagePacker = image.createImagePacker();
@@ -491,7 +491,7 @@ export struct SettingsPage {
 
   // US7/FR-016：登出二次确认，取消不登出；确认后 logout 首行 stopPoll 停止轮询中的登录流程
   private confirmLogout(): void {
-    AlertDialog.show({
+    this.getUIContext().showAlertDialog({
       title: '退出登录',
       message: '确定退出当前 B 站账号吗？',
       autoCancel: true,
@@ -525,7 +525,7 @@ export struct SettingsPage {
       return;
     }
     // 立即生效：Appearance 内部完成持久化（key: colorMode）、应用层 setColorMode 与窗口层颜色重设
-    Appearance.setUserMode(mode, getContext());
+    Appearance.setUserMode(mode, AppContext.require());
   }
 
   // 外观三选项分段按钮：当前生效项强调色淡底高亮
@@ -551,7 +551,7 @@ export struct SettingsPage {
       return;
     }
     // 立即生效：Appearance 内部完成持久化并写入 AppStorage('accentColor') 驱动全 UI 刷新
-    Appearance.setAccentColor(color, getContext(this));
+    Appearance.setAccentColor(color, AppContext.require());
   }
 
   // 主题色色板圆点：选中项外圈描边高亮

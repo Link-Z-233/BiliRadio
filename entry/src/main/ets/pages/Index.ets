@@ -10,7 +10,7 @@ import { GlassSheet } from '../component/GlassSheet';
 import { QueueSheet } from '../component/QueueSheet';
 import { HistorySheet } from '../component/HistorySheet';
 import { MiniPlayer } from '../component/MiniPlayer';
-import { mediaquery, promptAction } from '@kit.ArkUI';
+import { mediaquery } from '@kit.ArkUI';
 import { Constants } from '../service/Constants';
 import { Logger } from '../service/Logger';
 import { AppStore } from '../service/AppStore';
@@ -35,7 +35,7 @@ struct Index {
   private lastErrorTick: number = 0;
 
   aboutToAppear(): void {
-    this.wideListener = mediaquery.matchMediaSync('(min-width: 600vp)');
+    this.wideListener = this.getUIContext().getMediaQuery().matchMediaSync('(min-width: 600vp)');
     this.isWideScreen.value = false;
     this.wideListener.on('change', (result: mediaquery.MediaQueryResult): void => {
       this.isWideScreen.value = result.matches;
@@ -43,7 +43,7 @@ struct Index {
     const controller: PlayerController = PlayerController.getInstance();
     controller.confirmCellularDownload = (): Promise<boolean> => {
       return new Promise<boolean>((resolve) => {
-        AlertDialog.show({
+        this.getUIContext().showAlertDialog({
           title: '非 Wi-Fi 网络',
           message: '当前非 Wi-Fi 网络，在线播放会消耗流量，是否继续？',
           autoCancel: true,
@@ -73,7 +73,7 @@ struct Index {
     this.unsubPlayer = controller.subscribe((): void => {
       if (controller.errorTick !== this.lastErrorTick) {
         this.lastErrorTick = controller.errorTick;
-        promptAction.showToast({ message: Constants.TOAST_PLAYBACK_ERROR });
+        this.getUIContext().getPromptAction().showToast({ message: Constants.TOAST_PLAYBACK_ERROR });
       }
     }, 'Index');
     controller.init().then((): void => {
@@ -82,13 +82,13 @@ struct Index {
       const storedDebug: boolean = AppStore.getNumber(Constants.KEY_DEBUG_MODE, 0) === 1;
       Logger.setDebugMode(storedDebug);
       if (storedDebug) {
-        promptAction.showToast({ message: '调试模式运行中' });
+        this.getUIContext().getPromptAction().showToast({ message: '调试模式运行中' });
       }
     });
     GripDetector.start();
     // 睡眠定时归零后的提醒弹窗：关闭仅收起弹窗，重置用刚才时长重新倒计时
     SleepTimerController.getInstance().onTimerExpired = (): void => {
-      AlertDialog.show({
+      this.getUIContext().showAlertDialog({
         title: '定时关闭',
         message: '计时已结束，已暂停播放',
         autoCancel: true,

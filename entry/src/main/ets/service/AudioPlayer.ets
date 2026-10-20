@@ -128,7 +128,6 @@ export class AudioPlayer {
     const player: media.AVPlayer = await media.createAVPlayer();
     this.avPlayer = player;
     player.audioRendererInfo = {
-      content: audio.ContentType.CONTENT_TYPE_MUSIC,
       usage: audio.StreamUsage.STREAM_USAGE_MUSIC,
       rendererFlags: 0
     };

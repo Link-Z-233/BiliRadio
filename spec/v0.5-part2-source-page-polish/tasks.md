@@ -28,7 +28,7 @@
 ## Phase 2: Foundational（阻塞前置）
 
 - [X] T004 `Constants` 新增 `SOURCE_HEADER_H = 56` 令牌（页头等高基准，收敛现有 56 裸数字），落在 `entry/src/main/ets/service/Constants.ets`
-- [X] T005 `BiliVideo` 新增 `isUpowerExclusive: boolean = false` 字段（`@Trace`），`toRecord`/`fromRecord` 同步增 `'isUpowerExclusive'` 键（`fromRecord` 缺省 false 兼容旧缓存），落在 `entry/src/main/ets/model/BiliVideo.ets`
+- [X] T005（已移出：见 spec/charging-archive.md）
 
 ---
 
@@ -70,15 +70,7 @@
 
 ---
 
-## Phase 6: User Story 4 - 充电视频标记（实测定夺） (Priority: P2)
-
-**Goal**: 实测四类链路接口 → 带标记字段则解析+角标，不带则降级不实施
-**Independent Test**: 实测结论留档 `BILI_API.md` §3；携带链路列表显示「充电」角标
-
-- [X] T014 [US4] 充电标记实测：用真实订阅数据（覆盖 UP APP 签名链/UP Web 链/收藏夹/合集/系列）请求列表接口，记录各链返回是否携带充电标记字段（候选：`rights.is_upower_exclusive`、`is_charging_arc`、`ugc_pay` 等）及字段名，结论写入 `BILI_API.md` §3（首条记录）
-- [X] T015 [US4] 按实测结论分叉：携带标记的链在对应解析点（`parseArchiveRecords`/`parseVlistRecords`/`parseFolderMedias`，`entry/src/main/ets/service/BiliService.ets`）解析字段写入 `isUpowerExclusive`，`SourcePage` 剧集行渲染「充电」角标（样式与 NEW 徽标同档）；**若全部链实测不携带**：移除 T005 增量字段与解析代码，在 `BILI_API.md` §3 记录「列表接口不支持，需求降级不实施」
-
-**Checkpoint**: 带/不带角标与实测结论一一对应，无猜测性实现，结论留档
+## Phase 6: User Story 4 - 充电视频标记（实测定夺） (Priority: P2)（已移出：见 spec/charging-archive.md）
 
 ---
 
@@ -122,7 +114,7 @@
 
 - [X] T023 构建项目并修复编译错误：对本轮涉改 `.ets` 文件先跑 `arkts_check` 预检，通过后 `devecocli build`，迭代修复直至成功
 - [X] T024 部署应用到设备/模拟器：`devecocli run --skip-build`
-- [X] T025 UI 验证：对已部署应用按用户故事逐条走查（verify_ui），覆盖顶栏菜单、多选批量入队、页头滚动收起、等高与留白、充电角标（如实施）
+- [X] T025 UI 验证：对已部署应用按用户故事逐条走查（verify_ui），覆盖顶栏菜单、多选批量入队、页头滚动收起、等高与留白
 
 ---
 
@@ -148,7 +140,6 @@
 - **User Stories（Phase 3-8）**: 依赖 Foundational 完成
   - 页面线（US1→US2→US3→US5）同文件须严格按序
   - 文档线（US6）与页面线并行，仅 T020 需 T014/T018/T019 齐备
-  - US4 实测（T014）可与页面线并行，T015 依赖 T005+T014
 - **Polish（Phase 9）**: 依赖全部用户故事完成
 - **Verification（Phase 10）**: 依赖 Polish 完成
 
@@ -157,7 +148,6 @@
 - **US1（P1）**: Foundational 后即开始——页面骨架，阻塞 US2/US3/US5（同文件）
 - **US2（P2→P1）**: 依赖 US1 顶栏结构
 - **US3（P2）**: 依赖 US1；页头迁位后 US5 在其上叠加
-- **US4（P2）**: 仅依赖 T005 字段与 T014 实测，可与页面线并行
 - **US5（P3）**: 依赖 US3 页头迁位完成
 - **US6（P1）**: 独立文档线，与页面线并行；T020 收口需 T014 结论
 
@@ -170,7 +160,6 @@
 
 - T002/T003（三文件互不相交）可与 T001 并行
 - 文档线 T018/T019 与页面线全程并行
-- T014 网络实测与页面线并行
 
 ## Parallel Example
 
@@ -197,7 +186,7 @@ Task: T003 注释同步 B（SettingsPage.ets）
 
 1. Setup + Foundational → 基础就绪
 2. US1 → US2 → MVP 验证
-3. US3 页头滚动 → US4 充电实测分叉 → US5 等高留白 → 逐项验证
+3. US3 页头滚动 → US5 等高留白 → 逐项验证
 4. US6 文档线全程穿插（T018/T019 随时可做，T020 收口）
 5. Polish 自查（T021/T022）→ Verification（T023-T025）
 
@@ -210,7 +199,5 @@ Task: T003 注释同步 B（SettingsPage.ets）
 
 ## Notes
 
-- [P] 任务 = 不同文件、无依赖；同文件任务一律按序
-- T014 实测请求注意风控冷却（间隔 ≥3s，勿密集打点；对照 biliRelay 排查手册 §4）
-- T015 是条件分叉任务：实测结论决定「解析+角标」或「降级移除」，两分支互斥
+- [P] 任务 = 不同文件、无未完成依赖；同文件任务一律按序
 - Verification 范围为 build+ui（用户在本轮显式指定），UI 验证按用户故事逐条走查

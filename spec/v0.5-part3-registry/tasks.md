@@ -1,6 +1,6 @@
 # Tasks: v0.5-part3（订阅详情交互打磨 + 反馈完善与登记）
 
-**Input**: Design documents from `spec/v0.5-part3-registry/`（spec.md / plan.md / charging-archive.md）
+**Input**: Design documents from `spec/v0.5-part3-registry/`（spec.md / plan.md / spec/charging-archive.md）
 **Prerequisites**: plan.md（required）、spec.md（required）——均已在位
 **Tests**: 未要求测试任务，不含。
 
@@ -75,15 +75,7 @@
 - [X] T014 [P] [US7] Constants HISTORY_MAX 200→300（共享常量一升俱升，不拆分）— entry/src/main/ets/service/Constants.ets
 - [X] T015 [US7] HistorySheet 列表尾容量提示行（居中小字「仅保留最近 N 条播放记录」N 动态引用 HISTORY_MAX；不可交互、空态不渲染、多选/删除后仍居队尾、位于面板底部渐隐带之上）— entry/src/main/ets/component/HistorySheet.ets
 
-## Phase 8: US8 - 充电视频 (Priority: P3，探针门控组)
-
-**Goal**: WBI 放行则充电稿入列带角标；未放行整组跳过不阻塞
-**Independent Test**: 探针放行时验证小约翰可汗真序列第 3 位充电稿带角标
-
-- [X] T016 [US8] 探针门控判定：仅当实施前用户明确提供「WBI 已放行」探针结果才执行 T017-T018（探针方法与恢复路线见 spec/v0.5-part3-registry/charging-archive.md §5）
-  - 判定：首轮无探针结果 → T017/T018 跳过；后续探针报告（浏览器侧 WBI 数据面放行，应用侧未验证，见 charging-archive.md §2.4）经用户决策「直接启动还原」→ T017/T018 已执行勾选（还原失效安全：WBI 未放行时 plain 兜底无充电条目，无行为回归）
-- [X] T017 [US8] 模型与解析还原（BiliVideo isUpowerExclusive 字段与 toRecord/fromRecord 键、BiliService 双判定块，逐字还原 charging-archive.md §7.1-§7.3）— entry/src/main/ets/model/BiliVideo.ets、entry/src/main/ets/service/BiliService.ets
-- [X] T018 [US8] 角标渲染与色彩还原（SourcePage「充电」角标块与 margin 让位 §7.4、gold_accent 资源 §7.5）— entry/src/main/ets/pages/SourcePage.ets、entry/src/main/resources/base/element/color.json、entry/src/main/resources/dark/element/color.json
+## Phase 8: US8 - 充电视频 (Priority: P3，探针门控组)（已移出：见 spec/charging-archive.md）
 
 ## Phase 9: Polish（跨故事清账）
 
@@ -113,8 +105,6 @@ graph TD
   T011 --> T012
   T011 --> T013
   T014 --> T015
-  T016 --> T017
-  T017 --> T018
   T005 --> T020
   T007 --> T020
   T008 --> T020
@@ -135,7 +125,6 @@ graph TD
 | US4/US7 令牌与模型 | T006 ∥ T014 | Subscription.ets ∥ Constants.ets | 跨故事不同文件可并行 |
 | US3/US5 页面组 | T007→T008→T009 | SourcePage.ets（+AddSubscriptionSheet.ets） | 同文件顺序执行：displayTitle 先行供页头使用 |
 | US6 错误链 | T010→T011→T012∥T013 | Constants→PlayerController→(AudioPlayer/BiliService)∥Index | 入口先行，接线与消费可并行 |
-| US8 门控组 | T016→T017→T018 | 存档还原 | 默认跳过；放行才执行 |
 | 验证 | T020→T021 | — | build-only |
 
 ## Dependencies & Execution Order
@@ -148,7 +137,6 @@ graph TD
 - **US3/US5（Phase 4/5）**: 依赖 T006 的 displayTitle；同文件（SourcePage）任务顺序执行
 - **US6（Phase 6）**: Constants 令牌 → PlayerController 入口 → 接线与消费
 - **US7（Phase 7）**: 容量常量先行，尾注行随后
-- **US8（Phase 8）**: 探针门控默认跳过，放行才执行还原组
 - **Polish（Phase 9）**: 独立清账项，验证前完成
 - **Verification（Phase 10）**: 全部实施任务完成后执行
 
@@ -157,7 +145,6 @@ graph TD
 - **US1 (P1)**: 无跨故事依赖，MVP 独立可交付
 - **US3 (P2)**: 复用 US4 的 displayTitle（T006）——方法级依赖，非交付依赖
 - **US4/US5/US6/US7**: 相互独立
-- **US8**: 探针门控，独立于全部故事
 
 ## Parallel Example: 双宿主接入
 
@@ -183,7 +170,6 @@ Task: "T013 Index toast 消费 — entry/src/main/ets/pages/Index.ets"
 
 1. US1（MVP）→ US4 → US3 → US5 → US6 → US7 → Polish → 验证
 2. 每故事完成即独立可测，不破坏前序故事
-3. US8 探针门控组默认跳过，不阻塞任何故事
 
 ### 单轮全量建议
 
@@ -193,7 +179,6 @@ Task: "T013 Index toast 消费 — entry/src/main/ets/pages/Index.ets"
 
 - [P] 任务 = 不同文件、无未完成依赖；同文件任务一律顺序执行
 - [USx] 标签映射 spec.md 用户故事，可独立验收
-- US8 组任务未获探针结果时保持未勾选并在实施报告登记跳过原因
 - 令牌纪律：本轮所有新数值/文案只入 Constants；字号复用现有令牌阶梯（TOKEN_FONT_BODY/TOKEN_FONT_20/TOKEN_FONT_TITLE_L）
 - 任务统计：21 条（US1×5、US4×2、US3×1、US5×1、US6×4、US7×2、US8×3、Polish×1、验证×2）；并行机会：T003∥T004、T006∥T014、T012∥T013
 - 格式自检：全部任务 `- [ ]` + 顺序 ID + 文件路径 ✓；故事任务带 [USx]，Polish/验证无标签 ✓

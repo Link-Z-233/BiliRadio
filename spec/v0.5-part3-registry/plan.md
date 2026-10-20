@@ -4,7 +4,7 @@
 
 ## Summary
 
-两线合并轮：交互打磨线（US1 历史/订阅源整行拖选双向推广、US2 悬浮按钮左右进退与透明度动画、US3 页头信息改造、US4 合集·前缀剥除、US5 角标加大）+ 登记清账线（US6 播放出错提醒与日志、US7 历史容量 300 与尾注、US8 充电视频探针门控组）。技术路径：零新增文件——拖选逻辑并入既有 `SelectLogic.ets`（RowDragSession + EdgeAutoScroller 尽头检测），页头/按钮/角标为 `SourcePage.ets` 局部改动，错误提醒走 PlayerController 既有广播模式 + Index toast 消费，US8 为探针门控默认搁置组（放行才按 `charging-archive.md` 还原）。
+两线合并轮：交互打磨线（US1 历史/订阅源整行拖选双向推广、US2 悬浮按钮左右进退与透明度动画、US3 页头信息改造、US4 合集·前缀剥除、US5 角标加大）+ 登记清账线（US6 播放出错提醒与日志、US7 历史容量 300 与尾注）。技术路径：零新增文件——拖选逻辑并入既有 `SelectLogic.ets`（RowDragSession + EdgeAutoScroller 尽头检测），页头/按钮/角标为 `SourcePage.ets` 局部改动，错误提醒走 PlayerController 既有广播模式 + Index toast 消费。
 
 ## Technical Context
 
@@ -15,7 +15,7 @@
 **Testing**: 无自动化测试套件；arkts_check 静态预检 + devecocli build；真机目检由用户执行（验证范围默认 build-only）
 **Target Platform**: HarmonyOS NEXT（手机为主；平板宽屏随 FR-020 回归）
 **Performance Goals**: 拖选/边缘滚动不掉帧；行索引 O(n) 查表（n≤数百）可接受
-**Constraints**: Constants 唯一真相源（数值禁裸写）；禁 any/unknown/as；B 站风控红线（禁列表逐条拉详情补偿）；令牌替换数值不变观感
+**Constraints**: Constants 唯一真相源（数值禁裸写）；禁 any/unknown/as；令牌替换数值不变观感
 **Scale/Scope**: 订阅剧集数百行、播放历史 300 条上限
 
 ## Project Structure
@@ -26,7 +26,6 @@
 spec/v0.5-part3-registry/
 ├── spec.md               # 需求规格
 ├── plan.md               # 本文件
-├── charging-archive.md   # 充电问题集存档（US8 恢复唯一来源）
 └── tasks.md              # Phase 3 产出
 ```
 
@@ -43,12 +42,10 @@ entry/src/main/ets/
 ├── service/Constants.ets            # US6：去重窗口令牌与 toast 文案；US7：HISTORY_MAX 300；US2 若需距离令牌
 ├── service/PlayerController.ets     # US6：playbackError 统一入口（hilog + 去重 + 广播）
 ├── service/AudioPlayer.ets          # US6：错误回调接线
-├── service/BiliService.ets          # US6：取流错误路径上报；US8（条件）：充电判定还原
+├── service/BiliService.ets          # US6：取流错误路径上报
 ├── pages/Index.ets                  # US6：错误广播消费 → promptAction.showToast
 ├── model/Subscription.ets           # US4：displayTitle()（合集·剥除，展示层规范化）
-├── model/BiliVideo.ets              # US8（条件）：isUpowerExclusive 还原
 ├── pages/AddSubscriptionSheet.ets   # US4：条目标题展示改调 displayTitle
-entry/src/main/resources/base|dark/element/color.json  # US8（条件）：gold_accent
 ```
 
 **Structure Decision**: 沿用既有工程架构（pages/component/service/model 分层、单模块、V2 状态管理），不引入新层、不做 MVVM 迁移。US1 选择逻辑并入 part2 已立的 SelectLogic.ets（选择逻辑唯一宿主），页头/按钮为 SourcePage 局部改动，零新增文件保证最小 diff。
@@ -119,11 +116,7 @@ entry/src/main/resources/base|dark/element/color.json  # US8（条件）：gold_
 - **Rationale**: 共用无功能影响（跳转栈历史本就该同容量）；拆分徒增常量违省事原则
 - **Alternatives considered**: 拆 PLAY_HISTORY_MAX / JUMP_STACK_MAX（无实际差异）
 
-### D11 US8 充电 = 探针门控默认搁置组
-
-- **Decision**: US8 全组任务标记探针门控：探针（真机打开任一 UP 订阅详情刷新，观察 WBI 是否放行/有无 -403 降级日志）由用户执行；放行才按 charging-archive.md §7 逐字还原并验证，未执行/未放行整组跳过不阻塞轮次
-- **Rationale**: 探针需登录态真机环境，构建验证无法覆盖；风控未放行时代码还原无意义
-- **Alternatives considered**: 无条件还原（-403 下角标永不出现）；删除登记（用户要求保留条件项）
+### D11（已移出：见 spec/charging-archive.md）
 
 ### D12 FR-020 = 宽屏残骸摘除，滚动保护语义保留
 
@@ -138,7 +131,6 @@ entry/src/main/resources/base|dark/element/color.json  # US8（条件）：gold_
 - **Subscription.displayTitle()**: 实例方法，合集·前缀展示层剥除（FR-011）；模型零字段变更。
 - **播放错误事件（PlayerController 广播快照新增字段）**: stage（取流/准备/播放等阶段标识）、bvid、code、errorTick（版本计数）；瞬态不持久化。
 - **HISTORY_MAX**: 200→300（Constants:85，共享常量不拆，D10）。
-- **BiliVideo.isUpowerExclusive（条件，US8）**: @Trace 字段 + toRecord/fromRecord 键（charging-archive.md §7.1 逐字还原）。
 
 ## Contracts & Interfaces
 

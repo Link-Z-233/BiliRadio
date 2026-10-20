@@ -16,15 +16,15 @@ B 站 API 探索唯一沉淀点。三段式：§1 本项目（BiliRadio）在用
 | `GET api.bilibili.com/x/web-interface/nav` | 登录态校验 + WBI 密钥源 | 匿名需 buvid cookie | 签名钥在 `data.wbi_img`（属性名非 `wbi`）；匿名返回需 buvid cookie + Referer `https://www.bilibili.com/`；未登录时 `data` 非空、wbi_img 仍在 |
 | `GET api.bilibili.com/x/frontend/finger/spi` | buvid3/buvid4 设备指纹 | 匿名 | `BiliSession` 暖场用 |
 | `POST api.bilibili.com/x/internal/gaia-gateway/ExClimbWuzhi` | 风控激活 | 匿名 | buvid 激活后才可过部分风控；`Constants.BILI_EXCLIMB_WUZHI_URL`，复刻验证 code 0 |
-| `GET app.bilibili.com/x/v2/space/archive/cursor` | UP 投稿列表 APP 签名链（主链） | TV appkey APP 签名 + BiliDroid UA | 无 cookie/WBI 依赖；响应 `data.list.vlist` 与 `data.item` 双形状共用解析；翻页 `aid`=列表末条（int64）+ `has_next` 门控，响应已无 `data.next`；顶层 `data.count`=投稿总数（页头「N 集」真值来源，计入充电稿）；列表不下发充电条目（§3.2） |
-| `GET api.bilibili.com/x/space/wbi/arc/search` | UP 投稿 Web 补稠链（首选） | WBI 签名 + buvid cookie + space 头 | 与网页/PiliPlus 同源的完整数据端点；APP 签名链失败粘性降级至此；vlist 唯一下发充电专属条目（`is_charging_arc`/`elec_arc_type`/`elec_arc_badge`，§3.2），`special_type=charging` 可单拉充电列表 |
-| `GET api.bilibili.com/x/space/arc/search` | UP plain 端点（降级兜底） | 无签名 | WBI 被风控时兜底；实测数据完整性次于 WBI（部分条目不下发）；充电条目被过滤不下发（§3.2） |
+| `GET app.bilibili.com/x/v2/space/archive/cursor` | UP 投稿列表 APP 签名链（主链） | TV appkey APP 签名 + BiliDroid UA | 无 cookie/WBI 依赖；响应 `data.list.vlist` 与 `data.item` 双形状共用解析；翻页 `aid`=列表末条（int64）+ `has_next` 门控，响应已无 `data.next`；顶层 `data.count`=投稿总数（页头「N 集」真值来源）；条目 `length` 已置空串、时长在 `duration`（§3.5） |
+| `GET api.bilibili.com/x/space/wbi/arc/search` | UP 投稿 Web 补稠链（首选） | WBI 签名 + buvid cookie + space 头 | 与网页/PiliPlus 同源的完整数据端点；APP 签名链失败粘性降级至此 |
+| `GET api.bilibili.com/x/space/arc/search` | UP plain 端点（降级兜底） | 无签名 | WBI 被风控时兜底；实测数据完整性次于 WBI（部分条目不下发） |
 | `GET api.bilibili.com/x/space/wbi/acc/info` | UP 主信息 | WBI 签名 | `-352` 频发：最多 3 轮「WBI acc/info → card 兜底」，轮间重置 buvid 指数退避 |
 | `GET api.bilibili.com/x/web-interface/card` | UP 信息兜底 | WBI 签名 | acc/info 风控失败后的降级 |
 | `GET api.bilibili.com/x/v3/fav/folder/created/list-all` | 收藏夹列表 | 登录 Cookie | AddSubscriptionSheet |
 | `GET api.bilibili.com/x/v3/fav/resource/list` | 收藏夹条目 | 匿名可查公开夹 | 无 rights 类逐条权限字段，仅 `attr`(int) |
 | `POST api.bilibili.com/x/v3/fav/resource/deal` | 收藏/取消收藏 | 登录 Cookie + bili_jct | |
-| `GET api.bilibili.com/x/polymer/web-space/seasons_series_list` | 合集/系列列举 | **无需 WBI（带签名反致 -400，见 §3.2）** | 匿名裸请求 code=0 正常（2026-10 核查） |
+| `GET api.bilibili.com/x/polymer/web-space/seasons_series_list` | 合集/系列列举 | **无需 WBI（带签名反致 -400，见 §3.1）** | 匿名裸请求 code=0 正常（2026-10 核查） |
 | `GET api.bilibili.com/x/polymer/web-space/seasons_archives_list` | 合集条目 | 匿名 | `season_id` 单参数即可，meta 自带 mid/名称/总数 |
 | `GET api.bilibili.com/x/series/archives` | 系列条目 | 匿名 | |
 | `GET api.bilibili.com/x/series/series` | 系列 meta 反查 | 匿名 | `series_id` 反查 mid/名称/总数 |
@@ -46,7 +46,6 @@ B 站 API 探索唯一沉淀点。三段式：§1 本项目（BiliRadio）在用
 - **密集请求风控会升级**（412 → 352 → 403/799 梯度，见 §2.3 实验 8）：实测脚本请求间隔 ≥3s；各端点风控强度不同，`view` 最松、`space` 最严。
 - **分 P：顶层 `cid` 永远等于 P1 的 cid**，取哪一 P 只能读 `pages[].cid` 或用户指定的 `?p=N`（§2.3 实验 19）。
 - **列表源字段名各不相同**，勿写一条回落链硬套（§2.3 实验 20）。
-- **充电专属稿件只在 WBI `arc/search` vlist 下发**（§3.2）：判定只认明确 True/非 0——Web 链 `is_charging_arc`/`elec_arc_type`（充电条目无 `ugc_pay`/`is_ugcpay`，缺失不计入）、APP 链 `ugc_pay`/`is_ugcpay`，合集/系列仅 `ugc_pay`，收藏夹无字段不判；plain 端点与 APP cursor 链均漏发充电条目；角标仅提示不拦截点击，禁列表逐条拉 `view` 详情补偿（必吃风控）。
 - **登录态下 `data` 可能为 null**（如 nav 未登录回 `-101`），解析必须判空兜底（§2.2 速查表）。
 
 ## §2 biliRelay API 探索迁移
@@ -386,21 +385,51 @@ csrf 用**新** bili_jct。落盘前必须 nav 验证（本项目现有事务）
 - 匿名 `nav` 接口仅在带 buvid cookie + Referer 时返回 `wbi_img` 签名钥（裸请求 `data` 为 null）。
 - APP cursor 翻页：响应已无 `data.next`，翻页靠 `aid` 参数（上一页末条 `param`）+ `has_next` 判断；本项目 `fetchUpVideosViaApp` 的 aid/next 双参容错写法兼容现状。
 
-### 3.2 WBI vlist 充电专属条目实测（探针轮）
-
-**探针**：浏览器侧（小约翰可汗 mid=23947287），报告 `../wbi-charging-probe-report.md`（仓库外）；应用侧（本项目 WBI 请求）放行未验证。
-
-- WBI `x/space/wbi/arc/search` vlist 首页 40 条含 16 条充电专属；目标稿 BV12RYx6TE9r「告别伊玛目 伊朗篇（终）」即真序列第 3 位充电稿（非「两条之间另夹一条」）。
-- 充电条目字段：`is_charging_arc: true`、`elec_arc_type: 1`、`elec_arc_badge: "充电专属"`；**无** `ugc_pay`/`is_ugcpay` 字段（缺失非 0）——四字段判据（undefined 不计入）仍安全，实际起作用的是 `is_charging_arc` + `elec_arc_type`。
-- 旁路 `special_type=charging`：16/16 全 true、`page.count=16`，单页拉全（PiliPlus `searchArchive` 同参，网页空间页「充电专属」筛选即它）。
-- plain `x/space/arc/search` vlist 不含充电条目（数据被过滤，非风控）；APP cursor 链 `data.count` 计入充电稿但列表不下发。
-- 本项目落地：代码按失效安全还原——WBI 被拦时 plain 兜底数据本就不含充电条目，「充电」角标不出现，无行为回归；功能性验证待应用侧 WBI 放行。
-
-### 3.3 应用侧 WBI/plain 端点真机状态（US8 还原后验证轮）
+### 3.2 应用侧 WBI/plain 端点真机状态（还原后验证轮）
 
 **探针**：真机登录态（无线调试设备），应用内调试模式 hilog；刷新小约翰可汗订阅触发 `fetchUpVideosViaWeb` 三轮循环。
 
 - WBI `x/space/wbi/arc/search`：3 轮均 `-403`——应用侧风控未放行（请求形状与 PiliPlus 对齐后无变化，维持「差异在设备级指纹评分」结论）。
 - plain `x/space/arc/search`：3 轮均 `-799`（请求被拦截）——**较 2026-10-16 模拟器登录态「第 1 轮即 200」为新变化**；plain 兜底在该真机环境不可用，UP Web 双链全断。
-- APP 签名链 `app.bilibili.com/x/v2/space/archive/cursor`：成功（count=20、续游标=true），继续承担供数；充电稿维持 count 计入、列表不下发。
-- 结论：充电角标维持失效安全未显示（既定登记状态，非缺陷）；WBI 放行前 US8 功能性验收继续悬置。
+- APP 签名链 `app.bilibili.com/x/v2/space/archive/cursor`：成功（count=20、续游标=true），继续承担供数。
+
+### 3.3 rcp 与 @ohos.net.http 传输栈同源（v0.5-part4 US4 前置检查）
+
+**背景**：US4 过墙实验假设——WBI 换 `@kit.RemoteCommunicationKit` rcp 传输或可改变 B 站侧可见 TLS 指纹绕过客户端层拦截；前置检查判定两栈异同，同栈则换栈实验无意义、按门控跳过。
+
+**依据**（本机 SDK `.d.ts`，非公开文档转述）：
+
+- rcp（`sdk/default/hms/ets/api/@hms.collaboration.rcp.d.ts`）错误码为 libcurl CURLE 码 + 基座 `1007900000`，描述逐条对应 `curl_easy_strerror`：`1007900001` Unsupported protocol（CURLE 1）、`1007900003` URL using bad/illegal format（CURLE 3）、`1007900035` SSL connect error（CURLE 35）、`1007900047` Number of redirects hit maximum amount（CURLE 47）、`1007900060` SSL peer certificate or SSH remote key was not OK（CURLE 60）、`1007900077` Problem with the SSL CA cert（CURLE 77）、`1007900092` Stream error in the HTTP/2 framing layer（CURLE 92）、`1007900095` HTTP/3 error（CURLE 95）。
+- `@ohos.net.http`（`sdk/default/openharmony/ets/api/@ohos.net.http.d.ts`）错误码同构：CURLE 码 + 基座 `2300000`（`2300001` Unsupported protocol、`2300003` Invalid URL format or missing URL、`2300006` Failed to resolve the host name、`2300007` Failed to connect to the server、`2300025` Upload failed 等），且直接暴露 curl 选项面（`CURL_IPRESOLVE_WHATEVER/V4/V6` 枚举值）。
+- 两 API 同设备镜像内均为系统网络栈组件，错误码面同源（同为 libcurl 封装）→ TLS ClientHello 指纹（B 站风控可见的客户端层特征）实际同源；WBI 换 rcp 不改变 TLS 层指纹，实验无法证伪「客户端层拦截」假设。
+
+**结论**：同栈。T009（`fetchUpVideosOnce` 换 rcp）按门控跳过，US4 按失败分支收尾；后续如需真差异化实验，须引入非 curl 系传输（自研 TLS/第三方库），成本另议。
+
+**局限**：静态 `.d.ts` 只能证明错误码面同源，无法直接证明两 API 链接同一 libcurl .so；「TLS 指纹同源」为强推断（同镜像单 libcurl + 单 TLS 后端），未做抓包级指纹比对。
+
+### 3.4 网络出口级风控实证（PC 双客户端探针）
+
+**探针**（2026-10-20 晨，与真机同一出口网络）：① 标准匿名探针——主站暖场领 buvid → nav 取 mixinKey → WBI 签名请求，参数集同 biliRelay 生产（无 dm_img）；② biliRelay 生产链路（`../bili/biliRelay` `get_up_videos`，持久化设备 cookie + 退避重试）。
+
+- 两客户端同获 `-352`（风控校验失败）——与真机 App 的 WBI `-403`/plain `-799` 并存；同网络下三类客户端形态全灭。
+- 判定：风控在**网络出口级**（IP 维度评分），非单一客户端指纹自招；真机换出口（蜂窝网络）冷启动是当前唯一可立即验证的解封路径。
+- dm_img 假说降级：无 dm_img 的 biliRelay 生产参数集同样被拦，App 的 dm_img 随机指纹非 -403 唯一诱因（不排除贡献评分，未做逐参数消融）。
+- 静默语义旁注：Web 头页失败在 `refreshSubscription` 内被捕获降级（APP 结果保留），源级刷新记成功；错误仅存日志页 `[error]` 条目。
+- 后续：真机切流量冷启动验证 Web 链端点放行与否；UP Web 补稠链数据完整性随放行恢复。
+
+### 3.5 APP cursor 端点字段改版（length 置空、时长迁至 duration）
+
+**发现路径**：剧集行时长角标消失 → 代码侧全链路排查无破损（渲染/解析/缓存序列化均完好）→ PC 复刻 APP 签名链探针（TV appkey 签名 + BiliDroid UA）实测响应形态。
+
+- 探针 HTTP 200 / code=0，`data.item[]` 条目 `length` 为**空字符串**（旧形态为秒数或 `m:ss` 串），真实时长在 `duration` 字段（秒，首条 2369）；`ctime` 在位（`created` 缺失兜底既有解析已覆盖）。
+- 响应新增字段群佐证接口升版：`translated_title`、`translate_status`、`publish_time_text`、`cover_left_text`、`first_cid`、顶层 `last_watched_locator` 等。
+- 真机日志同口径印证：APP 签名链每轮 `HTTP 200 / count=20`，数据正常到达——时长角标消失为**客户端解析未跟上字段迁移**，非数据缺失、非充电角标注释连坐（另一 UI 块）。
+- 修复：`parseVlistRecords` 在 `length` 解析为 0 时以 `rec['duration']` 兜底；Web vlist 的 `length` 时长串解析路径不受影响。
+
+### 3.6 充电视频 playurl 形态（未充电登录态，真机日志实证）
+
+- 样本：BV12RYx6TE9r（充电稿），未充电账号真机播放，`x/player/playurl` fnval=4048（DASH）请求 **HTTP 200 但无 dash 数据**（`dash tracks failed ... err=No dash data`，重试同败）；durl 兜底（fnval=0）成功取到流（`resolveAudioTrack tier=0 source=durl`），播放正常 prepared/playing。
+- 对照：普通视频 DASH 请求恒有 dash 数据（tracks=3/4）——「DASH 缺失」为充电/付费试看的伴随信号。
+- 试听流时长判据（用户领域知识）：未充电用户拉到的流时长显著短于视频元数据时长——播放态充电判定的依据（流时长 vs view 接口 `data.duration`）。
+- 未实测项：durl 试听流确切时长（样本播放 4s 即暂停未到流尾）；试听响应中 `timelength` 取值口径（试看时长 vs 完整时长）。
+

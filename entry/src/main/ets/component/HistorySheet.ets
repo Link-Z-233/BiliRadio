@@ -7,7 +7,7 @@ import { registerHistorySelectExit } from '../service/BackHandler';
 import { SelectLogic, LongPressGuard, SweepSession, RowDragSession, EdgeAutoScroller } from '../service/SelectLogic';
 import { CoverThumb } from './CoverThumb';
 import { SelectCheckbox } from './SelectCheckbox';
-import { promptAction, componentUtils } from '@kit.ArkUI';
+import { componentUtils } from '@kit.ArkUI';
 import { BusinessError } from '@kit.BasicServicesKit';
 
 // 拖选等高步长（FR-014）：归并行固定 44 高 + 上下 padding TOKEN_SPACE_10（List space 0），
@@ -233,7 +233,7 @@ export struct HistorySheet {
       connectBool(Constants.AS_SHOW_PLAYER_OVERLAY, false).value = true;
     } catch (err) {
       const error = err as BusinessError;
-      promptAction.showToast({ message: `播放失败: ${error.message}` });
+      this.getUIContext().getPromptAction().showToast({ message: `播放失败: ${error.message}` });
     }
   }
 
@@ -277,7 +277,7 @@ export struct HistorySheet {
   // 左滑删除确认（US1 双触发）：点垃圾桶/滑过阈值（SwipeActionItem.onAction）均进本弹窗，
   // 确认后删除，取消/点外围经 closeAllSwipeActions 复位收起滑动行
   private confirmRemoveHistoryRow(row: HistoryRow): void {
-    AlertDialog.show({
+    this.getUIContext().showAlertDialog({
       title: Constants.DIALOG_DELETE_HISTORY_TITLE,
       message: Constants.DIALOG_DELETE_HISTORY_MSG,
       autoCancel: true,
@@ -526,7 +526,7 @@ export struct HistorySheet {
     if (count === 0) {
       return;
     }
-    AlertDialog.show({
+    this.getUIContext().showAlertDialog({
       title: Constants.DIALOG_REMOVE_SELECTED_TITLE,
       message: Constants.DIALOG_REMOVE_SELECTED_MSG,
       autoCancel: true,

@@ -1,8 +1,9 @@
 import { avSession } from '@kit.AVSessionKit';
 import { backgroundTaskManager } from '@kit.BackgroundTasksKit';
-import { wantAgent, WantAgent, common } from '@kit.AbilityKit';
+import { wantAgent, WantAgent } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { BusinessError } from '@kit.BasicServicesKit';
+import { AppContext } from './AppContext';
 import { Constants } from './Constants';
 import { CoverUrl } from './CoverUrl';
 import { NetUtil } from './NetUtil';
@@ -32,7 +33,7 @@ export class MediaSession {
       return;
     }
     try {
-      const context = getContext() as common.UIAbilityContext;
+      const context = AppContext.require();
       this.session = await avSession.createAVSession(context, 'BiliRadioSession', 'audio');
       this.session.on('play', onPlay);
       this.session.on('pause', onPause);
@@ -111,7 +112,7 @@ export class MediaSession {
       return;
     }
     try {
-      const context = getContext() as common.UIAbilityContext;
+      const context = AppContext.require();
       const wantAgentInfo: wantAgent.WantAgentInfo = {
         wants: [
           {
@@ -140,7 +141,7 @@ export class MediaSession {
     }
     this.bgRunning = false;
     try {
-      const context = getContext() as common.UIAbilityContext;
+      const context = AppContext.require();
       await backgroundTaskManager.stopBackgroundRunning(context);
       hilog.info(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'background continuous task stopped');
     } catch (err) {

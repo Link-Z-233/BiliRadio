@@ -2,10 +2,10 @@ import { Subscription } from '../model/Subscription';
 import { BiliVideo } from '../model/BiliVideo';
 import { SubscriptionStore } from '../service/SubscriptionStore';
 import { Constants } from '../service/Constants';
+import { AppStore } from '../service/AppStore';
 import { connectBool, connectNum, connectStr, NumState, StrState } from '../service/V2State';
 import { CoverThumb } from '../component/CoverThumb';
 import { AddSubscriptionSheet, AddSheetBackHandler } from './AddSubscriptionSheet';
-import { promptAction } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 
 interface PopupStateChange {
@@ -80,6 +80,8 @@ export struct HomePage {
   private subs: Subscription[] = [];
   private provider: SubDataSource = new SubDataSource();
   private refreshingNow: boolean = false;
+  // 静默刷新失败 toast 去重窗基准（SILENT_REFRESH_FAIL_DEDUP_MS 内只弹一次）
+  private lastSilentFailToastAt: number = 0;
   // ListScroller（extends Scroller）：取消确认后经 closeAllSwipeActions 复位滑动行（US1）
   private scroller: ListScroller = new ListScroller();
   @Param navPathStack: NavPathStack = new NavPathStack();
@@ -118,18 +120,44 @@ export struct HomePage {
     this.rebuild();
   }
 
-  private silentRefresh(): void {
+  private async silentRefresh(): Promise<void> {
     if (this.refreshingNow) {
       return;
     }
+    // CD 门读 AppStore，须等 preferences 就绪（aboutToAppear 早于 PlayerController.init 的异步完成）
+    await AppStore.init();
+    const elapsed: number = Date.now() - AppStore.getNumber(Constants.KEY_LAST_SILENT_REFRESH_AT, 0);
+    // D9：时钟回拨（elapsed 为负）视为 CD 过期放行
+    if (elapsed >= 0 && elapsed < Constants.HOME_SILENT_REFRESH_CD_MS) {
+      return;
+    }
     this.refreshingNow = true;
+    let failCount: number = 0;
     SubscriptionStore.refreshAll(this.subs, false, (sub: Subscription, ok: boolean): void => {
+      if (!ok) {
+        failCount++;
+      }
       this.persistRefreshedSub(sub, ok);
     }).then((): void => {
-      this.refreshingNow = false;
+      this.finishSilentRefresh(failCount);
     }).catch((): void => {
-      this.refreshingNow = false;
+      this.finishSilentRefresh(failCount);
     });
+  }
+
+  // 静默刷新收尾（v0.5-part4 US3）：写 CD 时间戳 + 失败源聚合 toast（去重窗内只弹一次；CD 跳过路径零提示）
+  private finishSilentRefresh(failCount: number): void {
+    this.refreshingNow = false;
+    AppStore.putNumber(Constants.KEY_LAST_SILENT_REFRESH_AT, Date.now());
+    if (failCount > 0) {
+      const now: number = Date.now();
+      if (now - this.lastSilentFailToastAt >= Constants.SILENT_REFRESH_FAIL_DEDUP_MS) {
+        this.lastSilentFailToastAt = now;
+        this.getUIContext().getPromptAction().showToast({
+          message: Constants.TOAST_SILENT_REFRESH_FAIL.replace('N', `${failCount}`)
+        });
+      }
+    }
   }
 
   // [DISABLED 2026-10] 随首页下拉刷新一并禁用（恢复时取消下方整段注释即可；
@@ -194,7 +222,7 @@ export struct HomePage {
   // 删除订阅确认（US1/US2 双入口）：左滑垃圾桶/长按菜单共用同弹窗，
   // 取消/点外围经 closeAllSwipeActions 复位收起滑动行
   private confirmRemoveSub(row: SubRow): void {
-    AlertDialog.show({
+    this.getUIContext().showAlertDialog({
       title: Constants.DIALOG_DELETE_SUB_TITLE,
       message: Constants.DIALOG_DELETE_SUB_MSG,
       autoCancel: true,
@@ -221,7 +249,7 @@ export struct HomePage {
   private addSubscription(sub: Subscription): void {
     for (let i = 0; i < this.subs.length; i++) {
       if (this.subs[i].id === sub.id) {
-        promptAction.showToast({ message: '已订阅该源' });
+        this.getUIContext().getPromptAction().showToast({ message: '已订阅该源' });
         return;
       }
     }
@@ -239,7 +267,7 @@ export struct HomePage {
     SubscriptionStore.refreshSubscription(sub).then((): void => {
       this.persistRefreshedSub(sub, true);
     }).catch((err: Error): void => {
-      promptAction.showToast({ message: `刷新节目失败: ${err.message}` });
+      this.getUIContext().getPromptAction().showToast({ message: `刷新节目失败: ${err.message}` });
     });
   }
 

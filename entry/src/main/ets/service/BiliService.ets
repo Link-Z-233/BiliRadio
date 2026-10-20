@@ -233,6 +233,18 @@ function isUpQueryFatal(err: Object): boolean {
   return msg.indexOf('-404') >= 0 || msg.indexOf('-400') >= 0 || msg.indexOf('-101') >= 0;
 }
 
+// 风控类错误判定（v0.5-part4 D7）：-352/-412/-403/-799 错误码 + 非 JSON 风控页特征（checkJsonBody 抛错含「风控」），
+// 与 isUpQueryFatal（业务类）互补，供 Web 链冷却置位与重试分流
+function isRiskControlError(err: Object): boolean {
+  const msg: string = err instanceof Error ? err.message : String(err);
+  return msg.indexOf('-352') >= 0 || msg.indexOf('-412') >= 0 ||
+    msg.indexOf('-403') >= 0 || msg.indexOf('-799') >= 0 || msg.indexOf('风控') >= 0;
+}
+
+// Web 链进程级冷却（v0.5-part4 D2/D3）：截止时间戳，置位后 fetchUpVideosViaWeb 入口直接抛错，
+// now 越过截止自然到期恢复；杀进程即失效
+let webChainCooldownUntil: number = 0;
+
 function httpGet(url: string, headers: Record<string, string> | undefined = undefined): Promise<string> {
   const httpRequest: http.HttpRequest = http.createHttp();
   let logged: boolean = false; // US9：then 已记录响应码后，catch 不再重复记录
@@ -613,9 +625,9 @@ export class BiliService {
           item.ownerName = owner['name'] as string;
         }
       }
-      // 充电/付费标记（US4）：合集/系列 archives 仅 ugc_pay 可判，只认明确非 0
-      const ugcPayRaw: Object = rec['ugc_pay'];
-      item.isUpowerExclusive = ugcPayRaw !== undefined && ugcPayRaw !== null && Number(ugcPayRaw) > 0;
+      // 充电/付费标记待定（WBI 风控未放行无法测试；注释保留，恢复=取消注释）
+      // const ugcPayRaw: Object = rec['ugc_pay'];
+      // item.isUpowerExclusive = ugcPayRaw !== undefined && ugcPayRaw !== null && Number(ugcPayRaw) > 0;
       items.push(item);
     }
     return items;
@@ -807,7 +819,7 @@ export class BiliService {
 
   // UP 主最新投稿（单页 20 条，新集在前）
   // 风控降级链：APP 签名链（游客 appkey+ts+sign，无 cookie/WBI 依赖）优先，任何失败只记日志后
-  // 降级 Web 链；Web 链内 -352/-412/风控页/网络错误等可重试错误重置 buvid 指数退避后进下一轮，
+  // 降级 Web 链；Web 链内 -352/-412/风控页/网络错误等可重试错误指数退避后进下一轮（v0.5-part4：不再重置 buvid），
   // -404/-400/-101 等业务错误立即失败；全败时抛出最后一轮真实错误（含错误码）
   static async fetchUpVideos(mid: number): Promise<BiliVideo[]> {
     try {
@@ -883,18 +895,24 @@ export class BiliService {
     return BiliService.fetchUpVideosViaWeb(mid, 1);
   }
 
-  // Web 三轮 buvid 退避（直连→WBI 签名）
+  // Web 三轮退避（WBI→plain）；v0.5-part4：入口冷却门 + 空位 buvid 保底，
+  // 单轮双端点风控败置位进程冷却并立即抛错，重试不换 buvid，网络类失败仍 3 轮退避
   private static async fetchUpVideosViaWeb(mid: number, pn: number): Promise<BiliVideo[]> {
     const label: string = pn > 1 ? 'UP投稿翻页' : 'UP投稿列表';
+    if (Date.now() < webChainCooldownUntil) {
+      throw new Error('Web链冷却中');
+    }
+    // FR-004：入口空 buvid 保底（重试全程不再 reset，身份稳定）
+    await BiliService.ensureBuvid();
     const spaceHeaders: Record<string, string> = buildSpaceHeaders(mid);
     let lastError: Error = new Error('查询UP主投稿失败');
     for (let attempt: number = 0; attempt < 3; attempt++) {
       if (attempt > 0) {
-        BiliSession.getInstance().resetBuvid();
         await sleep(2000 * attempt);
       }
       // US3：每轮注入全套 dm_img 风控指纹参数（随机值按轮刷新）
       const params: Record<string, string> = buildUpQueryParams(mid, pn);
+      let wbiRiskBlocked: boolean = false;
       // WBI 端点优先：网页/PiliPlus 同源的完整数据端点；旧版 plain 端点实测漏发部分条目，仅作 WBI 被风控时的降级兜底
       try {
         const mixinKey: string = await BiliService.fetchMixinKey();
@@ -911,6 +929,7 @@ export class BiliService {
         if (isUpQueryFatal(wbiError)) {
           throw wbiError;
         }
+        wbiRiskBlocked = isRiskControlError(wbiError);
       }
       try {
         const plainResult: string = await BiliService.fetchUpVideosOnce(`${BILI_SPACE_ARC_URL}`, params, spaceHeaders);
@@ -922,6 +941,12 @@ export class BiliService {
         lastError = plainError;
         Logger.log('error', label, `第${attempt + 1}轮直连失败 mid=${mid} pn=${pn}: ${plainError.message}`);
         if (isUpQueryFatal(plainError)) {
+          throw plainError;
+        }
+        // D3：单轮 WBI+plain 双风控败即置位进程冷却并抛当轮真实错误（失败请求封顶 2 次）
+        if (wbiRiskBlocked && isRiskControlError(plainError)) {
+          webChainCooldownUntil = Date.now() + Constants.WEB_CHAIN_COOLDOWN_MS;
+          Logger.log('error', label, `Web链双风控败置位冷却 mid=${mid} pn=${pn}`);
           throw plainError;
         }
       }
@@ -970,7 +995,7 @@ export class BiliService {
   }
 
   // list.vlist 记录解析：Web arc/search 与 APP cursor 端点共用（同源 vlist 结构）；
-  // title 兼容 btitle、length 兼容秒数（APP 端点字段形态容错）
+  // title 兼容 btitle、length 兼容秒数/时长串；APP 端点改版后 length 置空串、时长在 duration，length 解析为 0 时以 duration 兜底
   private static parseVlistRecords(arr: Object[], items: BiliVideo[]): void {
     for (let i: number = 0; i < arr.length; i++) {
       const rec: Record<string, Object> = arr[i] as Record<string, Object>;
@@ -1001,6 +1026,13 @@ export class BiliService {
           item.duration = parseDurationLen(lenRaw as string);
         }
       }
+      if (item.duration <= 0) {
+        const durRaw: Object = rec['duration'];
+        if (durRaw !== undefined && durRaw !== null) {
+          const dur: number = Number(durRaw);
+          item.duration = dur > 0 ? dur : 0;
+        }
+      }
       if (rec['created'] !== undefined && rec['created'] !== null) {
         item.pubdate = Number(rec['created']);
       } else if (rec['ctime'] !== undefined && rec['ctime'] !== null) {
@@ -1012,17 +1044,17 @@ export class BiliService {
       if (rec['author'] !== undefined && rec['author'] !== null) {
         item.ownerName = rec['author'] as string;
       }
-      // 充电/付费标记（US4）：只认明确 True/非 0——
-      // Web 链 is_charging_arc/elec_arc_type，APP 链 ugc_pay/is_ugcpay，两种 vlist 形态共用此解析
-      const chargingArcRaw: Object = rec['is_charging_arc'];
-      const elecTypeRaw: Object = rec['elec_arc_type'];
-      const ugcPayRaw: Object = rec['ugc_pay'];
-      const ugcPayFlagRaw: Object = rec['is_ugcpay'];
-      item.isUpowerExclusive =
-        (chargingArcRaw !== undefined && chargingArcRaw !== null && Boolean(chargingArcRaw)) ||
-        (elecTypeRaw !== undefined && elecTypeRaw !== null && Number(elecTypeRaw) > 0) ||
-        (ugcPayRaw !== undefined && ugcPayRaw !== null && Number(ugcPayRaw) > 0) ||
-        (ugcPayFlagRaw !== undefined && ugcPayFlagRaw !== null && Boolean(ugcPayFlagRaw));
+      // 充电/付费标记待定（WBI 风控未放行无法测试；注释保留，恢复=取消注释）——
+      // 判据只认明确 True/非 0：Web 链 is_charging_arc/elec_arc_type，APP 链 ugc_pay/is_ugcpay
+      // const chargingArcRaw: Object = rec['is_charging_arc'];
+      // const elecTypeRaw: Object = rec['elec_arc_type'];
+      // const ugcPayRaw: Object = rec['ugc_pay'];
+      // const ugcPayFlagRaw: Object = rec['is_ugcpay'];
+      // item.isUpowerExclusive =
+      //   (chargingArcRaw !== undefined && chargingArcRaw !== null && Boolean(chargingArcRaw)) ||
+      //   (elecTypeRaw !== undefined && elecTypeRaw !== null && Number(elecTypeRaw) > 0) ||
+      //   (ugcPayRaw !== undefined && ugcPayRaw !== null && Number(ugcPayRaw) > 0) ||
+      //   (ugcPayFlagRaw !== undefined && ugcPayFlagRaw !== null && Boolean(ugcPayFlagRaw));
       items.push(item);
     }
   }
@@ -1033,11 +1065,10 @@ export class BiliService {
     };
     let lastError: Error = new Error('查询UP主失败');
     // acc/info 风控严格（-352 频发）：最多 3 轮「WBI 签名 acc/info → card 兜底」降级；
-    // -352/-412/风控页等可重试错误重置 buvid 指数退避后进下一轮，
+    // -352/-412/风控页等可重试错误指数退避后进下一轮（v0.5-part4：不再重置 buvid，身份稳定），
     // -404/-400/-101 等业务错误立即失败；全败时抛出最后一轮真实错误（含错误码）
     for (let attempt: number = 0; attempt < 3; attempt++) {
       if (attempt > 0) {
-        BiliSession.getInstance().resetBuvid();
         await sleep(2000 * attempt);
       }
       try {

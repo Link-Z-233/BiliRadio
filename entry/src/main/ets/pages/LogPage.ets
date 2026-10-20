@@ -1,8 +1,8 @@
 import { Logger, LogEntry } from '../service/Logger';
+import { AppContext } from '../service/AppContext';
 import { Constants } from '../service/Constants';
 import { connectBool, connectNum, connectStr, NumState, StrState } from '../service/V2State';
 import { picker, fileIo as fs } from '@kit.CoreFileKit';
-import { promptAction } from '@kit.ArkUI';
 
 // 日志懒加载数据源：LazyForEach 只构建可视区域内的条目（缓冲上限 500 条，见 Constants.LOG_BUFFER_MAX）
 class LogDataSource implements IDataSource {
@@ -66,9 +66,9 @@ export struct LogPage {
   }
 
   private exportLogs(): void {
-    const docPicker: picker.DocumentViewPicker = new picker.DocumentViewPicker(getContext(this));
+    const docPicker: picker.DocumentViewPicker = new picker.DocumentViewPicker(AppContext.require());
     const options: picker.DocumentSaveOptions = new picker.DocumentSaveOptions();
-    options.newFileNames = [Constants.LOG_FILE_NAME];
+    options.newFileNames = [Constants.LOG_FILE_NAME.replace('.txt', `_${this.exportFileStamp()}.txt`)];
     docPicker.save(options).then((uris: Array<string>): void => {
       if (uris.length === 0) {
         return;
@@ -88,11 +88,11 @@ export struct LogPage {
         } finally {
           fs.closeSync(file);
         }
-        promptAction.showToast({
+        this.getUIContext().getPromptAction().showToast({
           message: fromFile ? `已导出日志文件 ${text.length} 字符` : '日志文件读取失败，已导出内存缓冲'
         });
       } catch (e) {
-        promptAction.showToast({ message: '导出失败' });
+        this.getUIContext().getPromptAction().showToast({ message: '导出失败' });
       }
     }).catch((): void => {
     });
@@ -107,6 +107,17 @@ export struct LogPage {
     const mm: string = m < 10 ? `0${m}` : `${m}`;
     const ss: string = s < 10 ? `0${s}` : `${s}`;
     return `${hh}:${mm}:${ss}`;
+  }
+
+  // 导出文件名时间戳（YYYYMMDD_HHmmss）：防多次导出同名覆盖；仅导出建议名，Logger 沙箱内滚动文件名不变
+  private exportFileStamp(): string {
+    const d: Date = new Date();
+    const mo: string = d.getMonth() + 1 < 10 ? `0${d.getMonth() + 1}` : `${d.getMonth() + 1}`;
+    const day: string = d.getDate() < 10 ? `0${d.getDate()}` : `${d.getDate()}`;
+    const hh: string = d.getHours() < 10 ? `0${d.getHours()}` : `${d.getHours()}`;
+    const mm: string = d.getMinutes() < 10 ? `0${d.getMinutes()}` : `${d.getMinutes()}`;
+    const ss: string = d.getSeconds() < 10 ? `0${d.getSeconds()}` : `${d.getSeconds()}`;
+    return `${d.getFullYear()}${mo}${day}_${hh}${mm}${ss}`;
   }
 
   // 'error' → 错误，其余（'net'）→ 网络

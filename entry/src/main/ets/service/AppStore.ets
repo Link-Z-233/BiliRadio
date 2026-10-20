@@ -1,9 +1,9 @@
 import { preferences } from '@kit.ArkData';
 import { fileIo as fs } from '@kit.CoreFileKit';
-import { common } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { BiliVideo } from '../model/BiliVideo';
 import { PlayHistoryItem } from '../model/PlayHistoryItem';
+import { AppContext } from './AppContext';
 import { Constants } from './Constants';
 import { FileUtil } from './FileUtil';
 
@@ -18,7 +18,7 @@ export class AppStore {
 
   static async init(): Promise<void> {
     try {
-      const context = getContext().getApplicationContext();
+      const context = AppContext.require().getApplicationContext();
       AppStore.prefs = await preferences.getPreferences(context, Constants.STORE_NAME);
     } catch (e) {
       hilog.warn(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'AppStore init failed');
@@ -62,7 +62,7 @@ export class AppStore {
     AppStore.putNumber(Constants.KEY_LAST_POS_MS, lastPosMs);
     AppStore.putNumber(Constants.KEY_LAST_QUALITY, lastQualityCode);
     try {
-      const context = getContext() as common.UIAbilityContext;
+      const context = AppContext.require();
       const path: string = `${context.filesDir}/playlist.json`;
       const itemRecords: Array<Record<string, Object>> = [];
       for (let i = 0; i < items.length; i++) {
@@ -82,7 +82,7 @@ export class AppStore {
   static loadPlaylistFile(): PlaylistSnapshot {
     const snapshot: PlaylistSnapshot = new PlaylistSnapshot();
     try {
-      const context = getContext() as common.UIAbilityContext;
+      const context = AppContext.require();
       const path: string = `${context.filesDir}/playlist.json`;
       if (!fs.accessSync(path)) {
         return snapshot;
@@ -114,7 +114,7 @@ export class AppStore {
   static loadPlayHistoryFile(): PlayHistoryItem[] {
     const records: PlayHistoryItem[] = [];
     try {
-      const context = getContext() as common.UIAbilityContext;
+      const context = AppContext.require();
       const path: string = `${context.filesDir}/${Constants.PLAY_HISTORY_FILE}`;
       if (!fs.accessSync(path)) {
         return records;
@@ -143,7 +143,7 @@ export class AppStore {
 
   static savePlayHistoryFile(items: PlayHistoryItem[]): void {
     try {
-      const context = getContext() as common.UIAbilityContext;
+      const context = AppContext.require();
       const path: string = `${context.filesDir}/${Constants.PLAY_HISTORY_FILE}`;
       const itemRecords: Array<Record<string, Object>> = [];
       for (let i = 0; i < items.length; i++) {

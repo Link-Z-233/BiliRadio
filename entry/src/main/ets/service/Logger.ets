@@ -3,6 +3,7 @@ import { fileIo as fs } from '@kit.CoreFileKit';
 import { common } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { BusinessError } from '@kit.BasicServicesKit';
+import { AppContext } from './AppContext';
 
 // 应用内日志条目（US9）：内存环形缓冲 + 异步落盘。
 // time 为毫秒时间戳；category 取 'net'（网络请求）/ 'error'（错误与风控）/ 'player'（播放链路诊断）；
@@ -100,14 +101,14 @@ export class Logger {
 
   // —— 以下为 US9 落盘实现（全部静默失败） ——
 
-  // 沙箱日志文件路径：优先用注入 context 解析的缓存；未注入（init 前调用）回退 getContext()。
-  // 旧实现仅靠 getContext()，网络回调上下文中恒失败且被静默，导致落盘从未生效
+  // 沙箱日志文件路径：优先用注入 context 解析的缓存；未注入（init 前调用）时 require 抛错走 catch 返回空。
+  // 旧实现仅靠 UI 作用域 getContext()，网络回调上下文中恒失败且被静默，导致落盘从未生效
   private static logFilePath(): string {
     if (Logger.filePathCache !== '') {
       return Logger.filePathCache;
     }
     try {
-      const context = getContext() as common.UIAbilityContext;
+      const context = AppContext.require();
       Logger.filePathCache = `${context.filesDir}/${Constants.LOG_FILE_NAME}`;
     } catch (e) {
       Logger.filePathCache = '';

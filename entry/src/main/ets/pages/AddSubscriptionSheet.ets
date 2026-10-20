@@ -1,4 +1,3 @@
-import { promptAction } from '@kit.ArkUI';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { inputMethod } from '@kit.IMEKit';
 import { BiliService, UpInfo, SeasonMeta } from '../service/BiliService';
@@ -98,11 +97,11 @@ export struct AddSubscriptionSheet {
   private emitSub(sub: Subscription): void {
     sub.id = Subscription.makeId(sub.type, sub.sourceId);
     if (this.alreadySubscribed(sub.id)) {
-      promptAction.showToast({ message: '已订阅过该源' });
+      this.getUIContext().getPromptAction().showToast({ message: '已订阅过该源' });
       return;
     }
     this.onSubscribed(sub);
-    promptAction.showToast({ message: `已订阅「${sub.displayTitle()}」` });
+    this.getUIContext().getPromptAction().showToast({ message: `已订阅「${sub.displayTitle()}」` });
   }
 
   // 识别结果 → 既有六分支分发（bv/av/up/fav/season/series；六个动作方法零改动；bv/av 透传 page）
@@ -152,13 +151,13 @@ export struct AddSubscriptionSheet {
         this.mainMsg = '';
         if (res.outcome !== ShortLinkOutcome.OK) {
           // 失败分型提示：网络失败 / 超出跳数 / 无有效目标 / 目标无法识别（FR-005）
-          promptAction.showToast({ message: res.message });
+          this.getUIContext().getPromptAction().showToast({ message: res.message });
           return;
         }
         // 解析成功不回写输入框（FR-010），识别目标后走既有分发
         const parsed: RecognizeResult = recognizeInput(res.target);
         if (parsed.type === '') {
-          promptAction.showToast({ message: '短链目标无法识别' });
+          this.getUIContext().getPromptAction().showToast({ message: '短链目标无法识别' });
           return;
         }
         this.dispatchRecognized(parsed);
@@ -166,14 +165,14 @@ export struct AddSubscriptionSheet {
         // 防御网：resolveShortLink 内部已捕获全部失败，此处仅兜底复位 busy 状态
         this.mainBusy = false;
         this.mainMsg = '';
-        promptAction.showToast({ message: '短链解析失败' });
+        this.getUIContext().getPromptAction().showToast({ message: '短链解析失败' });
       });
       return;
     }
     // 非短链分支：对清洗后文本直接识别（修复未 trim 失配）+ 既有分发
     const parsed: RecognizeResult = recognizeInput(cleaned);
     if (parsed.type === '') {
-      promptAction.showToast({ message: '未识别到有效链接、BV 号 / av 号或 UP 主 UID' });
+      this.getUIContext().getPromptAction().showToast({ message: '未识别到有效链接、BV 号 / av 号或 UP 主 UID' });
       return;
     }
     if (this.mainBusy) {
@@ -190,7 +189,7 @@ export struct AddSubscriptionSheet {
     this.controller.addSingleVideo(bvid, page).then((result: EnqueueResult): void => {
       this.mainBusy = false;
       this.onDismiss();
-      promptAction.showToast({ message: PlayerController.enqueueToast(result) });
+      this.getUIContext().getPromptAction().showToast({ message: PlayerController.enqueueToast(result) });
     }).catch((): void => {
       this.mainBusy = false;
     });
@@ -200,7 +199,7 @@ export struct AddSubscriptionSheet {
   private playAv(avStr: string, page: number = 0): void {
     const aid: number = parseInt(avStr, 10);
     if (isNaN(aid) || aid <= 0) {
-      promptAction.showToast({ message: 'av 号无效' });
+      this.getUIContext().getPromptAction().showToast({ message: 'av 号无效' });
       return;
     }
     if (this.mainBusy) {
@@ -210,20 +209,20 @@ export struct AddSubscriptionSheet {
     BiliService.fetchVideoInfoByAid(aid).then((video: BiliVideo): void => {
       this.mainBusy = false;
       if (video.bvid === '') {
-        promptAction.showToast({ message: '未查询到该 av 号对应的视频' });
+        this.getUIContext().getPromptAction().showToast({ message: '未查询到该 av 号对应的视频' });
         return;
       }
       this.playBv(video.bvid, page);
     }).catch((): void => {
       this.mainBusy = false;
-      promptAction.showToast({ message: 'av 号查询失败' });
+      this.getUIContext().getPromptAction().showToast({ message: 'av 号查询失败' });
     });
   }
 
   private lookupUid(uidStr: string): void {
     const uid: number = parseInt(uidStr, 10);
     if (isNaN(uid) || uid <= 0) {
-      promptAction.showToast({ message: '请输入有效的 UP 主 UID' });
+      this.getUIContext().getPromptAction().showToast({ message: '请输入有效的 UP 主 UID' });
       return;
     }
     if (this.uidBusy) {
@@ -267,11 +266,11 @@ export struct AddSubscriptionSheet {
       if (msg.indexOf('-352') >= 0 || msg.indexOf('-412') >= 0 || msg.indexOf('风控') >= 0) {
         const codeMatch: RegExpMatchArray | null = msg.match(/-\d{1,5}/);
         const code: string = codeMatch !== null ? codeMatch[0] : '';
-        promptAction.showToast({
+        this.getUIContext().getPromptAction().showToast({
           message: code !== '' ? `查询UP主失败(${code})，疑似风控，建议登录后重试` : '查询UP主失败，疑似风控，建议登录后重试'
         });
       } else {
-        promptAction.showToast({ message: `查询UP主失败: ${msg}` });
+        this.getUIContext().getPromptAction().showToast({ message: `查询UP主失败: ${msg}` });
       }
     });
   }
@@ -323,7 +322,7 @@ export struct AddSubscriptionSheet {
   private subscribeFolderById(mediaIdStr: string): void {
     const mediaId: number = parseInt(mediaIdStr, 10);
     if (isNaN(mediaId) || mediaId <= 0) {
-      promptAction.showToast({ message: '收藏夹ID无效' });
+      this.getUIContext().getPromptAction().showToast({ message: '收藏夹ID无效' });
       return;
     }
     const sub: Subscription = new Subscription();
@@ -336,7 +335,7 @@ export struct AddSubscriptionSheet {
   private subscribeSeasonById(seasonIdStr: string): void {
     const seasonId: number = parseInt(seasonIdStr, 10);
     if (isNaN(seasonId) || seasonId <= 0) {
-      promptAction.showToast({ message: '合集ID无效' });
+      this.getUIContext().getPromptAction().showToast({ message: '合集ID无效' });
       return;
     }
     if (this.mainBusy) {
@@ -354,14 +353,14 @@ export struct AddSubscriptionSheet {
       this.emitSub(sub);
     }).catch((): void => {
       this.mainBusy = false;
-      promptAction.showToast({ message: '合集信息获取失败' });
+      this.getUIContext().getPromptAction().showToast({ message: '合集信息获取失败' });
     });
   }
 
   private subscribeSeriesById(seriesIdStr: string): void {
     const seriesId: number = parseInt(seriesIdStr, 10);
     if (isNaN(seriesId) || seriesId <= 0) {
-      promptAction.showToast({ message: '系列ID无效' });
+      this.getUIContext().getPromptAction().showToast({ message: '系列ID无效' });
       return;
     }
     if (this.mainBusy) {
@@ -378,7 +377,7 @@ export struct AddSubscriptionSheet {
       this.emitSub(sub);
     }).catch((): void => {
       this.mainBusy = false;
-      promptAction.showToast({ message: '系列信息获取失败' });
+      this.getUIContext().getPromptAction().showToast({ message: '系列信息获取失败' });
     });
   }
 

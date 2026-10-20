@@ -9,7 +9,7 @@ import { closeBothLayersNow, registerQueueSelectExit } from '../service/BackHand
 import { SelectLogic, LongPressGuard, SweepSession, EdgeAutoScroller } from '../service/SelectLogic';
 import { CoverThumb } from './CoverThumb';
 import { SelectCheckbox } from './SelectCheckbox';
-import { promptAction, componentUtils } from '@kit.ArkUI';
+import { componentUtils } from '@kit.ArkUI';
 
 // 颜色全部使用 base/dark 双份颜色资源：浅色/深色外观下自动匹配（见 resources/base|dark/element/color.json）
 
@@ -539,7 +539,7 @@ export struct QueueSheet {
     if (count === 0) {
       return;
     }
-    AlertDialog.show({
+    this.getUIContext().showAlertDialog({
       title: Constants.DIALOG_REMOVE_SELECTED_TITLE,
       message: Constants.DIALOG_REMOVE_SELECTED_MSG,
       autoCancel: true,
@@ -575,7 +575,7 @@ export struct QueueSheet {
   // 批量移除链路（含当前条目自动切播语义），UI 刷新交由 syncFrom 的 diff 增量通知；
   // 取消/点外围经 closeAllSwipeActions 复位收起滑动行
   private confirmRemoveQueueItem(entry: QueueEntry): void {
-    AlertDialog.show({
+    this.getUIContext().showAlertDialog({
       title: Constants.DIALOG_DELETE_QUEUE_ITEM_TITLE,
       message: Constants.DIALOG_DELETE_QUEUE_ITEM_MSG,
       autoCancel: true,
@@ -608,7 +608,7 @@ export struct QueueSheet {
     if (keys.length === 0) {
       return;
     }
-    AlertDialog.show({
+    this.getUIContext().showAlertDialog({
       title: Constants.DIALOG_DELETE_QUEUE_ITEM_TITLE,
       message: Constants.DIALOG_REMOVE_QUEUE_GROUP_MSG.replace('N', `${keys.length}`),
       autoCancel: true,
@@ -638,10 +638,10 @@ export struct QueueSheet {
   private confirmClearPlayed(): void {
     const count: number = this.controller.playedRemovableCount();
     if (count === 0) {
-      promptAction.showToast({ message: Constants.TOAST_QUEUE_NO_PLAYED });
+      this.getUIContext().getPromptAction().showToast({ message: Constants.TOAST_QUEUE_NO_PLAYED });
       return;
     }
-    AlertDialog.show({
+    this.getUIContext().showAlertDialog({
       title: Constants.DIALOG_CLEAR_PLAYED_TITLE,
       message: Constants.DIALOG_CLEAR_PLAYED_COUNT_MSG.replace('N', `${count}`),
       autoCancel: true,
@@ -669,7 +669,7 @@ export struct QueueSheet {
     if (this.entries.length === 0) {
       return;
     }
-    AlertDialog.show({
+    this.getUIContext().showAlertDialog({
       title: '清空队列',
       message: `确定移除全部 ${this.entries.length} 首吗？`,
       autoCancel: true,

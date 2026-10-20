@@ -1,4 +1,4 @@
-import { promptAction, componentUtils } from '@kit.ArkUI';
+import { componentUtils } from '@kit.ArkUI';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { Subscription } from '../model/Subscription';
 import { BiliVideo } from '../model/BiliVideo';
@@ -306,7 +306,7 @@ struct SourcePage {
     }
     this.controller.loadPlaylistAndPlay(items, 0)
       .then((result: EnqueueResult): void => {
-        promptAction.showToast({ message: PlayerController.enqueueToast(result) });
+        this.getUIContext().getPromptAction().showToast({ message: PlayerController.enqueueToast(result) });
         this.exitSelectMode();
       })
       .catch((): void => {
@@ -321,7 +321,7 @@ struct SourcePage {
     if (count === 0) {
       return;
     }
-    AlertDialog.show({
+    this.getUIContext().showAlertDialog({
       title: Constants.DIALOG_MARK_WATCHED_TITLE,
       message: Constants.DIALOG_MARK_WATCHED_MSG.replace('N', `${count}`),
       autoCancel: true,
@@ -337,7 +337,7 @@ struct SourcePage {
           }
           this.controller.markWatched(items);
           this.loadPlayedSet();
-          promptAction.showToast({ message: Constants.TOAST_MARK_WATCHED.replace('N', `${count}`) });
+          this.getUIContext().getPromptAction().showToast({ message: Constants.TOAST_MARK_WATCHED.replace('N', `${count}`) });
           this.exitSelectMode();
         }
       },
@@ -433,13 +433,14 @@ struct SourcePage {
       SubscriptionStore.persistRefreshedSub(this.sub, true);
       this.loadFromCache();
       this.refreshing = false;
+      this.getUIContext().getPromptAction().showToast({ message: Constants.TOAST_REFRESHED });
       // 刷新完成后回到顶部，与「新在上」列表语义一致
       if (this.episodes.length > 0) {
         this.scroller.scrollToIndex(0);
       }
     }).catch((err: BusinessError): void => {
       this.refreshing = false;
-      promptAction.showToast({ message: `刷新失败: ${err.message}` });
+      this.getUIContext().getPromptAction().showToast({ message: `刷新失败: ${err.message}` });
     });
   }
 
@@ -502,7 +503,7 @@ struct SourcePage {
     }).catch((err: BusinessError): void => {
       this.loadingOlder = false;
       this.olderFailAt = Date.now();
-      promptAction.showToast({ message: `加载失败: ${err.message}` });
+      this.getUIContext().getPromptAction().showToast({ message: `加载失败: ${err.message}` });
     });
   }
 
@@ -561,7 +562,7 @@ struct SourcePage {
   private enqueueAndToast(items: BiliVideo[]): void {
     this.controller.loadPlaylistAndPlay(items, 0)
       .then((result: EnqueueResult): void => {
-        promptAction.showToast({ message: PlayerController.enqueueToast(result) });
+        this.getUIContext().getPromptAction().showToast({ message: PlayerController.enqueueToast(result) });
       })
       .catch((): void => {
       });
@@ -580,7 +581,7 @@ struct SourcePage {
   }
 
   private unsubscribe(): void {
-    AlertDialog.show({
+    this.getUIContext().showAlertDialog({
       title: '取消订阅',
       message: `确定取消订阅「${this.sub.displayTitle()}」吗？`,
       autoCancel: true,
@@ -964,12 +965,13 @@ struct SourcePage {
                         .fontSize(Constants.TOKEN_FONT_BODY_S)
                         .fontColor($r('app.color.text_disabled'))
                       Blank()
-                      if (item.isUpowerExclusive) {
-                        Text('充电')
-                          .fontSize(Constants.TOKEN_FONT_AUX)
-                          .fontWeight(FontWeight.Bold)
-                          .fontColor($r('app.color.gold_accent'))
-                      }
+                      // 充电角标待定（WBI 风控未放行无法测试；注释保留，恢复=取消注释）
+                      // if (item.isUpowerExclusive) {
+                      //   Text('充电')
+                      //     .fontSize(Constants.TOKEN_FONT_AUX)
+                      //     .fontWeight(FontWeight.Bold)
+                      //     .fontColor($r('app.color.gold_accent'))
+                      // }
                       if (this.isNew(item)) {
                         Text('NEW')
                           .fontSize(Constants.TOKEN_FONT_AUX)

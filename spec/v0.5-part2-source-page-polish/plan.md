@@ -4,7 +4,7 @@
 
 ## Summary
 
-两部分：**A. `SourcePage` 布局调整 7 项**——顶栏收纳（系统标题栏 `.menus(CustomBuilder)` 承载 ··· 下拉菜单，刷新/退订迁入）、页头迁入列表滚动区（首个 ListItem）、页头内嵌多选入口（行内勾选框+底部操作条，批量入队复用 `loadPlaylistAndPlay`）、页头等高与留白收窄（既有令牌降档+新等高令牌）、充电专属标记（`BiliVideo` 增字段，实施时实测四类接口定夺）、去除播放全部。**B. 新建根目录 `BILI_API.md`**——三段式（本项目探索汇总/biliRelay API 探索迁移/本轮充电实测结论），作为 B 站 API 探索唯一沉淀点。另含目录改名后的源码注释旧名同步（3 处）。
+两部分：**A. `SourcePage` 布局调整 7 项**——顶栏收纳（系统标题栏 `.menus(CustomBuilder)` 承载 ··· 下拉菜单，刷新/退订迁入）、页头迁入列表滚动区（首个 ListItem）、页头内嵌多选入口（行内勾选框+底部操作条，批量入队复用 `loadPlaylistAndPlay`）、页头等高与留白收窄（既有令牌降档+新等高令牌）、去除播放全部。**B. 新建根目录 `BILI_API.md`**——三段式（本项目探索汇总/biliRelay API 探索迁移/本轮充电实测结论），作为 B 站 API 探索唯一沉淀点。另含目录改名后的源码注释旧名同步（3 处）。
 
 ## Technical Context
 
@@ -35,9 +35,7 @@ spec/v0.5-part2-source-page-polish/
 ```text
 BILI_API.md                      # 新建：B 站 API 探索唯一沉淀点（三段式）
 entry/src/main/ets/
-├── pages/SourcePage.ets        # 主改动：顶栏菜单/页头入列/多选/等高/留白/角标渲染/删播放全部
-├── model/BiliVideo.ets         # +isUpowerExclusive 字段（@Trace + record 序列化）
-├── service/BiliService.ets     # 三个列表解析点探测充电标记字段
+├── pages/SourcePage.ets        # 主改动：顶栏菜单/页头入列/多选/等高/留白/删播放全部
 ├── service/Constants.ets       # +SOURCE_HEADER_H 令牌；注释旧目录名同步
 ├── component/CoverThumb.ets    # 注释旧目录名同步
 └── pages/SettingsPage.ets      # 注释旧目录名同步
@@ -76,11 +74,7 @@ entry/src/main/ets/
 - **Rationale**: FR-004/005/006 直接落地；返回优先级与既有浮层返回链一致。
 - **Alternatives considered**: 页头内放退出按钮（放弃——页头会滚出视口，退出入口不可达）。
 
-**D6 充电专属标记（实测定夺，含 biliRelay 前证）**
-- **Decision**: `BiliVideo` 新增 `isUpowerExclusive: boolean`（`@Trace`，默认 false），`toRecord/fromRecord` 同步增字段。三个列表解析点（`parseArchiveRecords`/`parseVlistRecords`/`parseFolderMedias`）各自探测原始条目充电标记字段。**实施第一步先实测**：用真实订阅数据打本项目四类链路接口（含 APP 签名链——与 biliRelay 匿名 Web 链端点不同），确认返回是否携带标记字段；携带的链解析生效、列表行显示「充电」角标（样式与 NEW 徽标同档）；不携带的链不标不补偿；全部不携带则移除解析代码与字段，该需求降级为「接口不支持，不实施」。实测结论（各链带/不带+字段名）写入 `BILI_API.md`（D11）。
-- **既有前证**（biliRelay `docs/B站API试错记录.md` 实验 21，迁移后入 `BILI_API.md`）：UP 投稿列表 `is_charging_arc`/`elec_arc_type`/`elec_arc_badge`/`is_pay` 实测 150 条全 False 且充电专属视频可能不公开出现在投稿列表；fav 列表无 rights 判不出；season/series 有 `ugc_pay`/`state`；详情接口 `is_upower_exclusive` 可靠——前证降低「列表可标」的预期，但本项目 APP 签名链端点未实测过，仍须独立验证。
-- **Rationale**: 官方客户端列表带充电角标 vs biliRelay 实测列表字段全 False 存在矛盾，唯一裁断方式=对本项目实际链路实测（SC-004）。
-- **Alternatives considered**: 直接按 biliRelay 前证判定不做（放弃——端点链路不同，未实测不算数）；批量拉详情补偿（用户已否决）。
+**D6**（已移出：见 spec/charging-archive.md）
 
 **D7 留白收窄档位**
 - **Decision**: 页头与剧集列表外边距统一收窄为 `TOKEN_SPACE_S`（8vp）：List 左右 padding `TOKEN_SPACE_M`→`TOKEN_SPACE_S`，页头容器左右 `TOKEN_SPACE_L`→`TOKEN_SPACE_S`；行内 padding 不动（卡片内文字边距维持，仅卡片整体变宽）。
@@ -113,9 +107,6 @@ entry/src/main/ets/
 - **Alternatives considered**: 封面缩至 112×63 匹配文字自适应高度（放弃——单行标题行仍 63>42 不对齐，治标不治本）；`constraintSize` 最小高度（放弃——非严格等高）。
 
 ## Data Model
-
-**BiliVideo（既有 @ObservedV2 类，增量）**
-- `isUpowerExclusive: boolean = false`（`@Trace`）：充电专属标记；来源=列表接口解析（D6 实测定夺），持久化进订阅剧集缓存（`toRecord`/`fromRecord` 增 `'isUpowerExclusive'` 键，`fromRecord` 缺省 false 兼容旧缓存）
 
 **多选会话（SourcePage 页面瞬态，不建模文件）**
 - `selectMode: boolean`（`@Local`）：多选模式开关

@@ -2,6 +2,7 @@ import { asset } from '@kit.AssetStoreKit';
 import { util } from '@kit.ArkTS';
 import { preferences } from '@kit.ArkData';
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import { AppContext } from './AppContext';
 import { Constants } from './Constants';
 
 export class SecureStore {
@@ -66,7 +67,7 @@ export class SecureStore {
   }
 
   private static async getPrefs(): Promise<preferences.Preferences> {
-    const context = getContext().getApplicationContext();
+    const context = AppContext.require().getApplicationContext();
     return preferences.getPreferences(context, Constants.SECURE_STORE_NAME);
   }
 

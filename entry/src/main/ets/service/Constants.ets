@@ -42,6 +42,8 @@ export class Constants {
   static readonly PLAY_HISTORY_FILE: string = 'play_history.json';
   // 历史同步开关持久化键（1=开 0=关，默认开；生效还需已登录，未登录由调用方 gate）
   static readonly KEY_HISTORY_SYNC: string = 'historySync';
+  // 上次首页静默刷新完成时刻（毫秒时间戳）：跨启动 CD 判定基准（D9 回拨规则）
+  static readonly KEY_LAST_SILENT_REFRESH_AT: string = 'lastSilentRefreshAt';
 
   // —— AppStorage 键 ——
   static readonly AS_COLOR_MODE_SETTING: string = 'colorModeSetting';
@@ -185,6 +187,11 @@ export class Constants {
   // —— 加载更多失败冷却（US2）：失败后冷却期内禁用重试，防止弱网下反复请求 ——
   static readonly LOAD_OLDER_FAIL_COOLDOWN_MS: number = 3000;
 
+  // —— 刷新止血与反馈（v0.5-part4 risk-control）：静默刷新跨启动 CD / Web 链风控进程冷却 / 静默失败 toast 去重窗 ——
+  static readonly HOME_SILENT_REFRESH_CD_MS: number = 15 * 60 * 1000;
+  static readonly WEB_CHAIN_COOLDOWN_MS: number = 10 * 60 * 1000;
+  static readonly SILENT_REFRESH_FAIL_DEDUP_MS: number = 3000;
+
   // —— 订阅翻页页大小（KI-9 页界统一）：APP 签名链服务端钳 20，Web 链与记账统一对齐 ——
   static readonly UP_PAGE_SIZE: number = 20;
   static readonly SEASON_PAGE_SIZE: number = 20;
@@ -217,6 +224,9 @@ export class Constants {
   // —— 播放出错提醒（US6）：同一 bvid+阶段时间窗内去重（仅广播提醒去重，日志恒记）与 toast 文案 ——
   static readonly PLAYBACK_ERROR_DEDUP_MS: number = 3000;
   static readonly TOAST_PLAYBACK_ERROR: string = '播放出错，请稍后重试';
+  // —— 刷新结果通知（v0.5-part4 risk-control）：手动刷新成功 / 静默刷新失败（N 由失败订阅数代入）——
+  static readonly TOAST_REFRESHED: string = '已更新';
+  static readonly TOAST_SILENT_REFRESH_FAIL: string = 'N 个订阅刷新失败';
   // —— 关于页外链二次确认（v0.4-Part1-ux-fixes US7）：确认后 openLink 拉起系统浏览器 ——
   static readonly DIALOG_OPEN_LINK_TITLE: string = '跳转到外部浏览器？';
   // —— 队列空态引导（queue-redesign US1） ——

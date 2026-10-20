@@ -1,8 +1,8 @@
 import { fileIo as fs } from '@kit.CoreFileKit';
-import { common } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { BiliVideo } from '../model/BiliVideo';
 import { Subscription } from '../model/Subscription';
+import { AppContext } from './AppContext';
 import { BiliService, FolderFetchResult } from './BiliService';
 import { Constants, sleep } from './Constants';
 import { FileUtil } from './FileUtil';
@@ -18,7 +18,7 @@ export class SubscriptionStore {
   static loadSubscriptions(): Subscription[] {
     const list: Subscription[] = [];
     try {
-      const context = getContext() as common.UIAbilityContext;
+      const context = AppContext.require();
       const path: string = `${context.filesDir}/${SUBSCRIPTIONS_FILE}`;
       if (!fs.accessSync(path)) {
         return list;
@@ -46,7 +46,7 @@ export class SubscriptionStore {
 
   static saveSubscriptions(list: Subscription[]): void {
     try {
-      const context = getContext() as common.UIAbilityContext;
+      const context = AppContext.require();
       const path: string = `${context.filesDir}/${SUBSCRIPTIONS_FILE}`;
       const records: Array<Record<string, Object>> = [];
       for (let i = 0; i < list.length; i++) {
@@ -64,7 +64,7 @@ export class SubscriptionStore {
   static loadEpisodes(id: string): BiliVideo[] {
     const items: BiliVideo[] = [];
     try {
-      const context = getContext() as common.UIAbilityContext;
+      const context = AppContext.require();
       const path: string = `${context.filesDir}/${SubscriptionStore.cacheFileName(id)}`;
       if (!fs.accessSync(path)) {
         return items;
@@ -92,7 +92,7 @@ export class SubscriptionStore {
 
   static saveEpisodes(id: string, items: BiliVideo[]): void {
     try {
-      const context = getContext() as common.UIAbilityContext;
+      const context = AppContext.require();
       const path: string = `${context.filesDir}/${SubscriptionStore.cacheFileName(id)}`;
       const records: Array<Record<string, Object>> = [];
       for (let i = 0; i < items.length; i++) {
@@ -109,7 +109,7 @@ export class SubscriptionStore {
 
   static removeEpisodes(id: string): void {
     try {
-      const context = getContext() as common.UIAbilityContext;
+      const context = AppContext.require();
       const path: string = `${context.filesDir}/${SubscriptionStore.cacheFileName(id)}`;
       if (fs.accessSync(path)) {
         fs.unlinkSync(path);
