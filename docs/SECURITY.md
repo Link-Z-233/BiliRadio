@@ -21,7 +21,7 @@
 
 ### 恢复调试签名（交付后操作）
 
-DevEco Studio 打开 BiliRadio → **File > Project Structure > Signing Configs** → 勾选 **Automatically generate signature**，为 `com.example.biliradio` 生成全新材料。DevEco 会把材料写入根 `build-profile.json5`——**提交前必须移出**，两条路径任选：
+DevEco Studio 打开 BiliRadio → **File > Project Structure > Signing Configs** → 勾选 **Automatically generate signature**，为 `com.biliradio.app` 生成全新材料。DevEco 会把材料写入根 `build-profile.json5`——**提交前必须移出**，两条路径任选：
 
 > **注意**：DevEco 自动签名只会把 `signingConfigs` 材料块写入根文件，**不会**给 `products` 补 `"signingConfig": "default"` 引用。`hvigorfile.ts` 已对此做保底：外置文件缺省时自动为内联材料补上 product 引用，构建照常出已签名包——「未检测到签名配置」仅在两个来源皆无时出现。内联材料可直接使用，但**提交前仍必须移出**（下方路径 A/B），`.githooks/pre-commit` 会拦截误提交。
 

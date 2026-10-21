@@ -1,7 +1,7 @@
 {
   "app": {
-    "bundleName": "com.example.biliradio",
-    "vendor": "example",
+    "bundleName": "com.biliradio.app",
+    "vendor": "Link_Z",
     "versionCode": 5000,
     "versionName": "0.5.0",
     "icon": "$media:layered_image",
