@@ -73,5 +73,3 @@ DevEco Studio 打开 BiliRadio → **File > Project Structure > Signing Configs*
 - B 站登录 Cookie（SESSDATA / bili_jct / DedeUserID）
 - 应用签名证书与口令（.p12 / .cer / .p7b 及 keyPassword / storePassword）
 - 任何访问令牌或 API 密钥
-
-如发现上述信息被误提交，请立即联系维护者处理。

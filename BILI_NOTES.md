@@ -1,4 +1,4 @@
-# BILI_API
+# BILI_NOTES
 
 B 站 API 探索唯一沉淀点。三段式：§1 本项目（BiliRadio）在用端点与坑；§2 biliRelay 历史探索迁移；§3 本轮及后续新增实测。
 
@@ -33,7 +33,7 @@ B 站 API 探索唯一沉淀点。三段式：§1 本项目（BiliRadio）在用
 
 ### 1.2 鉴权与签名
 
-- **APP 签名**（`entry/src/main/ets/service/AppSigner.ets`）：TV appkey/secret（`Constants.TV_APP_KEY/TV_APP_SEC`），`sign = md5(encodeURIComponent 排序参数 + secret)` 拼接 `&sign=`；请求头 BiliDroid UA（`Constants.BILI_APP_USER_AGENT`）。APP 端点（`app.bilibili.com`）不认浏览器 cookie。
+- **APP 签名**（`entry/src/main/ets/service/AppSigner.ets`）：TV appkey/secret（`Constants.TV_APP_KEY/TV_APP_SEC`），`sign = md5(encodeURIComponent 排序参数 + secret)` 拼接 `&sign=`；请求头 BiliDroid UA（`Constants.BILI_APP_USER_AGENT`）。APP 端点（`app.bilibili.com`，投稿主链 `Constants.BILI_APP_ARCHIVE_URL`）不认浏览器 cookie。
 - **WBI 签名**（`entry/src/main/ets/service/WbiSigner.ets`）：`nav` 接口 `wbi_img.img_key/sub_key` → 64 元混淆表取 32 位 mixinKey → 参数排序（过滤 `!'()*` 字符）+ `wts` → `w_rid = md5(串 + mixinKey)`。
 - **设备指纹/风控激活**（`entry/src/main/ets/service/BiliSession.ets`）：SPI 取 buvid3/buvid4 → ExClimbWuzhi 激活 → 后续 Web 请求带 cookie；buvid 被风控标记后可重置重暖。
 - **登录态**：扫码登录（`BiliSession`）→ SESSDATA/bili_jct 落 `SecureStore`；心跳维持播放会话。
@@ -42,6 +42,7 @@ B 站 API 探索唯一沉淀点。三段式：§1 本项目（BiliRadio）在用
 ### 1.3 已知坑与对策
 
 - **`@ohos.net.http` 的 `maxRedirects: 0` 是「零配额」而非「禁重定向」**——短链解析改用 rcp + `autoRedirect`（`entry/src/main/ets/service/LinkResolver.ets`）。
+- **APP cursor 端点裸 UA（无 APP 签名）恒 -400**（PiliPlus 同端点实际经 AccountManager 拦截器携带登录 cookie）；接入 TV appkey 签名（`AppSigner`）后消失，签名链故障时 Web 退避链无缝降级。
 - **风控概率拦截（-412/-352）**：暖场 buvid + 退避重试；UP Web 链/acc/info 对可重试错误重置 buvid 指数退避后进下一轮，业务错误（-404/-400/-101）立即失败；全败抛最后一轮真实错误码。
 - **密集请求风控会升级**（412 → 352 → 403/799 梯度，见 §2.3 实验 8）：实测脚本请求间隔 ≥3s；各端点风控强度不同，`view` 最松、`space` 最严。
 - **分 P：顶层 `cid` 永远等于 P1 的 cid**，取哪一 P 只能读 `pages[].cid` 或用户指定的 `?p=N`（§2.3 实验 19）。

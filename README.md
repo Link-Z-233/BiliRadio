@@ -30,7 +30,8 @@
 
 ## 技术栈
 
-- **语言/框架**：ArkTS + ArkUI 声明式 UI
+- **语言/框架**：ArkTS + ArkUI 声明式 UI，零第三方依赖
+- **状态管理**：ArkUI V2（`@ObservedV2` + `@ComponentV2`）
 - **音频播放**：`@kit.AVSessionKit` 媒体会话 + AVPlayer
 - **后台能力**：后台持续任务（音频播放模式）
 - **数据存储**：`preferences` + 本地 JSON 文件
@@ -46,7 +47,7 @@
 1. 下载项目，用 DevEco Studio 打开根目录，等待依赖加载完成。
 2. 连接手机（开启开发者模式/USB 调试）或启动模拟器。
 3. 点击「运行 ▶」选择设备，等待编译并安装。
-4. 若提示未配置签名（产出未签名包无法装真机），按 [SECURITY.md](SECURITY.md) 的「签名与证书隔离」恢复调试签名后重试。
+4. 若提示未配置签名（产出未签名包无法装真机），按 [SECURITY.md](docs/SECURITY.md) 的「签名与证书隔离」恢复调试签名后重试。
 
 ## 怎么用
 
@@ -64,25 +65,29 @@ BiliRadio
 ├── entry/                    # 主模块（所有代码都在这里）
 │   └── src/main/
 │       ├── ets/
-│       │   ├── entryability/ # 应用入口
-│       │   ├── pages/        # 各页面（首页、播放层、订阅源详情、设置）
-│       │   ├── service/      # 核心服务（音频播放、B站接口、媒体会话、存储）
-│       │   ├── model/        # 数据模型
-│       │   └── component/    # 通用组件（MiniPlayer、底部播放队列面板等）
-│       └── resources/        # 图标、文案等资源
+│       │   ├── entryability/        # 应用入口
+│       │   ├── entrybackupability/  # 备份恢复扩展
+│       │   ├── pages/               # 各页面（首页、播放层、订阅源详情、设置）
+│       │   ├── service/             # 核心服务（音频播放、B站接口、媒体会话、存储）
+│       │   ├── model/               # 数据模型
+│       │   └── component/           # 通用组件（MiniPlayer、底部播放队列面板等）
+│       └── resources/               # 图标、文案等资源
+├── docs/                     # 活文档（架构总览、模块边界契约、已知问题等）
 ├── build-profile.json5       # 构建配置（signingConfigs 恒为空数组，git 追踪）
 ├── hvigorfile.ts             # 构建脚本（含外置签名动态加载）
 └── oh-package.json5          # 依赖声明
 ```
 
+每文件的职责、模块依赖方向、五层 z 序与状态管理详见 [docs/architecture.md](docs/architecture.md)。
+
 ## 常见问题
 
-- **构建提示「未检测到签名配置」？** 说明签名材料既不在外置的 `signing.local.json5`，根 `build-profile.json5` 中也没有。用 DevEco Studio 自动生成 debug 签名（File > Project Structure > Signing Configs）后重新构建；或按 [SECURITY.md](SECURITY.md) 的「签名与证书隔离」手动配置。
+- **构建提示「未检测到签名配置」？** 说明签名材料既不在外置的 `signing.local.json5`，根 `build-profile.json5` 中也没有。用 DevEco Studio 自动生成 debug 签名（File > Project Structure > Signing Configs）后重新构建；或按 [SECURITY.md](docs/SECURITY.md) 的「签名与证书隔离」手动配置。
 - **为什么不能登录/加载不出内容？** 本软件调用 B 站接口，需正常联网；部分接口可能因 B 站策略调整失效。
 
 ## 贡献指引
 
-欢迎提交 Issue 或 Pull Request。注意：把签名材料写入根 `build-profile.json5` 的提交会被 pre-commit 钩子拒绝（钩子随仓库传播，详见 [SECURITY.md](SECURITY.md)）；不要在 Issue/PR 中粘贴真实 Cookie 或签名口令。
+欢迎提交 Issue 或 Pull Request。注意：把签名材料写入根 `build-profile.json5` 的提交会被 pre-commit 钩子拒绝（钩子随仓库传播，详见 [SECURITY.md](docs/SECURITY.md)）；不要在 Issue/PR 中粘贴真实 Cookie 或签名口令。
 
 ## License
 

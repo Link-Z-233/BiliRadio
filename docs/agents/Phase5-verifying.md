@@ -1,9 +1,24 @@
-# BiliRadio UI 测试 Playbook（子代理专用）
+# BiliRadio 验证阶段专用文档（SDD Phase 5 必用，非 SDD 验证通用）
 
-> **用途**：spec-verify 子代理执行 UI 验证（T024 类任务）前必读。记录工具链用法、本项目交互地图、已知坑与解法。
-> **维护约定**：每轮 UI 验证结束后，执行验证的子代理应把本轮新学到的技巧**追加**到对应章节（≤10 行/条，可操作、不复述）。
+> **用途**：验证阶段专用文档——SDD Phase 5 必用本文档；非 SDD 验证（bugfix 直接修复后验证、轮次内小改动验证等）同样遵循。任何执行验证的一方（主代理/子代理/人工）验证前必读。覆盖验证范围判定、构建验证流程、UI 验证工具链与交互地图、已知坑与经验。
+> **维护约定**：每轮验证结束后，验证执行方应把本轮新学到的技巧**追加**到经验追加区（≤10 行/条，可操作、不复述）。
 
-## 1. 工具链（deveco-cli）
+## 1. 验证范围判定
+
+- **SDD 轮次**：以 `tasks.md` Verification 阶段的标记为准：
+  - `<!-- verification_scope: build-only -->`（默认）：仅执行第 2 节构建+部署验证
+  - `<!-- verification_scope: build+ui -->`：构建+部署通过后，再执行第 3~5 节 UI 验证
+- **非 SDD 验证**：无 tasks.md 标记时，默认同样只做第 2 节构建+部署验证；需要 UI 验证时走第 3~5 节
+- **spec-verify 只验证一次**：失败不重调，报告交主代理处理并修复；主代理自行验证同一目标 ≤3 次
+- 验证结果记录：SDD 轮次按 tasks.md 约定产出报告（PASS/FAIL/SKIP + 依据）；非 SDD 验证在对话中报告即可，不入文件
+
+## 2. 构建验证（默认路径）
+
+1. `devecocli build` 成功 = 构建通过；失败读输出中 `ERROR` 行定位（类型/导入/资源/权限/API 级别），修复后重试，同一目标 ≤3 次
+2. 构建成功后 `devecocli run --skip-build` 部署，确认应用可安装启动（部署失败 ≠ 构建失败，按签名/设备问题排查）
+3. 真机优先；多设备时 `--device` 指定
+
+## 3. UI 验证工具链（deveco-cli）
 
 ### 交互与检查
 | 命令 | 用途 | 关键点 |
@@ -22,19 +37,19 @@
 |---|---|---|
 | `devecocli device list` | 真机+模拟器清单 | 多设备时后续命令都要 `--device`；**真机优先**（用户平时真机测试） |
 | `devecocli emulator list / start / stop` | 模拟器管理 | MatePad Pro 11；启动慢（分钟级），设长超时 |
-| `devecocli run --skip-build` | 部署已构建产物 | 构建（T021）完成后用这个部署 |
+| `devecocli run --skip-build` | 部署已构建产物 | 构建完成后用这个部署 |
 | `devecocli run --apply <file>` | 增量热修 | 验证中修复代码后比全量 run 快得多；改动文件列表写入 `.hvigor/<file>`（相对路径，一行一个） |
 | `devecocli log --bundle-name <pkg> [--level E] [--from 5m] [--tail 200]` | hilog | **不要用 `--follow`**（代理会缓冲到进程退出）；用 `--from`/`--tail` 有界查询；复现问题前 `devecocli log clear` |
 | `devecocli log --crash --bundle-name <pkg>` | 崩溃日志 | 闪退/白屏先跑这个 |
 
-### 已知坑（ Troubleshooting ）
+### 已知坑（Troubleshooting）
 - **`ui layout` 找不到预期节点** → 节点不在屏内。先 `ui dircfling` 滚动或 `ui swipe` 滚到可见区再 layout。
 - **模拟器启动失败/OOM** → 宿主机内存瓶颈。启动前避免并发重负载（如并行构建）；失败重试一次，仍失败则按任务约定跳过 UI 验证不阻塞。
 - **`install sign info inconsistent`** → 签名变了。用 `devecocli run --uninstall` 先卸载再装。
 - **多设备连接** → 一切 ui/log/run 命令必须带 `--device <name|serial>`。
 - **半模态 bindSheet** → 弹出后焦点窗口变化，`ui layout` 默认查焦点窗口；查不到时 `--window` 配合 `--id`，或 `ui window list` 先看窗口清单。
 
-## 2. BiliRadio 交互地图（导航路径）
+## 4. 交互地图（导航路径）
 
 ### 首页（HomePage，Navigation 首页）
 - 订阅列表：LazyForEach 列表，**单击订阅卡片 → 进入订阅源详情页（SourcePage）**
@@ -70,23 +85,23 @@
 - 随机/单曲循环 → 行为同旧版
 - 播控中心（US8）：API 26 设备五元组 = 上一首/播放暂停/下一首/快退/快进；一级三元组 = 上一首/播放暂停/下一首（**系统硬规则，非缺陷**）
 
-## 3. 验证工作流（每故事）
+## 5. UI 验证工作流（每故事）
 
 1. **前置**：确认应用已部署且在前台（`ui layout` 能 dump 到首页树）
-2. **导航到目标场景**（按第 2 节交互地图）；不在屏内先滚动
+2. **导航到目标场景**（按第 4 节交互地图）；不在屏内先滚动
 3. **断言**：优先 `ui layout --format json` 找节点文本/属性（机器可判）；视觉性结论（间距/贴合度/颜色）用 `ui screenshot` 留证 + 自行判断
 4. **失败时**：`devecocli log --from 2m --tail 100` 查异常 → 修复（改动文件写入 `.hvigor/changes.txt` → `devecocli run --apply changes.txt` 增量部署）→ 重新验证（每故事 ≤3 次尝试）
 5. **网络依赖**：US1/US6/US9 需真实 B 站网络；订阅数据需账号已登录或有既有订阅。无网/未登录时记录 SKIPPED 原因，不算 FAIL
 6. **每故事结束**：结果（PASS/FAIL/SKIP）+ 尝试次数 + 截图路径（如有）
 
-## 4. 经验追加区（验证子代理维护）
+## 6. 经验追加区（验证执行方维护）
 
 <!-- 每轮验证后在此追加：
-- 日期 / 轮次
+- 轮次
 - 新技巧或新坑（≤10 行/条，可操作）
 -->
 
-- 2026-10-05 / Round 3（两次验证会话被中断，主代理从会话恢复中代录）：
+- Round 3（两次验证会话被中断，主代理从会话恢复中代录）：
   - 命令纠错：设备清单是 `devecocli device list`（不是 `devices`）；`ui screenshot` 不接收位置参数（报 "too many arguments"），输出路径配置方式待查证
   - 首装报 `9568263 install version downgrade` → `devecocli run --uninstall` 重装；锁屏状态下 Smoke 会误报进程死亡（10106102）→ `devecocli emulator power` + 上滑解锁后重试
   - 瞬态 UI（0.6s 缓冲弧线）验证：verify_ui 截图时机可能错过窗口 → 用 hilog 时序（try stream→initialized→prepared→playing）+ 尺寸链代码核对 + 多截图像素分析交叉取证

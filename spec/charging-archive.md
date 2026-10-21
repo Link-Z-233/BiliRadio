@@ -2,7 +2,7 @@
 
 **状态**：功能处待定态——源码注释保留，功能性验证待应用侧 WBI 放行（见 §5 状态登记）。
 
-充电相关内容已从 `BILI_API.md`、`PROJECT_NOTES.md`、源码与 spec 各轮工件中移出，统一收档本文件：§1-§7 迁自原 `spec/v0.5-part3-registry/charging-archive.md`（问题定义、证据链、恢复路线图、代码附录），§8 为历轮 spec 工件移出内容原文（part2/part3/part4 的 US/FR/SC/D/T，原位留 ID 存根指向本档）。当前源码中充电判定管线与角标渲染以注释态保留，恢复=取消注释三处，注释代码与 §7 附录互为校验。
+充电相关内容已从 `BILI_NOTES.md`、`PROJECT_NOTES.md`、源码与 spec 各轮工件中移出，统一收档本文件：§1-§7 迁自原 `spec/v0.5-part3-registry/charging-archive.md`（问题定义、证据链、恢复路线图、代码附录），§8 为历轮 spec 工件移出内容原文（part2/part3/part4 的 US/FR/SC/D/T，原位留 ID 存根指向本档）。当前源码中充电判定管线与角标渲染以注释态保留，恢复=取消注释三处，注释代码与 §7 附录互为校验。
 
 ---
 
@@ -15,7 +15,7 @@
 
 ### 2.1 前证：biliRelay 实验 21（2026-09-22）
 
-原文：`../bili/biliRelay/docs/B站API试错记录.md` 实验 21（已从 `BILI_API.md` §2 迁出，原文以 biliRelay 仓库为准）。要点：
+原文：`../bili/biliRelay/docs/B站API试错记录.md` 实验 21（已从 `BILI_NOTES.md` §2 迁出，原文以 biliRelay 仓库为准）。要点：
 
 - 登录态打各源列表接口看字段取值分布：`up`（space vlist）`is_charging_arc`/`elec_arc_type`/`elec_arc_badge`/`is_pay`——5 UP × 30 条 = 150 条全 False/0（证明是逐条目标记非「UP 开了充电计划」）；`watchlater` 自带完整 `rights` dict 全 0；`season`/`series` 有 `ugc_pay`/`state`；`fav` 无 `rights` 判不出；`bv` 详情 `view.data.is_upower_exclusive`（普通视频 False）。
 - 当时结论：拿不到正向样本，判据按「名字 + 分布」反推，只认明确 True/非 0。
@@ -23,7 +23,7 @@
 
 ### 2.2 本项目四类链实测（2026-10 轮，v0.5-part2 US4/T014）
 
-（原文自 `BILI_API.md` §3.1 迁入；工件：`spec/v0.5-part2-source-page-polish/`）
+（原文自 `BILI_NOTES.md` §3.1 迁入；工件：`spec/v0.5-part2-source-page-polish/`）
 
 目的：订阅剧集列表接口能否逐条携带「充电专属」标记。实测覆盖四类订阅链路，请求间隔 ≥3s。
 
@@ -41,7 +41,7 @@
 
 ### 2.3 plain 与 WBI 端点数据差异（2026-10-16）
 
-（原文自 `BILI_API.md` §3.3 迁入）
+（原文自 `BILI_NOTES.md` §3.3 迁入）
 
 - **PiliPlus 佐证**（`../bili/PiliPlus`，Flutter 生产客户端）：用户投稿页唯一端点即 `x/space/wbi/arc/search`（`lib/http/api.dart` `searchArchive`），vlist 模型（`lib/models_new/member/search_archive/vlist.dart`）生产解析 `is_charging_arc === true` → 渲染「充电专属」角标——**WBI 端点 vlist 包含充电条目**，网页标记同源。附带：`searchArchive` 支持 `special_type: 'charging'` 参数（`lib/http/member.dart` L349-375：`specialType` 形参 → query `'special_type': ?specialType`；网页空间页「充电专属」筛选即它），可单发一请求只拉某 UP 的充电视频列表（探针实测可行，见 §2.4）。
 - **plain 端点漏发实测**（本项目，模拟器登录态）：`x/space/arc/search`（非 WBI）登录态第 1 轮即成功（HTTP 200 + code=0），但 vlist **不含**充电条目（补稠合并零新增可证）——plain 数据被过滤，非风控问题。
@@ -72,9 +72,9 @@
 
 **文档**：
 
-- `BILI_API.md`：§1.1 端点表充电短语、§1 充电标记要点、§2 实验 21 迁移原文、§3.1/§3.3（即本存档 2.2/2.3 前身）
+- `BILI_NOTES.md`：§1.1 端点表充电短语、§1 充电标记要点、§2 实验 21 迁移原文、§3.1/§3.3（即本存档 2.2/2.3 前身）
 - `PROJECT_NOTES.md` DIS-3（内容已被本存档取代）
-- `spec/v0.5-part2-source-page-polish/bugfix.md`：#2 充电局限条删除；#4 充电表述重写为端点顺序中性描述（WBI-first 交换记录保留）；#1 `BILI_API.md` §3.2 引用随重编号改 §3.1
+- `spec/v0.5-part2-source-page-polish/bugfix.md`：#2 充电局限条删除；#4 充电表述重写为端点顺序中性描述（WBI-first 交换记录保留）；#1 `BILI_NOTES.md` §3.2 引用随重编号改 §3.1
 
 **spec 工件移出手术**：part2/part3/part4 九工件中的充电条目（US/FR/SC/D/T）移出至本档 §8，原位留 ID 存根；原 `spec/v0.5-part3-registry/charging-archive.md`（本档 §1-§7 前身）删除。
 
@@ -88,7 +88,7 @@
 4. **可选优化**（当时评估）：`special_type: 'charging'` 单发取充电列表（§2.3），省去依赖整页 vlist 放行——探针已实测可行（§2.4），本轮未采用，按存档判据走整页 vlist。
 5. **收尾**：删除本存档或在其中登记终态。
 
-**状态登记**：功能处**待定态**（用户决策——WBI 出口级风控未放行，应用侧无充电数据，功能无法测试验证；网络级实证见 `BILI_API.md` §3.4。风控解决前维持注释态，不作下线定论）。判定管线两处（`BiliService.ets` 合集 ugc_pay 块、vlist 四字段块）与「充电」角标渲染块（`SourcePage.ets`）已注释保留，恢复=取消注释三处；模型字段与序列化（`BiliVideo.ets`）、`gold_accent` 色彩资源保留未动。历史脉络：代码按 §7 附录还原后，应用侧 WBI 恒 `-403`（真机历轮验证）、plain 真机 `-799`（模拟器登录态曾 200），UP Web 双链真机全断、APP 签名链供数；判据与实测详见本存档 §2.2-§2.4。恢复时按 §5 路线图执行（前提观察：WBI 放行），注释代码与 §7 附录互为校验。
+**状态登记**：功能处**待定态**（用户决策——WBI 出口级风控未放行，应用侧无充电数据，功能无法测试验证；网络级实证见 `BILI_NOTES.md` §3.4。风控解决前维持注释态，不作下线定论）。判定管线两处（`BiliService.ets` 合集 ugc_pay 块、vlist 四字段块）与「充电」角标渲染块（`SourcePage.ets`）已注释保留，恢复=取消注释三处；模型字段与序列化（`BiliVideo.ets`）、`gold_accent` 色彩资源保留未动。历史脉络：代码按 §7 附录还原后，应用侧 WBI 恒 `-403`（真机历轮验证）、plain 真机 `-799`（模拟器登录态曾 200），UP Web 双链真机全断、APP 签名链供数；判据与实测详见本存档 §2.2-§2.4。恢复时按 §5 路线图执行（前提观察：WBI 放行），注释代码与 §7 附录互为校验。
 
 ## 6. 参考
 
