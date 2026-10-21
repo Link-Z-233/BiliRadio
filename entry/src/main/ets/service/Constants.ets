@@ -44,6 +44,10 @@ export class Constants {
   static readonly KEY_HISTORY_SYNC: string = 'historySync';
   // 上次首页静默刷新完成时刻（毫秒时间戳）：跨启动 CD 判定基准（D9 回拨规则）
   static readonly KEY_LAST_SILENT_REFRESH_AT: string = 'lastSilentRefreshAt';
+  // 异常源自动跳过（1=跳过试听流 0=照常播放，默认跳过）
+  static readonly KEY_ANOMALY_SKIP: string = 'anomalySkip';
+  // 数据源异常 bvid 集（JSON 数组字符串，per-bvid 持久化 X 标记，不云同步）
+  static readonly KEY_ANOMALY_BVIDS: string = 'anomalyBvids';
 
   // —— AppStorage 键 ——
   static readonly AS_COLOR_MODE_SETTING: string = 'colorModeSetting';
@@ -88,6 +92,8 @@ export class Constants {
   static readonly PROGRESS_SAVE_INTERVAL_MS: number = 5000;
   // 完播阈值（play-history-progress FR-003/FR-004）：进度 ≥ 时长×该比例视为已听完（progress=-1），不暴露为设置
   static readonly PLAY_COMPLETE_RATIO: number = 0.95;
+  // 数据源异常判定阈值（v0.5-part5）：流时长 < 元数据时长×该比例判为试听流（真机校准）
+  static readonly ANOMALY_DURATION_RATIO: number = 0.5;
   static readonly PREV_SEEK_THRESHOLD_MS: number = 3000;
   static readonly CONNECT_TIMEOUT_MS: number = 15000;
   static readonly READ_TIMEOUT_MS: number = 30000;
@@ -139,6 +145,9 @@ export class Constants {
   // 悬浮胶囊阴影档（独立悬浮按钮投影，对齐 MiniPlayer 既有阴影；色值资源 shadow_ball）
   static readonly TOKEN_FLOATING_SHADOW_RADIUS: number = 12;
   static readonly TOKEN_FLOATING_SHADOW_OFFSET_Y: number = 2;
+  // 时长角标投影（源页剧集行封面右下角标，投影色资源 duration_badge_scrim）
+  static readonly DURATION_BADGE_SHADOW_RADIUS: number = 8;
+  static readonly DURATION_BADGE_SHADOW_OFFSET_Y: number = 1;
 
   // —— 玻璃浮层（GlassSheet，v0.4-Part1 sheet-visual-redesign）：动画/渐隐/投影参数唯一来源 ——
   // 浮层滑入+渐显动画时长（ms）：遮罩 OPACITY 过渡同步此值
@@ -224,6 +233,9 @@ export class Constants {
   // —— 播放出错提醒（US6）：同一 bvid+阶段时间窗内去重（仅广播提醒去重，日志恒记）与 toast 文案 ——
   static readonly PLAYBACK_ERROR_DEDUP_MS: number = 3000;
   static readonly TOAST_PLAYBACK_ERROR: string = '播放出错，请稍后重试';
+  // —— 数据源异常提醒（v0.5-part5）：跳过推进 / 照常播放试听流两种模式的 toast 文案 ——
+  static readonly TOAST_ANOMALY_SKIP: string = '已跳过试听内容，完整版需充电';
+  static readonly TOAST_ANOMALY_TRIAL: string = '当前为试听内容，完整版需充电';
   // —— 刷新结果通知（v0.5-part4 risk-control）：手动刷新成功 / 静默刷新失败（N 由失败订阅数代入）——
   static readonly TOAST_REFRESHED: string = '已更新';
   static readonly TOAST_SILENT_REFRESH_FAIL: string = 'N 个订阅刷新失败';

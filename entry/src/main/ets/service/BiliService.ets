@@ -463,7 +463,7 @@ export class BiliService {
 
   // T019：合集列表翻页抓取——page_num 自 1 递增，本页返回条数 < page_size 即终止（短页终止），
   // 安全上限 10 页防异常数据死循环；页间 sleep 参照 fetchSeasonVideos 的 1500ms；
-  // 该端点不得带 WBI 签名参数，多余 w_rid/wts 触发 -400（BILI_API.md §3.2）
+  // 该端点不得带 WBI 签名参数，多余 w_rid/wts 触发 -400（BILI_NOTES.md §3.2）
   static async fetchSeasonsList(mid: number): Promise<Season[]> {
     const seasons: Season[] = [];
     const ps: number = 20;

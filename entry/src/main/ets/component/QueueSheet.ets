@@ -868,6 +868,12 @@ export struct QueueSheet {
           .fontColor([$r('app.color.success_green')])
           .margin({ left: Constants.TOKEN_SPACE_XS })
       }
+      if (!this.selectMode.value && this.controller.hasAnomaly(part.bvid)) {
+        SymbolGlyph($r('sys.symbol.xmark_circle'))
+          .fontSize(Constants.TOKEN_FONT_TITLE)
+          .fontColor([$r('app.color.danger_red')])
+          .margin({ left: Constants.TOKEN_SPACE_XS })
+      }
     }
     .width('100%')
     .padding({ left: Constants.QUEUE_PART_INDENT, right: Constants.TOKEN_SPACE_L, top: Constants.TOKEN_SPACE_S, bottom: Constants.TOKEN_SPACE_S })
@@ -990,6 +996,13 @@ export struct QueueSheet {
         SymbolGlyph($r('sys.symbol.checkmark_circle'))
           .fontSize(Constants.TOKEN_FONT_TITLE)
           .fontColor([$r('app.color.success_green')])
+          .margin({ left: Constants.TOKEN_SPACE_XS })
+      }
+      // 数据源异常标记（v0.5-part5）：行尾红 X，与 ✓ 同视觉档可并存
+      if (!this.selectMode.value && this.controller.hasAnomaly(entry.videos[0].bvid)) {
+        SymbolGlyph($r('sys.symbol.xmark_circle'))
+          .fontSize(Constants.TOKEN_FONT_TITLE)
+          .fontColor([$r('app.color.danger_red')])
           .margin({ left: Constants.TOKEN_SPACE_XS })
       }
     }

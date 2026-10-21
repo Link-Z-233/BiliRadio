@@ -743,6 +743,14 @@ export struct HistorySheet {
                   .alignItems(HorizontalAlign.Start)
                   .layoutWeight(1)
                   .margin({ left: Constants.TOKEN_SPACE_10 })
+
+                  // 数据源异常标记（v0.5-part5）：行尾红 X，对齐队列条目视觉档
+                  if (this.controller.hasAnomaly(row.bvid)) {
+                    SymbolGlyph($r('sys.symbol.xmark_circle'))
+                      .fontSize(Constants.TOKEN_FONT_TITLE)
+                      .fontColor([$r('app.color.danger_red')])
+                      .margin({ left: Constants.TOKEN_SPACE_XS })
+                  }
                 }
                 .width('100%')
                 .padding({ left: Constants.TOKEN_SPACE_L, right: Constants.TOKEN_SPACE_L, top: Constants.TOKEN_SPACE_10, bottom: Constants.TOKEN_SPACE_10 })

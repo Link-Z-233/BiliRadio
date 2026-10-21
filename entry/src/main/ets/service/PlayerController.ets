@@ -11,6 +11,7 @@ import { AudioTrack, AudioQuality, QualityTier, ResolvedAudio } from '../model/A
 
 import { BusinessError } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import { promptAction } from '@kit.ArkUI';
 import { Constants } from './Constants';
 import { Logger } from './Logger';
 import { NetUtil } from './NetUtil';
@@ -114,6 +115,12 @@ export class PlayerController {
   errorCode: number = 0;
   errorTick: number = 0;
   private errorLastAt: Map<string, number> = new Map<string, number>();
+
+  // —— 数据源异常标记（v0.5-part5 play-anomaly）：零装饰器，anomalySet 快照随 emitUi 广播，
+  // 消费方 syncFrom 拷贝或 hasAnomaly 直查；仅本地 preferences，不云同步 ——
+  anomalySet: Set<string> = new Set<string>();
+  private anomalyToastLastAt: number = 0;
+  private anomalyGuardLogged: boolean = false;
 
   isWifiNow(): boolean {
     return this.wifiNow;
@@ -235,6 +242,99 @@ export class PlayerController {
     this.emitUi();
   }
 
+  private loadAnomalySet(): Set<string> {
+    const set: Set<string> = new Set<string>();
+    try {
+      const arr: string[] = JSON.parse(AppStore.getString(Constants.KEY_ANOMALY_BVIDS, '[]')) as string[];
+      for (let i = 0; i < arr.length; i++) {
+        if (arr[i] !== '') {
+          set.add(arr[i]);
+        }
+      }
+    } catch (e) {
+      hilog.warn(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'loadAnomalySet failed');
+    }
+    return set;
+  }
+
+  private persistAnomalySet(): void {
+    AppStore.putString(Constants.KEY_ANOMALY_BVIDS, JSON.stringify(Array.from(this.anomalySet)));
+  }
+
+  hasAnomaly(bvid: string): boolean {
+    return this.anomalySet.has(bvid);
+  }
+
+  private markAnomaly(bvid: string): void {
+    if (this.anomalySet.has(bvid)) {
+      return;
+    }
+    this.anomalySet.add(bvid);
+    this.persistAnomalySet();
+    Logger.log('player', 'anomaly mark', `bvid=${bvid}`);
+    this.emitUi();
+  }
+
+  private clearAnomaly(bvid: string): void {
+    if (!this.anomalySet.has(bvid)) {
+      return;
+    }
+    this.anomalySet.delete(bvid);
+    this.persistAnomalySet();
+    Logger.log('player', 'anomaly clear', `bvid=${bvid}`);
+    this.emitUi();
+  }
+
+  // 异常 toast 去重窗（FR-008）：沿用 PLAYBACK_ERROR_DEDUP_MS 窗口，窗内只弹一次；日志恒记
+  private showAnomalyToast(message: string): void {
+    const now: number = Date.now();
+    if (now - this.anomalyToastLastAt < Constants.PLAYBACK_ERROR_DEDUP_MS) {
+      return;
+    }
+    this.anomalyToastLastAt = now;
+    promptAction.showToast({ message: message });
+  }
+
+  // 数据源异常判定（D1/D2）：prepared 是流时长唯一可信取值点；元数据/流时长任一无效跳过判定（FR-009）；
+  // 仅判「显著短于」（反向常源于元数据不可靠，不判）；异常标 X（幂等，复用 prepared 分支不重复写盘），
+  // 流恢复完整自动摘 X（D6）；拉流失败不进本判定点天然不标 X（D9）。
+  // 返回 true = 跳过分流已接管本次 prepared，调用方不得再起播
+  private handleAnomalyOnPrepared(): boolean {
+    if (this.currentIndex < 0 || this.currentIndex >= this.playlist.length) {
+      return false;
+    }
+    const item: BiliVideo = this.playlist[this.currentIndex];
+    if (item.bvid === '' || item.duration <= 0 || this.duration <= 0) {
+      return false;
+    }
+    const anomaly: boolean = this.duration < item.duration * 1000 * Constants.ANOMALY_DURATION_RATIO;
+    Logger.log('player', 'anomaly check',
+      `bvid=${item.bvid} streamMs=${this.duration} metaSec=${item.duration} anomaly=${anomaly ? 1 : 0}`);
+    if (!anomaly) {
+      this.clearAnomaly(item.bvid);
+      return false;
+    }
+    this.markAnomaly(item.bvid);
+    if (AppStore.getNumber(Constants.KEY_ANOMALY_SKIP, 1) !== 1) {
+      this.showAnomalyToast(Constants.TOAST_ANOMALY_TRIAL);
+      Logger.log('player', 'anomaly trial play', `bvid=${item.bvid} streamMs=${this.duration}`);
+      return false;
+    }
+    const nextIndex: number = this.currentIndex + 1;
+    if (nextIndex >= this.playlist.length) {
+      this.showAnomalyToast(Constants.TOAST_ANOMALY_SKIP);
+      Logger.log('player', 'anomaly skip stop', `bvid=${item.bvid} queue end`);
+      this.playIntent = false;
+      this.currentItemEnded = true;
+      this.statusMsg = '播放结束';
+      return true;
+    }
+    this.showAnomalyToast(Constants.TOAST_ANOMALY_SKIP);
+    Logger.log('player', 'anomaly skip', `bvid=${item.bvid} from=${this.currentIndex} to=${nextIndex}`);
+    this.playIndex(nextIndex, 0).catch((): void => {});
+    return true;
+  }
+
   async init(): Promise<void> {
     if (this.inited) {
       return;
@@ -245,6 +345,8 @@ export class PlayerController {
 
       this.playHistory = AppStore.loadPlayHistoryFile();
       this.playHistoryVersion++;
+
+      this.anomalySet = this.loadAnomalySet();
 
       BiliService.ensureBuvid().catch((): void => {});
 
@@ -410,6 +512,11 @@ export class PlayerController {
             item.cover, item.ownerName, true);
         }
       }
+      // 数据源异常判定（v0.5-part5 T004/T005）：流时长 vs 元数据时长，异常按设置跳过/续播
+      if (this.handleAnomalyOnPrepared()) {
+        this.emitUi();
+        return;
+      }
       if (this.playIntent) {
         this.player.play();
       } else {
@@ -421,8 +528,7 @@ export class PlayerController {
         this.statusMsg = '已加载完成，处于暂停状态';
         this.mediaSession.updateState(false, this.currentTime);
       }
-    } else if (state === 'playing') {
-      this.isPreparing = false;
+    } else if (state === 'playing') {      this.isPreparing = false;
       if (this.pendingSeekMs > 0) {
         const seekTo: number = this.pendingSeekMs;
         this.pendingSeekMs = 0;
@@ -816,6 +922,8 @@ export class PlayerController {
     // 云端心跳复位（US1）：切分P/重新起播重置上报水位与熔断计数，新分P 重新计
     this.heartbeatLastSentSec = 0;
     this.heartbeatFailCount = 0;
+    // 完播防护日志去重复位：新条目起播后防护触发重新登记一次
+    this.anomalyGuardLogged = false;
     // 续播决策（plan R4）：仅新起播（seekMs<=0，如点历史条目/点单集入队/切歌）时以历史进度决定起点；
     // seekMs>0 的换音质保进度（setQualityTier resumePos）与全局断点恢复路径零变化
     let effectiveSeekMs: number = seekMs;
@@ -1569,12 +1677,21 @@ export class PlayerController {
   }
 
   // 完播标记（plan R5）：当前条目 progress=-1 即时写盘（对齐 B 站「-1=看完」语义）；
-  // 已是 -1 则幂等跳过（含跳过写盘），避免播放 tick 高频重复落盘
+  // 已是 -1 则幂等跳过（含跳过写盘），避免播放 tick 高频重复落盘；
+  // 异常条目设防（D5）：试听播完≠看完，两条自动写 -1 路径（completed/95% 阈值）均经此处，
+  // bvid 命中异常集不写 -1（不产假 ✓ 不污染云同步）；手动「标记已看完」不经此处不受拦
   private markCurrentHistoryCompleted(): void {
     if (this.currentIndex < 0 || this.currentIndex >= this.playlist.length) {
       return;
     }
     const current: BiliVideo = this.playlist[this.currentIndex];
+    if (this.anomalySet.has(current.bvid)) {
+      if (!this.anomalyGuardLogged) {
+        this.anomalyGuardLogged = true;
+        Logger.log('player', 'anomaly complete guard', `bvid=${current.bvid}`);
+      }
+      return;
+    }
     const idx: number = this.indexOfPlayHistory(current.bvid, current.page);
     if (idx < 0) {
       return;
@@ -1802,7 +1919,8 @@ export class PlayerController {
   }
 
   // 清除已播（v0.3-bugfix-round2 US3 重写）：已听完判定与播放模式无关——播放历史 progress===-1 即已听完，
-  // 移除 playlist 中全部已听完且非当前播放的条目；复用 removeSelectedFromPlaylist 批量链路
+  // 数据源异常条目（X 标记，v0.5-part5 追加）一并纳入；移除 playlist 中全部命中且非当前播放的条目；
+  // 复用 removeSelectedFromPlaylist 批量链路
   // （removingCurrent/removedBeforeCurrent 索引修正、空队列重置、持久化全套语义）；
   // 无可清静默返回；UI 侧经 playlistVersion++ 触发 syncFrom 的 diff 增量刷新
   async clearPlayedItems(): Promise<void> {
@@ -1836,7 +1954,7 @@ export class PlayerController {
     return false;
   }
 
-  // 可清理集合：playlist 中已听完且非当前播放的复合键（当前条目永远保留，spec FR-003）
+  // 可清理集合：playlist 中已听完或数据源异常（X 标记）且非当前播放的复合键（当前条目永远保留，spec FR-003）
   private collectPlayedRemovable(): string[] {
     const currentKey: string = this.currentIndex >= 0 && this.currentIndex < this.playlist.length
       ? BiliVideo.itemKeyOf(this.playlist[this.currentIndex].bvid, this.playlist[this.currentIndex].page)
@@ -1845,16 +1963,17 @@ export class PlayerController {
     for (let i = 0; i < this.playlist.length; i++) {
       const item: BiliVideo = this.playlist[i];
       const key: string = BiliVideo.itemKeyOf(item.bvid, item.page);
-      if (key !== currentKey && this.isPlayed(item.bvid)) {
+      if (key !== currentKey && (this.isPlayed(item.bvid) || this.hasAnomaly(item.bvid))) {
         result.push(key);
       }
     }
     return result;
   }
 
-  // 条目口径已播可清计数（v0.4-queue-multi-p-item plan D7）：bvid 已播完（isPlayed）且
-  // 该条目游程不含当前播放条目的条目数（组算 1；含当前条目的组被 clearPlayedItems 裁剪
-  // 但不清除，不计入避免歧义）；collectPlayedRemovable/clearPlayedItems 的分P 键集合不动
+  // 条目口径已播可清计数（v0.4-queue-multi-p-item plan D7）：bvid 已播完（isPlayed）或
+  // 数据源异常（hasAnomaly，v0.5-part5 追加）且该条目游程不含当前播放条目的条目数（组算 1；
+  // 含当前条目的组被 clearPlayedItems 裁剪但不清除，不计入避免歧义）；
+  // collectPlayedRemovable/clearPlayedItems 的分P 键集合不动
   playedRemovableCount(): number {
     const currentKey: string = this.currentIndex >= 0 && this.currentIndex < this.playlist.length
       ? BiliVideo.itemKeyOf(this.playlist[this.currentIndex].bvid, this.playlist[this.currentIndex].page)
@@ -1863,7 +1982,7 @@ export class PlayerController {
     let count: number = 0;
     for (let g = 0; g < groups.length; g++) {
       const run: number[] = groups[g];
-      if (!this.isPlayed(this.playlist[run[0]].bvid)) {
+      if (!this.isPlayed(this.playlist[run[0]].bvid) && !this.hasAnomaly(this.playlist[run[0]].bvid)) {
         continue;
       }
       let containsCurrent: boolean = false;
