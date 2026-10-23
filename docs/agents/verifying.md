@@ -114,3 +114,8 @@
 - v0.6-part1（build-only，真机无线部署）：
   - 无线真机部署：`hdc tconn 192.168.x.x:port`（hdc 已入 PATH：SDK `toolchains` 目录）；连接后 `devecocli run` 须 `--device <serial>` 显式指定——stopped 模拟器也占设备清单位，单在线设备同样触发 `DEVICE_SELECTION_REQUIRED`
   - `devecocli emulator start --device <name>` 报 unknown option——设备名用位置参数；且启动可能超时不出现在 hdc list（非阻塞，改真机路径即可）
+
+- v0.6-part2-debt-cleanup（build-only，部署取消·用户真机自部署）：
+  - 构建告警清点必须全量构建：增量构建（CompileArkTS UP-TO-DATE）不重跑 lint，告警缺失是「没跑」不是「修了」——先 `devecocli build clean` 再 `devecocli build`，全量日志才可作告警验收依据
+  - 告警清点对账法：完整日志在 `Temp\deveco\devecocli\build-*.log`（每次构建新文件）；WARN 行恒后随一条消息行，按「WARN 行 + 后随消息行」配对 Group-Object 分组，总数对账后再逐类定位——比逐模式分别计数不易漏项
+  - syscap 类告警消息形态为 "The system capacity of this api 'X' is not supported on all devices"（清点检索 'system capacity'，非 'syscap' 字样）

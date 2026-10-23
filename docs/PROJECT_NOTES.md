@@ -13,6 +13,12 @@
   1. **B3 系列默认类型歧义**：`lists` 路径无 `type=series` 参数时默认按合集（season）处理，实际可能为系列。
   2. **B8 BV 无合法性校验**：仅匹配形态不校验，伪 BV 号要进入网络请求后才失败。
 
+### KI-8 hvigor SemVer 判定拒绝 0.x 主版本
+
+- **表现**：`entry/oh-package.json5` version 为 0.x（如 `0.1.0`）时构建恒报 `The version number of the 'entry' module does not comply with the SemVer specification`；主版本 ≥ 1（如 `1.0.0`）告警消失；根 `oh-package.json5` 有无 version 字段与此无关（对照实验排除）。
+- **现状**：v0.6-part2 已固化 entry version `1.0.0`，告警消除；oh-package version 仅 ohpm 发布维度语义，安装升级走 AppScope versionCode 不受影响。
+- **未深挖**：hvigor 内部判定规则细节（检查正则 / semver 库版本）未查证——实验已足定位与修复；若未来 hvigor 重新接受 0.x，最多告警不再出现，无行为影响。
+
 ## 二、已移除与禁用功能
 
 ### REM-1 下载页（三文件移除）

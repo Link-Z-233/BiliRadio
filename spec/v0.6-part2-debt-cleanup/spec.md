@@ -1,6 +1,6 @@
 # Feature Specification: 构建告警技术债清理（v0.6-part2）
 
-**Status**: Draft（仅登记未启动——v0.6-part1 收尾完成后由用户另行启动轮次）
+**Status**: Approved（本轮已启动，spec 复核与代码现状一致）
 **Input**: v0.6-part1 验证轮全量构建日志告警清点（用户指示「将这些技术债记录到 part2 的 spec」「仅记录，不执行」）
 
 ## Overview

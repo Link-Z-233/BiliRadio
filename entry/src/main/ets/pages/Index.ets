@@ -34,6 +34,7 @@ struct Index {
   private unsubPlayer: (() => void) | undefined = undefined;
   private lastErrorTick: number = 0;
   private lastUnfavToastTick: number = 0;
+  private lastAnomalyToastTick: number = 0;
 
   aboutToAppear(): void {
     this.wideListener = this.getUIContext().getMediaQuery().matchMediaSync('(min-width: 600vp)');
@@ -97,6 +98,7 @@ struct Index {
     // emitUi 每秒进度节流也会进此回调，tick 比对恒假零开销
     this.lastErrorTick = controller.errorTick;
     this.lastUnfavToastTick = controller.unfavToastTick;
+    this.lastAnomalyToastTick = controller.anomalyToastTick;
     this.unsubPlayer = controller.subscribe((): void => {
       if (controller.errorTick !== this.lastErrorTick) {
         this.lastErrorTick = controller.errorTick;
@@ -105,6 +107,10 @@ struct Index {
       if (controller.unfavToastTick !== this.lastUnfavToastTick) {
         this.lastUnfavToastTick = controller.unfavToastTick;
         this.getUIContext().getPromptAction().showToast({ message: controller.unfavToastMsg });
+      }
+      if (controller.anomalyToastTick !== this.lastAnomalyToastTick) {
+        this.lastAnomalyToastTick = controller.anomalyToastTick;
+        this.getUIContext().getPromptAction().showToast({ message: controller.anomalyToastMsg });
       }
     }, 'Index');
     controller.init().then((): void => {

@@ -11,7 +11,6 @@ import { AudioTrack, AudioQuality, QualityTier, ResolvedAudio } from '../model/A
 
 import { BusinessError } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { promptAction } from '@kit.ArkUI';
 import { Constants } from './Constants';
 import { Logger } from './Logger';
 import { NetUtil } from './NetUtil';
@@ -127,6 +126,11 @@ export class PlayerController {
   anomalySet: Set<string> = new Set<string>();
   private anomalyToastLastAt: number = 0;
   private anomalyGuardLogged: boolean = false;
+
+  // —— 异常 toast 广播（v0.6-part2 US1）：零装饰器，toast 快照 + tick 版本计数随 emitUi 广播，
+  // 消费方（Index）订阅回调内比对 tick 变化触发系统 toast ——
+  anomalyToastMsg: string = '';
+  anomalyToastTick: number = 0;
 
   isWifiNow(): boolean {
     return this.wifiNow;
@@ -298,7 +302,9 @@ export class PlayerController {
       return;
     }
     this.anomalyToastLastAt = now;
-    promptAction.showToast({ message: message });
+    this.anomalyToastMsg = message;
+    this.anomalyToastTick++;
+    this.emitUi();
   }
 
   // 数据源异常判定（D1/D2）：prepared 是流时长唯一可信取值点；元数据/流时长任一无效跳过判定（FR-009）；
