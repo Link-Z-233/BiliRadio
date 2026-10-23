@@ -88,6 +88,7 @@ export class PlayerController {
   playHistory: PlayHistoryItem[] = [];
   playHistoryVersion: number = 0;
   confirmCellularDownload: (() => Promise<boolean>) | undefined = undefined;
+  confirmUnfavoriteRemoval: ((count: number) => Promise<boolean>) | undefined = undefined;
   private loadToken: number = 0;
 
   // —— 音质状态（audio-quality-settings，随 emitUi 广播供页面 syncFrom 读取）——
@@ -115,6 +116,11 @@ export class PlayerController {
   errorCode: number = 0;
   errorTick: number = 0;
   private errorLastAt: Map<string, number> = new Map<string, number>();
+
+  // —— 队列移除联动取消收藏（v0.6-part1 US1）：零装饰器，结果 toast 快照 + tick 版本计数随 emitUi 广播，
+  // 消费方（Index）订阅回调内比对 tick 变化触发系统 toast ——
+  unfavToastMsg: string = '';
+  unfavToastTick: number = 0;
 
   // —— 数据源异常标记（v0.5-part5 play-anomaly）：零装饰器，anomalySet 快照随 emitUi 广播，
   // 消费方 syncFrom 拷贝或 hasAnomaly 直查；仅本地 preferences，不云同步 ——
@@ -1553,6 +1559,12 @@ export class PlayerController {
       this.emitUi();
       return;
     }
+    // 非本人收藏夹门禁（US1）：folderOwnerMid=0 视为未知放行（兼容旧数据），非 0 且非本人则拦截
+    if (item.folderOwnerMid !== 0 && item.folderOwnerMid !== BiliSession.getInstance().mid) {
+      this.statusMsg = Constants.STATUS_UNFAVORITE_NOT_OWNER;
+      this.emitUi();
+      return;
+    }
     this.statusMsg = '正在取消收藏...';
     this.emitUi();
     try {
@@ -1851,8 +1863,39 @@ export class PlayerController {
   }
 
   // 入参为复合键（bvid:page，经 BiliVideo.itemKeyOf 合成）
-  async removeSelectedFromPlaylist(keys: string[]): Promise<void> {    if (keys.length === 0) {
+  async removeSelectedFromPlaylist(keys: string[]): Promise<void> {
+    if (keys.length === 0) {
       return;
+    }
+    // —— 队列移除联动取消收藏（US1）：命中集 = 本人收藏夹来源条目（folderIds 非空且
+    // folderOwnerMid === session.mid，已登录），聚合二次询问；确认后随本地移除联动云端取消收藏，
+    // 拒绝/无命中/回调未设 → 纯移除（现状语义零变化）——
+    const session: BiliSession = BiliSession.getInstance();
+    const hits: BiliVideo[] = [];
+    if (session.isLogged()) {
+      for (let i = 0; i < this.playlist.length; i++) {
+        const v: BiliVideo = this.playlist[i];
+        if (v.folderIds.length > 0 && v.folderOwnerMid === session.mid &&
+          keys.indexOf(BiliVideo.itemKeyOf(v.bvid, v.page)) >= 0) {
+          hits.push(v);
+        }
+      }
+    }
+    let targets: BiliVideo[] = [];
+    if (hits.length > 0 && this.confirmUnfavoriteRemoval !== undefined) {
+      const aids: Set<number> = new Set<number>();
+      for (let i = 0; i < hits.length; i++) {
+        aids.add(hits[i].aid);
+      }
+      const confirmed: boolean = await this.confirmUnfavoriteRemoval(aids.size);
+      if (confirmed) {
+        // 确认返回后条目可能已被并行移除路径带出队列，仍在队列的才随本次移除联动取消收藏
+        for (let i = 0; i < hits.length; i++) {
+          if (this.indexOfItem(hits[i].bvid, hits[i].page) >= 0) {
+            targets.push(hits[i]);
+          }
+        }
+      }
     }
     const currentKey: string = this.currentIndex >= 0 && this.currentIndex < this.playlist.length
       ? BiliVideo.itemKeyOf(this.playlist[this.currentIndex].bvid, this.playlist[this.currentIndex].page)
@@ -1900,6 +1943,40 @@ export class PlayerController {
       AppStore.savePlaylistFile(this.playlist, this.currentIndex, this.currentTime, this.currentQualityCode);
     }
     this.emitUi();
+    if (targets.length > 0) {
+      this.unfavoriteRemovedItems(targets).catch((): void => {});
+    }
+  }
+
+  // 确认后的云端取消收藏批（US1）：本地移除完成后串行执行，失败不回滚不阻塞本地移除；
+  // aid+folderIds 组合去重（同视频多分P/多夹只发一次），全成/部分败聚合写 toast 快照 + tick 广播
+  private async unfavoriteRemovedItems(targets: BiliVideo[]): Promise<void> {
+    const seen: Set<string> = new Set<string>();
+    const batch: BiliVideo[] = [];
+    for (let i = 0; i < targets.length; i++) {
+      const key: string = `${targets[i].aid}:${targets[i].folderIds.join(',')}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        batch.push(targets[i]);
+      }
+    }
+    let failed: number = 0;
+    for (let i = 0; i < batch.length; i++) {
+      try {
+        await BiliService.unfavorite(batch[i].aid, batch[i].folderIds);
+      } catch (err) {
+        failed++;
+      }
+    }
+    if (failed === 0) {
+      this.unfavToastMsg = Constants.TOAST_UNFAVORITE_DONE.replace('N', `${batch.length}`);
+    } else {
+      this.unfavToastMsg = Constants.TOAST_UNFAVORITE_PARTIAL
+        .replace('N', `${batch.length - failed}`)
+        .replace('M', `${failed}`);
+    }
+    this.unfavToastTick++;
+    this.emitUi();
   }
 
   // 清空队列编排（R3 US4）：调用即停声（准备期同时收意图），CLEAR_QUEUE_DATA_DELAY_MS 后
@@ -1919,7 +1996,8 @@ export class PlayerController {
   }
 
   // 清除已播（v0.3-bugfix-round2 US3 重写）：已听完判定与播放模式无关——播放历史 progress===-1 即已听完，
-  // 数据源异常条目（X 标记，v0.5-part5 追加）一并纳入；移除 playlist 中全部命中且非当前播放的条目；
+  // 数据源异常条目（X 标记，v0.5-part5 追加）一并纳入；移除 playlist 中全部命中条目
+  // （含命中的当前播放条目，v0.6-part1 追加）；
   // 复用 removeSelectedFromPlaylist 批量链路
   // （removingCurrent/removedBeforeCurrent 索引修正、空队列重置、持久化全套语义）；
   // 无可清静默返回；UI 侧经 playlistVersion++ 触发 syncFrom 的 diff 增量刷新
@@ -1954,45 +2032,28 @@ export class PlayerController {
     return false;
   }
 
-  // 可清理集合：playlist 中已听完或数据源异常（X 标记）且非当前播放的复合键（当前条目永远保留，spec FR-003）
+  // 可清理集合：playlist 中已听完或数据源异常（X 标记）的全部复合键，含命中的当前播放条目
+  // （v0.6-part1 追加：当前在播条目已看完/异常同样移除，复用 removingCurrent 自动切播链路）
   private collectPlayedRemovable(): string[] {
-    const currentKey: string = this.currentIndex >= 0 && this.currentIndex < this.playlist.length
-      ? BiliVideo.itemKeyOf(this.playlist[this.currentIndex].bvid, this.playlist[this.currentIndex].page)
-      : '';
     const result: string[] = [];
     for (let i = 0; i < this.playlist.length; i++) {
       const item: BiliVideo = this.playlist[i];
-      const key: string = BiliVideo.itemKeyOf(item.bvid, item.page);
-      if (key !== currentKey && (this.isPlayed(item.bvid) || this.hasAnomaly(item.bvid))) {
-        result.push(key);
+      if (this.isPlayed(item.bvid) || this.hasAnomaly(item.bvid)) {
+        result.push(BiliVideo.itemKeyOf(item.bvid, item.page));
       }
     }
     return result;
   }
 
   // 条目口径已播可清计数（v0.4-queue-multi-p-item plan D7）：bvid 已播完（isPlayed）或
-  // 数据源异常（hasAnomaly，v0.5-part5 追加）且该条目游程不含当前播放条目的条目数（组算 1；
-  // 含当前条目的组被 clearPlayedItems 裁剪但不清除，不计入避免歧义）；
+  // 数据源异常（hasAnomaly，v0.5-part5 追加）的条目数（组算 1，含命中的当前播放条目，v0.6-part1 追加）；
   // collectPlayedRemovable/clearPlayedItems 的分P 键集合不动
   playedRemovableCount(): number {
-    const currentKey: string = this.currentIndex >= 0 && this.currentIndex < this.playlist.length
-      ? BiliVideo.itemKeyOf(this.playlist[this.currentIndex].bvid, this.playlist[this.currentIndex].page)
-      : '';
     const groups: number[][] = this.getQueueEntryGroups();
     let count: number = 0;
     for (let g = 0; g < groups.length; g++) {
       const run: number[] = groups[g];
-      if (!this.isPlayed(this.playlist[run[0]].bvid) && !this.hasAnomaly(this.playlist[run[0]].bvid)) {
-        continue;
-      }
-      let containsCurrent: boolean = false;
-      for (let i = 0; i < run.length; i++) {
-        if (BiliVideo.itemKeyOf(this.playlist[run[i]].bvid, this.playlist[run[i]].page) === currentKey) {
-          containsCurrent = true;
-          break;
-        }
-      }
-      if (!containsCurrent) {
+      if (this.isPlayed(this.playlist[run[0]].bvid) || this.hasAnomaly(this.playlist[run[0]].bvid)) {
         count++;
       }
     }

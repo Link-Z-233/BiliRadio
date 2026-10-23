@@ -1050,6 +1050,13 @@ export struct SettingsPage {
                     .margin({ left: Constants.TOKEN_SPACE_L, right: Constants.TOKEN_SPACE_L })
                   this.cookieBlock()
                 }
+                if (this.statusMsg !== '') {
+                  Text(this.statusMsg)
+                    .fontSize(Constants.TOKEN_FONT_BODY)
+                    .fontColor($r('app.color.text_secondary'))
+                    .margin({ top: Constants.TOKEN_SPACE_L, bottom: Constants.TOKEN_SPACE_XL })
+                    .textAlign(TextAlign.Center)
+                }
               }
 
               SettingsGroup({ title: '播放设置' }) {
@@ -1180,14 +1187,6 @@ export struct SettingsPage {
                     this.showAbout = true;
                   }
                 })
-              }
-
-              if (this.statusMsg !== '') {
-                Text(this.statusMsg)
-                  .fontSize(Constants.TOKEN_FONT_BODY)
-                  .fontColor($r('app.color.text_secondary'))
-                  .margin({ top: Constants.TOKEN_SPACE_L, bottom: Constants.TOKEN_SPACE_XL })
-                  .textAlign(TextAlign.Center)
               }
             }
             .width('100%')

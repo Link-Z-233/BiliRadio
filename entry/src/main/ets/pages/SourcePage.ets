@@ -3,9 +3,10 @@ import { BusinessError } from '@kit.BasicServicesKit';
 import { Subscription } from '../model/Subscription';
 import { BiliVideo } from '../model/BiliVideo';
 import { SubscriptionStore } from '../service/SubscriptionStore';
-import { BiliService, VideoDetail, UpInfo } from '../service/BiliService';
+import { BiliService, VideoDetail, UpInfo, FolderInfo } from '../service/BiliService';
 import { PlayHistoryItem } from '../model/PlayHistoryItem';
 import { PlayerController, EnqueueResult } from '../service/PlayerController';
+import { BiliSession } from '../service/BiliSession';
 import { Constants } from '../service/Constants';
 import { dismissOverlaysForBack } from '../service/BackHandler';
 import { SelectLogic, LongPressGuard, SweepSession, RowDragSession, EdgeAutoScroller } from '../service/SelectLogic';
@@ -93,6 +94,7 @@ struct SourcePage {
   private scroller: Scroller = new Scroller();
   private navPathStack: NavPathStack = new NavPathStack();
   private controller: PlayerController = PlayerController.getInstance();
+  private session: BiliSession = BiliSession.getInstance();
 
   private typeLabel(): string {
     if (this.sub.type === Subscription.TYPE_UP) {
@@ -306,6 +308,7 @@ struct SourcePage {
         items.push(this.episodes[i]);
       }
     }
+    this.stampFavSource(items);
     this.controller.loadPlaylistAndPlay(items, 0)
       .then((result: EnqueueResult): void => {
         this.getUIContext().getPromptAction().showToast({ message: PlayerController.enqueueToast(result) });
@@ -395,6 +398,42 @@ struct SourcePage {
       }
       this.sub.upperName = info.name;
       SubscriptionStore.persistRefreshedSub(this.sub, true);
+    }).catch((): void => {
+    });
+  }
+
+  private stampFavSource(items: BiliVideo[]): void {
+    if (this.sub.type !== Subscription.TYPE_FAV) {
+      return;
+    }
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].folderIds.length === 0) {
+        items[i].folderIds = [this.sub.sourceId];
+      }
+      items[i].folderOwnerMid = this.sub.folderOwnerMid;
+    }
+  }
+
+  private backfillFolderOwner(): void {
+    if (this.sub.type !== Subscription.TYPE_FAV || this.sub.folderOwnerMid > 0) {
+      return;
+    }
+    BiliService.fetchFolderInfo(this.sub.sourceId).then((info: FolderInfo): void => {
+      if (info.ownerMid <= 0) {
+        return;
+      }
+      this.sub.folderOwnerMid = info.ownerMid;
+      this.sub.folderOwnerName = info.ownerName;
+      if (info.ownerName !== '') {
+        SubscriptionStore.persistRefreshedSub(this.sub, true);
+        return;
+      }
+      BiliService.fetchUpInfo(info.ownerMid).then((up: UpInfo): void => {
+        this.sub.folderOwnerName = up.name;
+        SubscriptionStore.persistRefreshedSub(this.sub, true);
+      }).catch((): void => {
+        SubscriptionStore.persistRefreshedSub(this.sub, true);
+      });
     }).catch((): void => {
     });
   }
@@ -563,6 +602,7 @@ struct SourcePage {
 
   // 入队 + toast 分型反馈（queue-redesign：已加入队列/开始播放/已在队列中）
   private enqueueAndToast(items: BiliVideo[]): void {
+    this.stampFavSource(items);
     this.controller.loadPlaylistAndPlay(items, 0)
       .then((result: EnqueueResult): void => {
         this.getUIContext().getPromptAction().showToast({ message: PlayerController.enqueueToast(result) });
@@ -853,6 +893,15 @@ struct SourcePage {
               .textOverflow({ overflow: TextOverflow.Ellipsis })
               .layoutWeight(1)
           }
+          if (this.sub.type === Subscription.TYPE_FAV && this.sub.folderOwnerMid !== this.session.mid &&
+            this.sub.folderOwnerName !== '') {
+            Text(this.sub.folderOwnerName)
+              .fontSize(Constants.TOKEN_FONT_BODY_S)
+              .fontColor($r('app.color.text_secondary'))
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+              .layoutWeight(1)
+          }
         }
         .width('100%')
         .margin({ top: Constants.TOKEN_SPACE_XS })
@@ -973,6 +1022,16 @@ struct SourcePage {
                       Text(formatDate(item.pubdate))
                         .fontSize(Constants.TOKEN_FONT_BODY_S)
                         .fontColor($r('app.color.text_disabled'))
+                      if (this.sub.type === Subscription.TYPE_FAV &&
+                        this.sub.folderOwnerMid === this.session.mid && item.ownerName !== '') {
+                        Text(`· ${item.ownerName}`)
+                          .fontSize(Constants.TOKEN_FONT_BODY_S)
+                          .fontColor($r('app.color.text_secondary'))
+                          .maxLines(1)
+                          .textOverflow({ overflow: TextOverflow.Ellipsis })
+                          .layoutWeight(1)
+                          .margin({ left: Constants.TOKEN_SPACE_XS })
+                      }
                       Blank()
                       // 充电角标待定（WBI 风控未放行无法测试；注释保留，恢复=取消注释）
                       // if (item.isUpowerExclusive) {
@@ -1141,6 +1200,7 @@ struct SourcePage {
       this.markSeen();
       this.loadPlayedSet();
       this.backfillUpperName();
+      this.backfillFolderOwner();
       this.loadFromCache();
     })
     .onHidden(() => {

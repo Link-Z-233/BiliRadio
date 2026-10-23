@@ -1,4 +1,4 @@
-# BiliRadio 验证阶段专用文档（SDD Phase 5 必用，非 SDD 验证通用）
+# BiliRadio 验证阶段专用文档
 
 > **用途**：验证阶段专用文档——SDD Phase 5 必用本文档；非 SDD 验证（bugfix 直接修复后验证、轮次内小改动验证等）同样遵循。任何执行验证的一方（主代理/子代理/人工）验证前必读。覆盖验证范围判定、构建验证流程、UI 验证工具链与交互地图、已知坑与经验。
 > **维护约定**：每轮验证结束后，验证执行方应把本轮新学到的技巧**追加**到经验追加区（≤10 行/条，可操作、不复述）。
@@ -96,13 +96,13 @@
 
 ## 6. 经验追加区（验证执行方维护）
 
-<!-- 每轮验证后在此追加：
-- 轮次
-- 新技巧或新坑（≤10 行/条，可操作）
--->
+<!-- 每轮验证后在此按固定格式追加（最新在最下，不回改历史条目）：
+- <版本号+轮次或场景>（<验证范围：build-only / build+ui>，<部署环境：真机 / 模拟器>）：
+  - <一条经验 = 可操作结论 + 触发条件或坑 + 处置方式；≤10 行/条>
+  -->
 
 - Round 3（两次验证会话被中断，主代理从会话恢复中代录）：
-  - 命令纠错：设备清单是 `devecocli device list`（不是 `devices`）；`ui screenshot` 不接收位置参数（报 "too many arguments"），输出路径配置方式待查证
+  - 命令纠错：设备清单是 `devecocli device list`（不是 `devices`）；`ui screenshot` 不接收位置参数（报 "too many arguments"），输出用 `--path` 指定
   - 首装报 `9568263 install version downgrade` → `devecocli run --uninstall` 重装；锁屏状态下 Smoke 会误报进程死亡（10106102）→ `devecocli emulator power` + 上滑解锁后重试
   - 瞬态 UI（0.6s 缓冲弧线）验证：verify_ui 截图时机可能错过窗口 → 用 hilog 时序（try stream→initialized→prepared→playing）+ 尺寸链代码核对 + 多截图像素分析交叉取证
   - **a11y 值可能是渲染停滞时的缓存快照**：layout dump 值陈旧 ≠ 应用逻辑错误；先用点按交互测试响应性，再以 hilog 判定真实状态——日志是权威信号
@@ -110,3 +110,7 @@
   - B 站风控：UID 23947287 首次抓取触发 -352，静默刷新冷却后恢复（30 集）——测试数据准备预留冷却时间
   - 播放完成类用例（如 US7 播完即停）优先入队短流（<3min）加速；手动 next() 回绕是预期行为非 bug
   - PowerShell 嵌套引号会报"字符串缺少终止符"——Select-String/grep 模式改用单引号或转义写法
+
+- v0.6-part1（build-only，真机无线部署）：
+  - 无线真机部署：`hdc tconn 192.168.x.x:port`（hdc 已入 PATH：SDK `toolchains` 目录）；连接后 `devecocli run` 须 `--device <serial>` 显式指定——stopped 模拟器也占设备清单位，单在线设备同样触发 `DEVICE_SELECTION_REQUIRED`
+  - `devecocli emulator start --device <name>` 报 unknown option——设备名用位置参数；且启动可能超时不出现在 hdc list（非阻塞，改真机路径即可）

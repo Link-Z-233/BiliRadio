@@ -148,6 +148,12 @@ export class SubscriptionStore {
           if (sub.upperName !== '') {
             disk[i].upperName = sub.upperName;
           }
+          if (sub.folderOwnerMid > 0) {
+            disk[i].folderOwnerMid = sub.folderOwnerMid;
+          }
+          if (sub.folderOwnerName !== '') {
+            disk[i].folderOwnerName = sub.folderOwnerName;
+          }
           break;
         }
       }

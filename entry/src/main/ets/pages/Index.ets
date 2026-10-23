@@ -33,6 +33,7 @@ struct Index {
   private wideListener: mediaquery.MediaQueryListener | undefined = undefined;
   private unsubPlayer: (() => void) | undefined = undefined;
   private lastErrorTick: number = 0;
+  private lastUnfavToastTick: number = 0;
 
   aboutToAppear(): void {
     this.wideListener = this.getUIContext().getMediaQuery().matchMediaSync('(min-width: 600vp)');
@@ -66,14 +67,44 @@ struct Index {
         });
       });
     };
+    controller.confirmUnfavoriteRemoval = (count: number): Promise<boolean> => {
+      return new Promise<boolean>((resolve) => {
+        this.getUIContext().showAlertDialog({
+          title: Constants.DIALOG_UNFAVORITE_TITLE,
+          message: Constants.DIALOG_UNFAVORITE_MSG.replace('N', `${count}`),
+          autoCancel: true,
+          alignment: DialogAlignment.Center,
+          primaryButton: {
+            value: Constants.DIALOG_UNFAVORITE_CONFIRM,
+            action: (): void => {
+              resolve(true);
+            }
+          },
+          secondaryButton: {
+            value: Constants.DIALOG_UNFAVORITE_CANCEL,
+            action: (): void => {
+              resolve(false);
+            }
+          },
+          cancel: (): void => {
+            resolve(false);
+          }
+        });
+      });
+    };
     // 播放出错提醒（v0.5-part3 US6）：emitUi 广播内比对 errorTick 版本计数，变化即弹系统 toast；
     // 须在 init() 前订阅，冷启动自动续播（init 内起播路径）的早期错误不漏；
     // emitUi 每秒进度节流也会进此回调，tick 比对恒假零开销
     this.lastErrorTick = controller.errorTick;
+    this.lastUnfavToastTick = controller.unfavToastTick;
     this.unsubPlayer = controller.subscribe((): void => {
       if (controller.errorTick !== this.lastErrorTick) {
         this.lastErrorTick = controller.errorTick;
         this.getUIContext().getPromptAction().showToast({ message: Constants.TOAST_PLAYBACK_ERROR });
+      }
+      if (controller.unfavToastTick !== this.lastUnfavToastTick) {
+        this.lastUnfavToastTick = controller.unfavToastTick;
+        this.getUIContext().getPromptAction().showToast({ message: controller.unfavToastMsg });
       }
     }, 'Index');
     controller.init().then((): void => {

@@ -28,7 +28,7 @@ entry/src/main/ets/
 |------|------|
 | `Index.ets` | 唯一 `@Entry` 单页壳：五层 z 序挂载、debug 冷启动恢复 |
 | `HomePage.ets` | 首页订阅源列表（新集徽标 / 长按置顶删除 / 空态） |
-| `SourcePage.ets` | 订阅源详情（剧集列表 / 多选 / 刷新） |
+| `SourcePage.ets` | 订阅源详情（剧集列表 / 多选 / 刷新 / fav 入队 stamp 与归属回填） |
 | `PlayerOverlay.ets` | 播放浮层（封面取色 / 音质档位 / 倍速） |
 | `SettingsPage.ets` | 设置页（账号 / 播放 / 外观 / 历史与日志入口 / 关于） |
 | `LogPage.ets` | 日志页（L2 层；导出 / 清空 / 分类过滤） |
@@ -53,7 +53,7 @@ entry/src/main/ets/
 
 | 文件 | 职责 |
 |------|------|
-| `PlayerController.ets` | 播控中枢（播放 / 队列 / 订阅收藏编排；零装饰器广播） |
+| `PlayerController.ets` | 播控中枢（播放 / 队列 / 订阅收藏编排 / 队列移除联动取消收藏拦截与确认回调；零装饰器广播） |
 | `AudioPlayer.ets` | media.AVPlayer 音频播放封装 |
 | `MediaSession.ets` | avSession 系统播控（锁屏 / 控制中心）+ 后台长驻任务 |
 | `SleepTimerController.ets` | 睡眠定时（定时暂停 / 播完暂停） |
@@ -99,10 +99,10 @@ entry/src/main/ets/
 
 | 文件 | 职责 |
 |------|------|
-| `BiliVideo.ets` | 视频条目（`@ObservedV2`，多分P 经 audio 分P 页兼容） |
+| `BiliVideo.ets` | 视频条目（`@ObservedV2`，多分P 经 audio 分P 页兼容；`folderOwnerMid` 收藏夹主人归属） |
 | `AudioQuality.ets` | 音质档位枚举（QualityTier）+ AudioTrack 音轨 + 静态映射工具 |
 | `PlayHistoryItem.ets` | 播放历史条目（progress/duration 秒；-1 已看完） |
-| `Subscription.ets` | 订阅源（四类源统一为定期拉取剧集列表的播客频道） |
+| `Subscription.ets` | 订阅源（四类源统一为定期拉取剧集列表的播客频道；fav 源含 `folderOwnerMid/folderOwnerName` 归属字段） |
 | `Season.ets` | 合集 / 剧集元数据 |
 | `FavFolder.ets` | 收藏夹元数据 |
 
@@ -183,5 +183,5 @@ entry/src/main/ets/
 | 已知问题/登记/恢复线索 | docs/PROJECT_NOTES.md |
 | 令牌豁免登记 | docs/token-exemptions.md |
 | 签名与提交安全 | docs/SECURITY.md |
-| 验证流程与经验追加 | docs/agents/Phase5-verifying.md |
+| 验证流程与经验追加 | docs/agents/verifying.md |
 | 历轮 spec/plan/tasks 工件 | spec/（feature.json 指向活跃目录） |

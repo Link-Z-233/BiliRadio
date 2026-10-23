@@ -245,6 +245,14 @@ export class Constants {
   static readonly QUEUE_EMPTY_HINT: string = '到订阅源详情页播放节目，或在首页点「＋」添加订阅';
   // 队列分P 窄行左缩进（D15）：对齐视频头行封面右侧文本起点（TOKEN_SPACE_L + 封面 44 + TOKEN_SPACE_10）
   static readonly QUEUE_PART_INDENT: number = 70;
+  // —— 队列移除联动取消收藏（v0.6-part1 US1）：二次确认弹窗（N 占位）/ 结果 toast（成功 N / 部分失败 N+M）/ 非本人门禁 ——
+  static readonly DIALOG_UNFAVORITE_TITLE: string = '同时取消收藏？';
+  static readonly DIALOG_UNFAVORITE_MSG: string = '移除的 N 个条目来自你的收藏夹，要同时取消收藏吗？';
+  static readonly DIALOG_UNFAVORITE_CONFIRM: string = '同时取消收藏';
+  static readonly DIALOG_UNFAVORITE_CANCEL: string = '仅移除';
+  static readonly TOAST_UNFAVORITE_DONE: string = '已取消收藏 N 个条目';
+  static readonly TOAST_UNFAVORITE_PARTIAL: string = '已取消收藏 N 个，M 个失败';
+  static readonly STATUS_UNFAVORITE_NOT_OWNER: string = '该收藏夹不属于当前账号，无法取消收藏';
 
   // —— 播放页封面取色（palette-glow/palette-bg）：取色与背景衍生色参数唯一来源 ——
   // 取色缓存上限（条）：满则整体清空重新积累

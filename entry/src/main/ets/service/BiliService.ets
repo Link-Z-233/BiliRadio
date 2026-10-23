@@ -74,6 +74,13 @@ export class UpInfo {
   face: string = '';
 }
 
+export class FolderInfo {
+  ownerMid: number = 0;
+  ownerName: string = '';
+  title: string = '';
+  mediaCount: number = 0;
+}
+
 export class SeasonMeta {
   mid: number = 0;
   name: string = '';
@@ -1221,6 +1228,40 @@ export class BiliService {
     return folders;
   }
 
+  static async fetchFolderInfo(mediaId: number): Promise<FolderInfo> {
+    const result: FolderInfo = new FolderInfo();
+    const resultStr: string = await httpGet(
+      `${BILI_FAV_RESOURCE_URL}?media_id=${mediaId}&pn=1&ps=1` +
+      `&keyword=&order=mtime&type=2&tid=0&platform=web`
+    );
+    const data: Record<string, Object> = parseApiData(resultStr);
+    const infoRaw: Object = data['info'];
+    if (infoRaw === undefined || infoRaw === null) {
+      return result;
+    }
+    const rec: Record<string, Object> = infoRaw as Record<string, Object>;
+    const midRaw: Object = rec['mid'];
+    if (midRaw === undefined || midRaw === null) {
+      return result;
+    }
+    result.ownerMid = midRaw as number;
+    const upperRaw: Object = rec['upper'];
+    if (upperRaw !== undefined && upperRaw !== null) {
+      const upper: Record<string, Object> = upperRaw as Record<string, Object>;
+      if (upper['name'] !== undefined && upper['name'] !== null) {
+        result.ownerName = upper['name'] as string;
+      }
+    }
+    if (rec['title'] !== undefined && rec['title'] !== null) {
+      result.title = rec['title'] as string;
+    }
+    const countRaw: Object = rec['media_count'];
+    if (countRaw !== undefined && countRaw !== null) {
+      result.mediaCount = countRaw as number;
+    }
+    return result;
+  }
+
   // maxPages：默认全量；订阅刷新传 1 只取最新一页（播客「近期节目」语义）
   static async fetchFolderVideos(mediaId: number, totalCount: number,
     onProgress: PageProgressCallback | undefined, maxPages: number = 200): Promise<FolderFetchResult> {
@@ -1790,6 +1831,7 @@ export class BiliService {
     const part: BiliVideo = BiliVideo.create(video.bvid, video.aid, cid, video.title, video.cover, duration);
     part.folderIds = video.folderIds.slice();
     part.seasonKeys = video.seasonKeys.slice();
+    part.folderOwnerMid = video.folderOwnerMid;
     part.ownerMid = video.ownerMid;
     part.ownerName = video.ownerName;
     part.ownerFace = video.ownerFace;

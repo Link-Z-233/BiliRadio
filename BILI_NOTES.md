@@ -434,3 +434,10 @@ csrf 用**新** bili_jct。落盘前必须 nav 验证（本项目现有事务）
 - 试听流时长判据（用户领域知识）：未充电用户拉到的流时长显著短于视频元数据时长——播放态充电判定的依据（流时长 vs view 接口 `data.duration`）。
 - 未实测项：durl 试听流确切时长（样本播放 4s 即暂停未到流尾）；试听响应中 `timelength` 取值口径（试看时长 vs 完整时长）。
 
+### 3.7 fav/resource/list `info` 归属字段（v0.6-part1 fav-unfavorite，待真机实测确认）
+
+- 用途：收藏夹主人归属探针（`BiliService.fetchFolderInfo`，`pn=1&ps=1` 单条请求）——`info.mid`（主人 mid）/ `info.upper.name`（主人名）/ `info.title` / `info.media_count`；`info.mid` 缺失视为失败（ownerMid=0）。
+- 现状：**待真机实测确认**——`info` 各字段存在性尚未真网验证；PiliPlus `FavFolderInfo` 模型旁证（`lib/models_new/fav/fav_folder/list.dart`：`mid`/`upper`/`title`/`media_count` 均在解析面）。真机验证后由验证方补录结论。
+- 消费链：`SourcePage.backfillFolderOwner` 回填 `Subscription.folderOwnerMid/folderOwnerName`（`upper.name` 缺失降级 `fetchUpInfo` 取名），US1 队列移除联动取消收藏、US2 收藏夹归属化显示、`unfavoriteCurrent` 非本人门禁均据此判定。
+- 防御口径：全部字段 undefined/null 跳过置默认；未登录 session.mid=0 与任何真实 ownerMid 不相等，归属判定对未登录天然安全。
+

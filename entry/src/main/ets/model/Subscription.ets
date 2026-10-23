@@ -18,6 +18,8 @@ export class Subscription {
   @Trace title: string = '';
   @Trace cover: string = '';
   @Trace upperName: string = '';
+  @Trace folderOwnerMid: number = 0;  // fav:收藏夹主人 mid，0=未知
+  @Trace folderOwnerName: string = '';// fav:收藏夹主人名
   @Trace lastSeenAt: number = 0;     // 秒；上次进入源详情时间，新集计数基准
   @Trace lastRefreshAt: number = 0;  // 毫秒；上次成功刷新时间，TTL 基准
   @Trace latestPubAt: number = 0;    // 秒；最新一集发布时间
@@ -77,6 +79,8 @@ export class Subscription {
       'title': this.title,
       'cover': this.cover,
       'upperName': this.upperName,
+      'folderOwnerMid': this.folderOwnerMid,
+      'folderOwnerName': this.folderOwnerName,
       'lastSeenAt': this.lastSeenAt,
       'lastRefreshAt': this.lastRefreshAt,
       'latestPubAt': this.latestPubAt,
@@ -108,6 +112,12 @@ export class Subscription {
     }
     if (rec['upperName'] !== undefined) {
       s.upperName = rec['upperName'] as string;
+    }
+    if (rec['folderOwnerMid'] !== undefined) {
+      s.folderOwnerMid = rec['folderOwnerMid'] as number;
+    }
+    if (rec['folderOwnerName'] !== undefined) {
+      s.folderOwnerName = rec['folderOwnerName'] as string;
     }
     if (rec['lastSeenAt'] !== undefined) {
       s.lastSeenAt = rec['lastSeenAt'] as number;
