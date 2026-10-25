@@ -350,6 +350,42 @@ export class Constants {
   static readonly TOKEN_SPACE_10: number = 10;
   static readonly TOKEN_SPACE_14: number = 14;
   static readonly TOKEN_SPACE_20: number = 20;
+
+  // —— 订阅导入导出（v0.6-part3 sub-manage）——
+  // 导出缓存文件名（cacheDir，每次导出覆盖写）
+  static readonly EXPORT_FILE_NAME: string = 'biliradio_subscriptions.json';
+  // UTD 类型串：首选精确 JSON 类型；真机目标应用匹配异常时回退通用文件类型（plan D7）
+  static readonly UTD_GENERAL_JSON: string = 'general.json';
+  static readonly UTD_GENERAL_FILE: string = 'general.file';
+  // 分享面板记录标题与描述
+  static readonly SHARE_SUBS_TITLE: string = 'BiliRadio 订阅列表';
+  static readonly SHARE_SUBS_DESCRIPTION: string = 'BiliRadio 订阅备份';
+  // 用户文件 URI 读取分块大小（字节）：statSync 对 user URI 兼容性未验证，分块读不依赖文件大小（plan D8）
+  static readonly URI_READ_CHUNK_BYTES: number = 64 * 1024;
+  // 导出/导入 toast 文案
+  static readonly TOAST_NO_SUBS_TO_EXPORT: string = '还没有订阅，无需导出';
+  static readonly TOAST_EXPORT_FAILED: string = '导出订阅失败';
+  static readonly TOAST_IMPORT_INVALID_FILE: string = '文件格式不正确，导入已取消';
+  // 导入结果 toast（N=新增数 M=跳过数，由实际计数代入）
+  static readonly TOAST_IMPORT_RESULT: string = '新增 N 个，跳过 M 个';
+  // 长按行菜单文案（US5 追加）
+  static readonly MENU_SUB_PIN_TO_TOP: string = '置顶';
+  static readonly MENU_SUB_REORDER: string = '排序';
+  static readonly MENU_SUB_DELETE: string = '删除';
+
+  // —— 长按菜单行强调（v0.6-part3 追加二批 US6）——
+  // 长按达成弹菜单时命中行的缩放强调档
+  static readonly TOKEN_ROW_MENU_SCALE: number = 0.97;
+  // 行缩放强调过渡时长（ms）
+  static readonly TOKEN_ROW_MENU_SCALE_ANIM_MS: number = 150;
+
+  // —— 恒挂载拖拽把手（v0.6-part3 追加四批 US8）——
+  // 行首把手容器宽度（vp）：原 editRowItem 把手视觉占位收敛（图标 TOKEN_FONT_TITLE_L +
+  // 两侧留白 padding XS×2 + margin S），编辑态进出随 animateTo 在 0↔该值间补间、行内容 layoutWeight 让位
+  static readonly TOKEN_DRAG_HANDLE_W: number = 38;
+  // 把手手动拖拽换位阈值（vp，US9 FR-026）：行起始间距 = 行高（封面 52 + 上下 padding 10×2）
+  // + List space 8；无 API 实测行高，行高统一前提下取常量
+  static readonly TOKEN_DRAG_SWAP_DISTANCE: number = 80;
 }
 
 // 延时工具：全库唯一实现，供各处「等待固定时长」复用。

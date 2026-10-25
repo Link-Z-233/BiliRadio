@@ -846,7 +846,7 @@ export struct QueueSheet {
 
   // 组条目分P 窄行（plan D9）：无封面，Pn + 分P 标题 + 时长，左缩进对齐头行标题；
   // 点击切播（扁平下标 = startIndex+偏移）、当前播放高亮；多选点击/长按均为整条目（组）语义；
-  // 已播 ✓ 为 bvid 级（D7 口径）；拖选/按压与头行同构（组为最小管理粒度，D15-Trim 语义保持）
+  // 已播 ✓ 分P 粒度（(bvid,page) 命中历史 -1）；拖选/按压与头行同构（组为最小管理粒度，D15-Trim 语义保持）
   @Builder
   queuePartRow(part: BiliVideo, entry: QueueEntry, entryIndex: number, partIdx: number) {
     Row() {
@@ -862,7 +862,7 @@ export struct QueueSheet {
           .fontColor(this.textSecondary())
           .margin({ left: Constants.TOKEN_SPACE_S })
       }
-      if (!this.selectMode.value && this.controller.isPlayed(part.bvid)) {
+      if (!this.selectMode.value && this.controller.isPartPlayed(part.bvid, part.page)) {
         SymbolGlyph($r('sys.symbol.checkmark_circle'))
           .fontSize(Constants.TOKEN_FONT_TITLE)
           .fontColor([$r('app.color.success_green')])

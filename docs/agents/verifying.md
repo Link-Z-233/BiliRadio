@@ -119,3 +119,28 @@
   - 构建告警清点必须全量构建：增量构建（CompileArkTS UP-TO-DATE）不重跑 lint，告警缺失是「没跑」不是「修了」——先 `devecocli build clean` 再 `devecocli build`，全量日志才可作告警验收依据
   - 告警清点对账法：完整日志在 `Temp\deveco\devecocli\build-*.log`（每次构建新文件）；WARN 行恒后随一条消息行，按「WARN 行 + 后随消息行」配对 Group-Object 分组，总数对账后再逐类定位——比逐模式分别计数不易漏项
   - syscap 类告警消息形态为 "The system capacity of this api 'X' is not supported on all devices"（清点检索 'system capacity'，非 'syscap' 字样）
+
+- v0.6-part3-sub-manage（build-only，真机未连接·T017 部署未执行）：
+  - arkts_check 报错先看文件归属再判定：`@arkts.lang.d.ets` 71/79 行 6 条（interface/Retention/const enum）是 SDK 自身已知误报，只有指向项目文件的错误才需修复——预检通过标准 = 项目文件零错误，勿为 SDK 误报返工
+  - 无设备判定口径：`devecocli device list` 只列 active 设备（无设备时显示 No active devices）；`devecocli run` 才暴露 stopped 模拟器占位并以 DEVICE_SELECTION_REQUIRED 拒绝——确认「真机是否在线」以 run 输出为准，二者清单不一致
+
+- v0.6-part3-sub-manage 追加批（build-only，真机无线部署成功）：
+  - transition 无动画排查定式：`.transition(TransitionEffect.X)` 不带 `.animation()` 且状态翻转不在 animateTo 内 = 组件直接出现/消失（官方文档明示），真机表现为「无动画」；修复二选一——补 `.animation({ duration })` 或状态翻转包 `animateTo`（多选/删除补位先例形态），后者可与既有动画节奏统一（TransitionEffect 自带参数优先于 animateTo，两套并存时曲线不齐）
+  - `DataChangeListener.onDataMove(from, to)` 官方语义是**交换**（本机 lazy_for_each.d.ts 注释「swapped between the from and to positions」），不是移动——单发 onDataMove(idx, 0) 做置顶视觉上是 idx 与 0 互换；移动语义须发相邻交换冒泡序列 onDataMove(idx, idx-1)…onDataMove(1, 0)（同一 animateTo 内全序列补间 = 移动视觉）
+  - 行让位动画（内容被平滑挤压）成立三要素：单 List（无 if/else 分支替换）+ 让位组件恒挂载（宽度 0↔宽/透明度 0↔1 绑定状态，SelectCheckbox 模式）+ 内容 layoutWeight(1) 真实让位；分支替换销毁重建行节点，补间无从发生——想把让位动画做进既有双分支页面，先解决迫使分支的结构冲突（本项目卡点：拖拽 onMove 与长按菜单同用长按手势，onMove 无禁用开关，恒绑是单 List 必要代价）
+  - 无线真机部署中途失连：hdc list targets 为空时先 `hdc tconn <ip:port>` 重连（Connect OK 即恢复），再 `devecocli run --skip-build --device <ip:port>`——devecocli 自身不重连
+  - 行级手势阻塞系统拖拽（LazyForEach.onMove）：编辑行带 LongPressGesture（同为长按识别）时手势仲裁阻塞 onMove 拖拽、编辑态拖不动；修法 `subRowItem` 根节点 `.enabled(!editMode)`——编辑态行级交互全禁、触摸穿透给 LazyForEach 拖拽手势，整行恢复可拖（零手势的行 + onMove 才是拖拽正常的前提；合并双 List 为单 List 时编辑行会带上正常态手势，此坑必踩）
+  - 单 List 合并 + `.enabled(!editMode)` 后，编辑态行触摸全穿透——swipeAction 绑在 ListItem 层是否被连带压制须真机核验（FR-024 要求编辑态不可侧滑），仍可侧滑则需 ListItem 层追加闸
+
+- v0.6-part3-sub-manage 把手即按即拖（build-only，真机未连接·T040 部署未执行）：
+  - `GestureEvent` 无 `globalY`（该字段属 `FingerInfo`，gesture.d.ts FingerInfo.globalY:655）；PanGesture 跟手位移用 `GestureEvent.offsetY`（按压起算累积偏移，:1082，PanGesture 场景专用）——arkts_check 报 `Property 'globalY' does not exist on type 'GestureEvent'` 即此坑
+  - 手动拖拽 translate 挂点避开带 `.animation()` 的节点：`.animation({ duration })` 无 value 过滤时覆盖组件全部可动画属性（含 translate），拖拽逐帧位移会被平滑成橡皮筋——translate/zIndex 挂 ListItem（无 animation），视觉属性（scale/背景/阴影）留根 Row
+  - 换位阈值实测口径：行起始间距 = 行内容高（封面 52）+ 行上下 padding（TOKEN_SPACE_10×2=20）+ List space（TOKEN_SPACE_S=8）= 80——TOKEN_SPACE_S 是 8 不是 4，令牌取值先 grep Constants 再算，勿凭记忆
+
+- v0.6-part3-sub-manage 非编辑态边缘长按误触拖拽修复（真机验证通过）：
+  - List 恒绑 onMove 后系统拖拽的可达面 = 行内未被手势认领的盒区：行 padding 留在无手势的根节点时，边缘 padding 带长按直接进系统拖拽（非编辑态也触发，落子才被闸拒绝，拖拽视觉已发生）——认领面必须与整卡重合，行 padding 应落在携带 LongPressGesture 的内容节点上（bugfix.md §1）
+  - ArkUI `.width()` 是内容宽、padding 在外另加（`layoutWeight` 才是含 padding 的总尺寸分配）：`width(0)+padding` 造隐形残带触面，残带若仅挂 pan 则长按漏给父级内建拖拽——真零宽须 width 与 padding 同条件归零
+  - 认领面二分定位法：`ui longclick <x> <y>` 逐点 + 截图 + `recognize_ui_components` 判菜单有无（先在已知认领区对照，确认 longclick 时长可达长按阈值）；a11y 容器 bounds 不可靠，以叶子文本 x 反推几何链
+  - 几何推演按 content-box 逐模式算总占位：padding 迁移本身保恒等（内容起点 24/62 迁移前后不变），残带归零后正常态内容起点回正 12（与本轮前基线一致）、编辑态不变——勿按 border-box 直觉推
+  - 部署 smoke FAIL_CRASH 未必真崩溃：重装会杀旧进程，先 `hdc shell pidof` 看新进程存活再判；锁屏状态启动报 10106102（开发者模式不可自动解锁），解锁后装包自动重启或 `aa start`
+  - hdc 命令全无输出（连 `hdc list targets` 都空）= hdc server 崩了：`hdc kill; hdc start -r; hdc tconn <ip:port>` 恢复；无线设备频繁掉线时验证序列用 `&&` 串联一次跑完

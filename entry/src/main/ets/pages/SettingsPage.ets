@@ -10,7 +10,10 @@ import { BusinessError } from '@kit.BasicServicesKit';
 import { OpenLinkOptions, bundleManager } from '@kit.AbilityKit';
 import { image } from '@kit.ImageKit';
 import { photoAccessHelper } from '@kit.MediaLibraryKit';
-import { fileIo as fs } from '@kit.CoreFileKit';
+import { systemShare } from '@kit.ShareKit';
+import { fileIo as fs, fileUri, picker } from '@kit.CoreFileKit';
+import { Subscription } from '../model/Subscription';
+import { SubscriptionStore, ImportResult } from '../service/SubscriptionStore';
 import { SettingsGroup } from '../component/SettingsGroup';
 import { SettingsRow } from '../component/SettingsRow';
 import { Constants } from '../service/Constants';
@@ -227,6 +230,77 @@ export struct SettingsPage {
 
   private openLogPage(): void {
     connectBool(Constants.AS_SHOW_LOG_PAGE, false).value = true;
+  }
+
+  // —— 订阅导入导出（v0.6-part3 US2/US3）——
+
+  // 导出订阅：空列表拦截 → cacheDir 覆盖写 → fileUri 转 URI → systemShare 分享面板（单选模式）
+  private shareSubscriptions(): void {
+    try {
+      const path: string = SubscriptionStore.exportSubscriptions();
+      if (path === '') {
+        this.getUIContext().getPromptAction().showToast({ message: Constants.TOAST_NO_SUBS_TO_EXPORT });
+        return;
+      }
+      const record: systemShare.SharedRecord = {
+        utd: Constants.UTD_GENERAL_JSON,
+        uri: fileUri.getUriFromPath(path),
+        title: Constants.SHARE_SUBS_TITLE,
+        description: Constants.SHARE_SUBS_DESCRIPTION,
+      };
+      const data: systemShare.SharedData = new systemShare.SharedData(record);
+      const controller: systemShare.ShareController = new systemShare.ShareController(data);
+      controller.show(AppContext.require(), {
+        selectionMode: systemShare.SelectionMode.SINGLE
+      }).catch((): void => {
+        this.getUIContext().getPromptAction().showToast({ message: Constants.TOAST_EXPORT_FAILED });
+      });
+    } catch (e) {
+      this.getUIContext().getPromptAction().showToast({ message: Constants.TOAST_EXPORT_FAILED });
+    }
+  }
+
+  // 导入订阅：文档选择器单选 JSON → 校验去重合并 → 结果 toast → 新源强制刷新 → bump 首页重建键
+  private pickImportFile(): void {
+    const docPicker: picker.DocumentViewPicker = new picker.DocumentViewPicker(AppContext.require());
+    const options: picker.DocumentSelectOptions = new picker.DocumentSelectOptions();
+    options.maxSelectNumber = 1;
+    options.fileSuffixFilters = ['.json'];
+    docPicker.select(options).then((uris: Array<string>): void => {
+      if (uris.length === 0) {
+        return;
+      }
+      this.importSubscriptions(uris[0]);
+    }).catch((): void => {
+    });
+  }
+
+  private importSubscriptions(uri: string): void {
+    try {
+      const result: ImportResult = SubscriptionStore.importFromFile(uri);
+      this.getUIContext().getPromptAction().showToast({
+        message: Constants.TOAST_IMPORT_RESULT
+          .replace('N', `${result.added}`)
+          .replace('M', `${result.skipped}`)
+      });
+      if (result.newSubs.length === 0) {
+        return;
+      }
+      // 先 bump 令首页立即显示新源（未刷新态），串行刷新完成/失败后再 bump 更新封面剧集
+      const tick: NumState = connectNum(Constants.AS_HOME_REFRESH_TICK, 0);
+      tick.value++;
+      SubscriptionStore.refreshAll(result.newSubs, true, (sub: Subscription, ok: boolean): void => {
+        if (ok) {
+          SubscriptionStore.persistRefreshedSub(sub, true);
+        }
+      }).then((): void => {
+        tick.value++;
+      }).catch((): void => {
+        tick.value++;
+      });
+    } catch (e) {
+      this.getUIContext().getPromptAction().showToast({ message: Constants.TOAST_IMPORT_INVALID_FILE });
+    }
   }
 
   // 外链统一跳转（US7）：四链接复用——二次确认后 openLink 拉起系统浏览器，失败 toast
@@ -1158,6 +1232,28 @@ export struct SettingsPage {
                 }
                 .width('100%')
                 .padding({ left: Constants.TOKEN_SPACE_14, right: Constants.TOKEN_SPACE_14, top: Constants.TOKEN_SPACE_M, bottom: Constants.TOKEN_SPACE_14 })
+              }
+
+              SettingsGroup({ title: '订阅管理' }) {
+                SettingsRow({
+                  title: '导出订阅',
+                  subtitle: '生成订阅备份文件，经分享面板发送',
+                  rowIcon: $r('sys.symbol.share'),
+                  showArrow: true,
+                  showDivider: true,
+                  rowAction: (): void => {
+                    this.shareSubscriptions();
+                  }
+                })
+                SettingsRow({
+                  title: '导入订阅',
+                  subtitle: '从备份文件合并订阅，已订阅的源自动跳过',
+                  rowIcon: $r('sys.symbol.square_and_arrow_down'),
+                  showArrow: true,
+                  rowAction: (): void => {
+                    this.pickImportFile();
+                  }
+                })
               }
 
               SettingsGroup({ title: '通用' }) {

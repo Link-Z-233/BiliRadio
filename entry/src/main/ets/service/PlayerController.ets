@@ -2038,6 +2038,13 @@ export class PlayerController {
     return false;
   }
 
+  // 分P 级已听完：复合键 (bvid,page) 命中且 progress===-1；
+  // 与 bvid 级 isPlayed 并存——队列分P 窄行 ✓ 分P 粒度，清除已播等条目口径仍用 isPlayed
+  isPartPlayed(bvid: string, page: number): boolean {
+    const idx: number = this.indexOfPlayHistory(bvid, page);
+    return idx >= 0 && this.playHistory[idx].progress === -1;
+  }
+
   // 可清理集合：playlist 中已听完或数据源异常（X 标记）的全部复合键，含命中的当前播放条目
   // （v0.6-part1 追加：当前在播条目已看完/异常同样移除，复用 removingCurrent 自动切播链路）
   private collectPlayedRemovable(): string[] {

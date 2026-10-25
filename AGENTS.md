@@ -73,7 +73,7 @@ BiliRadio — HarmonyOS NEXT 单模块 B 站电台应用。本文件是 AI 代�
 - **Phase 4/5 连续执行**：实施与验证之间**不暂停**——`spec-implementation` 完成后立即进入 `spec-verify`，无中间确认门（用户决策，2026-10-14）；实施/验证中的异常按「无人值守模式」四规则处理
 - **验证范围默认值**：**默认仅构建验证（build-only）**——`tasks.md` Verification 阶段默认只含构建+部署（`<!-- verification_scope: build-only -->`）；需要 UI 验证（模拟器/真机）须在 Phase 3 Review Gate 前显式提出，并改标记为 `<!-- verification_scope: build+ui -->`
 - **bugfix 记录**：直接修复的 bug（不走 SDD 的）统一记入活跃 spec 目录（`spec/feature.json` 所指）的单份 `bugfix.md`，按发生顺序编号分节追加（`## 1.` 起递增）；跟 SDD 流程走的修复不进 `bugfix.md`（任务/验证工件已承载）
-- **当前轮功能再优化**：对本轮 spec 已增添或修改的功能做进一步优化时，以追加项计入当前轮 spec（活跃目录三工件追加 US/FR/D/Phase，标题与 Input 同步标「追加」），不另开轮次、不进 `bugfix.md`；先例：v0.5-part2 追加 US7 剧集行 68 等高（封面 `EPISODE_THUMB_W/H` 121×68、文字列固定 68 贴顶/贴底）
+- **当前轮功能再优化**：对本轮 spec 已增添或修改的功能做进一步优化时，**修正活跃目录三工件的原有条目**（就地更新对应 US/FR/D/Task，Input 概述同步，不再以追加条目承载），不另开轮次、不进 `bugfix.md`；全新功能（无原条目可修正）进行新增条目
 - **输出内容默认不带时间戳**：注释只写机制/动机/约束，不写日期；spec 工件（spec.md/plan.md/tasks.md）同样**不带任何日期戳**（Created/Status/Changelog/追加标注一律省略日期）——时间信息由 git 历史承载，bugfix.md 仅按编号分节承载顺序
 - **Spec**：`spec/` 存放功能规格与 UX 反馈轮次，`spec/feature.json` 指向当前活跃目录；实现功能前先查阅对应 spec
 

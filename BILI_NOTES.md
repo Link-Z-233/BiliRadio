@@ -441,3 +441,11 @@ csrf 用**新** bili_jct。落盘前必须 nav 验证（本项目现有事务）
 - 消费链：`SourcePage.backfillFolderOwner` 回填 `Subscription.folderOwnerMid/folderOwnerName`（`upper.name` 缺失降级 `fetchUpInfo` 取名），US1 队列移除联动取消收藏、US2 收藏夹归属化显示、`unfavoriteCurrent` 非本人门禁均据此判定。
 - 防御口径：全部字段 undefined/null 跳过置默认；未登录 session.mid=0 与任何真实 ownerMid 不相等，归属判定对未登录天然安全。
 
+### 3.8 空间短链 302 目标为混淆 mid（别名 mid 全链路可用）
+
+**发现**（2026-10-23 排查轮，样本 `b23.tv/dPfnAJ0` 旭岽叨科学）：空间分享短链 302 目标 `m.bilibili.com/space/{mid}` 中的 mid **不是 UP 真实 uid**，而是 16 位混淆 mid（样本：真实 uid=134019，短链 302 → mid=3546907175553114）。PC 复刻 App 同款 UA/Referer 探针与真机日志同口径印证。
+
+**可用性实测**（真机日志，识别 up 后全链路走通）：混淆 mid 在 `x/space/wbi/acc/info`（-403 后 card 兜底成功）、`x/web-interface/card`（返回正确用户名/头像）、`app.bilibili.com/x/v2/space/archive/cursor` APP 签名链（count=20 正常翻页）、`seasons_series_list` 均正常——**作为别名 mid 直接可用，识别/订阅链路无需归一化回真实 mid**。
+
+**顺带实证**：同晚设备上 b23.tv 的 rcp 请求 3 次超时（`Timeout was reached`，connectMs/readMs 各 8s），同期 api/app.bilibili.com 全部正常；间隔 76s 的用户重试仍超时——为设备网络对 b23.tv 域名**持续性瞬态不可达**（DNS/连接层），非解析逻辑问题、非风控（rcp 层超时拿不到 HTTP 响应）；应用侧重试无收益，换网络/稍后重试自愈。
+

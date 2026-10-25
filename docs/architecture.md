@@ -27,10 +27,10 @@ entry/src/main/ets/
 | 文件 | 职责 |
 |------|------|
 | `Index.ets` | 唯一 `@Entry` 单页壳：五层 z 序挂载、debug 冷启动恢复 |
-| `HomePage.ets` | 首页订阅源列表（新集徽标 / 长按置顶删除 / 空态） |
+| `HomePage.ets` | 首页订阅源列表（新集徽标 / 长按进排序编辑态拖拽调序 / 左滑删除 / 空态） |
 | `SourcePage.ets` | 订阅源详情（剧集列表 / 多选 / 刷新 / fav 入队 stamp 与归属回填） |
 | `PlayerOverlay.ets` | 播放浮层（封面取色 / 音质档位 / 倍速） |
-| `SettingsPage.ets` | 设置页（账号 / 播放 / 外观 / 历史与日志入口 / 关于） |
+| `SettingsPage.ets` | 设置页（账号 / 播放 / 外观 / 订阅管理导出导入 / 历史与日志入口 / 关于） |
 | `LogPage.ets` | 日志页（L2 层；导出 / 清空 / 分类过滤） |
 | `AddSubscriptionSheet.ets` | 添加订阅面板（链接识别 / UID / UP / 合集 / 收藏夹） |
 
@@ -77,7 +77,7 @@ entry/src/main/ets/
 |------|------|
 | `AppStore.ets` | preferences 持久化封装（`KEY_*` 偏好） |
 | `SecureStore.ets` | asset 安全存储（登录凭据） |
-| `SubscriptionStore.ets` | 订阅源列表文件存储 |
+| `SubscriptionStore.ets` | 订阅源列表文件存储（加载 / 保存 / 逐源刷新 / 导出 cacheDir / 导入去重合并） |
 | `HistoryMapper.ets` | 本地历史 ↔ B 站历史条目映射（云端同步预留边界，零网络调用） |
 
 **UI / 系统支撑**
@@ -90,10 +90,10 @@ entry/src/main/ets/
 | `Logger.ets` | 日志（hilog + 沙箱滚动文件 + 导出） |
 | `V2State.ets` | V2 全局键基础设施（AppStorageV2 包装类） |
 | `SelectLogic.ets` | 多选共享逻辑（源页 / 队列 / 历史三处共用） |
-| `BackHandler.ets` | 返回链统一入口（逐层关闭浮层） |
+| `BackHandler.ets` | 返回链统一入口（逐层关闭浮层；首页编辑态句柄最前消费） |
 | `Constants.ets` | 唯一常量真相源（存储键 / AppStorage 键 / 令牌 / 魔法数字） |
 | `AppContext.ets` | UIAbilityContext 全局持有 |
-| `FileUtil.ets` | 公共文件读写工具 |
+| `FileUtil.ets` | 公共文件读写工具（含用户文件 URI 分块读取） |
 
 ### model/
 

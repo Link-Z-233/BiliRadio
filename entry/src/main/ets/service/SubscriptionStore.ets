@@ -12,6 +12,13 @@ const SUB_CACHE_PREFIX: string = 'sub_cache_';
 
 export type SubRefreshCallback = (sub: Subscription, ok: boolean) => void;
 
+// 导入结果（v0.6-part3 US3）：新增/跳过计数 + 新源实例（调用方刷新新源用）
+export interface ImportResult {
+  added: number;
+  skipped: number;
+  newSubs: Subscription[];
+}
+
 // 订阅数据唯一存取点：subscriptions.json（订阅列表）+ sub_cache_<id>.json（各源剧集缓存）
 export class SubscriptionStore {
 
@@ -247,5 +254,78 @@ export class SubscriptionStore {
       }
       await sleep(800);
     }
+  }
+
+  // 导出订阅（v0.6-part3 US2）：全量订阅序列化写 cacheDir 覆盖文件，返回沙箱路径；无订阅返回空串；写失败异常上抛由调用方兜底
+  static exportSubscriptions(): string {
+    const list: Subscription[] = SubscriptionStore.loadSubscriptions();
+    if (list.length === 0) {
+      return '';
+    }
+    const context = AppContext.require();
+    const path: string = `${context.cacheDir}/${Constants.EXPORT_FILE_NAME}`;
+    const records: Array<Record<string, Object>> = [];
+    for (let i = 0; i < list.length; i++) {
+      records.push(list[i].toRecord());
+    }
+    const rec: Record<string, Object> = {
+      'items': records,
+    };
+    FileUtil.writeTextFile(path, JSON.stringify(rec));
+    return path;
+  }
+
+  // 导入订阅（v0.6-part3 US3）：URI 读文本 → 结构校验（非法抛错且现有订阅零改动）→ 逐条容错去重合并 → 落盘
+  static importFromFile(uri: string): ImportResult {
+    const text: string = FileUtil.readTextFromUri(uri);
+    const root: Record<string, Object> = JSON.parse(text) as Record<string, Object>;
+    if (root['items'] === undefined || !Array.isArray(root['items'])) {
+      throw new Error('invalid subscriptions file');
+    }
+    const records: Object[] = root['items'] as Object[];
+    const merged: Subscription[] = SubscriptionStore.loadSubscriptions();
+    const newSubs: Subscription[] = [];
+    let skipped: number = 0;
+    let maxSort: number = 0;
+    for (let i = 0; i < merged.length; i++) {
+      if (merged[i].sortOrder > maxSort) {
+        maxSort = merged[i].sortOrder;
+      }
+    }
+    for (let i = 0; i < records.length; i++) {
+      const sub: Subscription = Subscription.fromRecord(records[i] as Record<string, Object>);
+      // 条目容错：缺 id/type 视为非法条目跳过（计入 skipped），与 loadSubscriptions 同判据
+      if (sub.id === '' || sub.type === '') {
+        skipped++;
+        continue;
+      }
+      if (SubscriptionStore.containsId(merged, sub.id)) {
+        skipped++;
+        continue;
+      }
+      // 新源 sortOrder 自 max+1 递增追加至末尾（文件自带 sortOrder 仅占位，落位以现有列表为准）
+      maxSort += 1;
+      sub.sortOrder = maxSort;
+      merged.push(sub);
+      newSubs.push(sub);
+    }
+    if (newSubs.length > 0) {
+      SubscriptionStore.saveSubscriptions(merged);
+    }
+    const result: ImportResult = {
+      added: newSubs.length,
+      skipped: skipped,
+      newSubs: newSubs,
+    };
+    return result;
+  }
+
+  private static containsId(list: Subscription[], id: string): boolean {
+    for (let i = 0; i < list.length; i++) {
+      if (list[i].id === id) {
+        return true;
+      }
+    }
+    return false;
   }
 }
