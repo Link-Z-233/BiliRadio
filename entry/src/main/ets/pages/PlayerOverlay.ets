@@ -54,6 +54,10 @@ export struct PlayerOverlay {
   @Local showOverlayActive: BoolState = connectBool(Constants.AS_SHOW_PLAYER_OVERLAY, false);
   @Local statusBarHeight: NumState = connectNum(Constants.AS_STATUS_BAR_HEIGHT, 38);
   @Local navBarHeight: NumState = connectNum(Constants.AS_NAV_BAR_HEIGHT, 0);
+  // 宽屏断言（平板竖屏适配）：根 Stack onAreaChange 维护（首次布局与旋转均触发）；
+  // 宽屏下底栏内部间距按 overlayHeightVp 比例拉大，窄屏走原固定间距
+  @Local isWide: boolean = false;
+  @Local overlayHeightVp: number = 0;
   // 主题色：全部着色点运行时跟随，衍生色经 Appearance.hexWithAlpha 计算
   @Local accentColor: StrState =
     connectStr(Constants.AS_ACCENT_COLOR, Constants.ACCENT_DEFAULT);
@@ -1076,16 +1080,21 @@ export struct PlayerOverlay {
                   .fontColor(this.textSecondary())
               }
 
-              // 统计行（plan R8）：播放量 · 发布时间，居中次要色 12vp；无数据时沿用现有占位文案
-              Text(`播放 ${this.formatCount(this.trackView)} · ${this.formatPubDate(this.trackPubdate)}`)
-                .fontSize(Constants.TOKEN_FONT_BODY_S)
-                .fontColor(this.textSecondary())
-                .margin({ top: Constants.TOKEN_SPACE_6 })
+              if (!this.isWide) {
+                // 统计行已删，窄屏隐藏占位保持 SpaceBetween 分布与原版一致，防止标题/UP 下垂
+                Text(`播放 ${this.formatCount(this.trackView)} · ${this.formatPubDate(this.trackPubdate)}`)
+                  .fontSize(Constants.TOKEN_FONT_BODY_S)
+                  .fontColor(this.textSecondary())
+                  .margin({ top: Constants.TOKEN_SPACE_6 })
+                  .visibility(Visibility.Hidden)
+              }
             }
             .width('100%')
-            // 信息区留白铺满（T007）：内容不足一屏时拉开分布铺满，超出仍可滚动（Scroll 行为不变）
+            // 信息区留白铺满（T007）：内容不足一屏时拉开分布铺满，超出仍可滚动（Scroll 行为不变）；
+            // 底部留白仅宽屏：防止 SpaceBetween 末位子项贴进度条；窄屏无 padding 保持原版逐像素不变
             .constraintSize({ minHeight: '100%' })
             .justifyContent(FlexAlign.SpaceBetween)
+            .padding({ bottom: this.isWide ? this.overlayHeightVp * Constants.PLAYER_WIDE_CTRL_GAP_RATIO : 0 })
             .alignItems(HorizontalAlign.Center)
           }
           .width('100%')
@@ -1237,7 +1246,7 @@ export struct PlayerOverlay {
             .width('100%')
             .justifyContent(FlexAlign.Center)
             .alignItems(VerticalAlign.Center)
-            .margin({ top: Constants.TOKEN_SPACE_M })
+            .margin({ top: this.isWide ? this.overlayHeightVp * Constants.PLAYER_WIDE_CTRL_GAP_RATIO : Constants.TOKEN_SPACE_M })
 
             // 底部操作行（spec FR-006 / plan R6）：倍速/播放模式/定时/队列，沿用现有全局键开关
             Row({ space: Constants.TOKEN_SPACE_M }) {
@@ -1311,14 +1320,14 @@ export struct PlayerOverlay {
             }
             .justifyContent(FlexAlign.Center)
             .alignItems(VerticalAlign.Center)
-            .margin({ top: Constants.TOKEN_SPACE_14 })
+            .margin({ top: this.isWide ? this.overlayHeightVp * Constants.PLAYER_WIDE_ACTION_GAP_RATIO : Constants.TOKEN_SPACE_14 })
           }
           .width('100%')
           .margin({ top: Constants.TOKEN_SPACE_S })
       }
       .width('100%')
       .layoutWeight(1)
-      .padding({ bottom: this.navBarHeight.value })
+      .padding({ bottom: this.navBarHeight.value + (this.isWide ? this.overlayHeightVp * Constants.PLAYER_WIDE_BOTTOM_GAP_RATIO : 0) })
 
       if (this.showSpeed.value) {
         this.speedPanel()
@@ -1342,6 +1351,11 @@ export struct PlayerOverlay {
     }
     .width('100%')
     .height('100%')
+    .alignContent(Alignment.Center)
+    .onAreaChange((oldArea: Area, newArea: Area) => {
+      this.isWide = Number(newArea.width) >= Constants.WIDE_BREAKPOINT_VP;
+      this.overlayHeightVp = Number(newArea.height);
+    })
     .backgroundColor($r('app.color.page_background'))
     // 背景衍生色渐变（palette-bg）：封面取色洗淡（压饱和/定明度）后铺顶部，影响幅度有限
     .linearGradient({

@@ -184,6 +184,13 @@ export class Constants {
   // 控制按钮命中区边长（v0.4-Part1-ux-fixes US1）：顶栏收起键容器化点击目标，与控制栏四键同尺寸
   static readonly CONTROL_BTN_SIZE: number = 44;
 
+  // —— 播放层宽屏适配：宽屏（宽 ≥600vp，与 Index 媒体查询同口径）下底栏内部间距改为相对浮层高度的比例
+  // （进度条↔五键行 / 五键行↔操作行 / 底栏整体上抬），拉大但仍小于信息区 SpaceBetween 间距；窄屏走原固定间距 ——
+  static readonly WIDE_BREAKPOINT_VP: number = 600;
+  static readonly PLAYER_WIDE_CTRL_GAP_RATIO: number = 0.05;
+  static readonly PLAYER_WIDE_ACTION_GAP_RATIO: number = 0.03;
+  static readonly PLAYER_WIDE_BOTTOM_GAP_RATIO: number = 0.02;
+
   // —— 玻璃图标按钮（v0.4-Part1-ux-fixes US4）：队列/历史面板头部 36×36 图标按钮公式唯一来源 ——
   static readonly GLASS_ICON_BTN_SIZE: number = 36;
   static readonly GLASS_BLUR: number = 20;
