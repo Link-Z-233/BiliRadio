@@ -48,6 +48,8 @@ export struct SettingsPage {
   @Local autoPlayOnStart: boolean = false;
   // 历史同步开关（v0.5-part1-play-history-sync US4）：读写 KEY_HISTORY_SYNC（默认开），仅登录时展示
   @Local historySyncOn: boolean = true;
+  // 移除前确认开关（v0.6-part4）：读写 KEY_UNFAVORITE_ASK（默认开），仅登录时展示；关闭后歌单移除纯本地
+  @Local unfavoriteAskOn: boolean = true;
   // —— 新增设置开关状态 ——
   @Local interruptResume: boolean = false;
   @Local wifiOnlyDownload: boolean = false;
@@ -100,6 +102,7 @@ export struct SettingsPage {
     this.appVersion = bundleInfo.versionName;
     this.autoPlayOnStart = AppStore.getNumber(Constants.KEY_AUTO_PLAY_ON_START, 0) === 1;
     this.historySyncOn = AppStore.getNumber(Constants.KEY_HISTORY_SYNC, 1) === 1;
+    this.unfavoriteAskOn = AppStore.getNumber(Constants.KEY_UNFAVORITE_ASK, 1) === 1;
     this.interruptResume = AppStore.getNumber(Constants.KEY_INTERRUPT_RESUME, 0) === 1;
     this.wifiOnlyDownload = AppStore.getNumber(Constants.KEY_WIFI_ONLY_DOWNLOAD, 0) === 1;
     this.anomalySkipOn = AppStore.getNumber(Constants.KEY_ANOMALY_SKIP, 1) === 1;
@@ -1111,6 +1114,17 @@ export struct SettingsPage {
                     }
                   })
                   SettingsRow({
+                    title: '取消收藏提醒',
+                    subtitle: '删除来自个人收藏夹的歌单视频时，询问是否取消B站上的收藏',
+                    showToggle: true,
+                    toggleOn: this.unfavoriteAskOn,
+                    showDivider: true,
+                    toggleChange: (isOn: boolean): void => {
+                      this.unfavoriteAskOn = isOn;
+                      AppStore.putNumber(Constants.KEY_UNFAVORITE_ASK, isOn ? 1 : 0);
+                    }
+                  })
+                  SettingsRow({
                     title: '退出登录',
                     danger: true,
                     rowAction: (): void => {
@@ -1124,13 +1138,16 @@ export struct SettingsPage {
                     .margin({ left: Constants.TOKEN_SPACE_L, right: Constants.TOKEN_SPACE_L })
                   this.cookieBlock()
                 }
-                if (this.statusMsg !== '') {
-                  Text(this.statusMsg)
-                    .fontSize(Constants.TOKEN_FONT_BODY)
-                    .fontColor($r('app.color.text_secondary'))
-                    .margin({ top: Constants.TOKEN_SPACE_L, bottom: Constants.TOKEN_SPACE_XL })
-                    .textAlign(TextAlign.Center)
-                }
+              }
+
+              // 登录状态提醒置于账号组外、落在 page_background（非卡片白底）上，与卡片视觉分离
+              if (this.statusMsg !== '') {
+                Text(this.statusMsg)
+                  .fontSize(Constants.TOKEN_FONT_BODY_S)
+                  .fontColor($r('app.color.text_secondary'))
+                  .width('100%')
+                  .margin({ top: Constants.TOKEN_SPACE_S, bottom: Constants.TOKEN_SPACE_S })
+                  .textAlign(TextAlign.Center)
               }
 
               SettingsGroup({ title: '播放设置' }) {
@@ -1157,7 +1174,7 @@ export struct SettingsPage {
                   }
                 })
                 SettingsRow({
-                  title: '异常源自动跳过',
+                  title: '跳过未充电视频',
                   subtitle: '检测到试听内容时提示并自动播放下一首',
                   showToggle: true,
                   toggleOn: this.anomalySkipOn,

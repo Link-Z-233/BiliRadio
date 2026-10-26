@@ -6,12 +6,10 @@
 
 ## 一、已知问题
 
-### KI-7 链接识别链路遗留问题
+### KI-7 链接识别链路遗留问题（已全部销项）
 
-- **位置**：[LinkResolver.ets](entry/src/main/ets/service/LinkResolver.ets) `recognizeInput`（编号沿用特性走查记录；B4/B5/C1 已修复销项，见 git 历史）。
-- **登记项**：
-  1. **B3 系列默认类型歧义**：`lists` 路径无 `type=series` 参数时默认按合集（season）处理，实际可能为系列。
-  2. **B8 BV 无合法性校验**：仅匹配形态不校验，伪 BV 号要进入网络请求后才失败。
+- **位置**：[LinkResolver.ets](entry/src/main/ets/service/LinkResolver.ets) `recognizeInput`（编号沿用特性走查记录；B3/B4/B5/B8/C1 全部修复销项，见 git 历史）。
+- **B8 销项口径**：BV 形态校验已加严（base58 字符集，排除 0/O/I/l），存在性校验维持网络路径（view 接口失败已有提示）。
 
 ### KI-8 hvigor SemVer 判定拒绝 0.x 主版本
 
@@ -41,4 +39,3 @@
 - **空态字号/观感收敛组件化（远期）**：UI 令牌化「数值不变」约束下空态字号 14/15/16 并存不可归一，结构组件化与观感收敛一并列远期待产品确认（工件见 spec/v0.3-engineering-refactor/）。
 - **点赞 / 投币 / 收藏**：依赖登录态与 csrf，交互形态待定，未排期。
 - **audio 三元组优先级限制**：播控中心/后台卡片元数据依赖系统侧信息优先级策略，B 站侧字段缺失时展示可能不全，属系统与上游数据限制，暂不适配。
-- **订阅源导出导入**（ux-feedback-round6 轮登记，2026-10-09）：导出载体（本地 JSON 文件 / 分享文本）与去重合并策略待产品决策。

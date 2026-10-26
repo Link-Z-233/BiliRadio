@@ -42,6 +42,8 @@ export class Constants {
   static readonly PLAY_HISTORY_FILE: string = 'play_history.json';
   // 历史同步开关持久化键（1=开 0=关，默认开；生效还需已登录，未登录由调用方 gate）
   static readonly KEY_HISTORY_SYNC: string = 'historySync';
+  // 移除前确认开关持久化键（1=弹窗确认 0=直接移除，默认弹窗；关闭后歌单移除纯本地、云端收藏保留）
+  static readonly KEY_UNFAVORITE_ASK: string = 'unfavoriteAsk';
   // 上次首页静默刷新完成时刻（毫秒时间戳）：跨启动 CD 判定基准（D9 回拨规则）
   static readonly KEY_LAST_SILENT_REFRESH_AT: string = 'lastSilentRefreshAt';
   // 异常源自动跳过（1=跳过试听流 0=照常播放，默认跳过）

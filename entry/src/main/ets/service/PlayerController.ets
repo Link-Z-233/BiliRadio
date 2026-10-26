@@ -1875,7 +1875,7 @@ export class PlayerController {
     }
     // —— 队列移除联动取消收藏（US1）：命中集 = 本人收藏夹来源条目（folderIds 非空且
     // folderOwnerMid === session.mid，已登录），聚合二次询问；确认后随本地移除联动云端取消收藏，
-    // 拒绝/无命中/回调未设 → 纯移除（现状语义零变化）——
+    // 拒绝/无命中/回调未设/移除前确认开关关（KEY_UNFAVORITE_ASK，默认开）→ 纯移除（现状语义）——
     const session: BiliSession = BiliSession.getInstance();
     const hits: BiliVideo[] = [];
     if (session.isLogged()) {
@@ -1888,7 +1888,8 @@ export class PlayerController {
       }
     }
     let targets: BiliVideo[] = [];
-    if (hits.length > 0 && this.confirmUnfavoriteRemoval !== undefined) {
+    const askEnabled: boolean = AppStore.getNumber(Constants.KEY_UNFAVORITE_ASK, 1) === 1;
+    if (hits.length > 0 && askEnabled && this.confirmUnfavoriteRemoval !== undefined) {
       const aids: Set<number> = new Set<number>();
       for (let i = 0; i < hits.length; i++) {
         aids.add(hits[i].aid);

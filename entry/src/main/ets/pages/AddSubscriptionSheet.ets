@@ -104,7 +104,7 @@ export struct AddSubscriptionSheet {
     this.getUIContext().getPromptAction().showToast({ message: `已订阅「${sub.displayTitle()}」` });
   }
 
-  // 识别结果 → 既有六分支分发（bv/av/up/fav/season/series；六个动作方法零改动；bv/av 透传 page）
+  // 识别结果 → 分发（bv/av/up/fav/season/series/lists/ep；bv/av 透传 page；lists 走回退链、ep 明确提示暂不支持）
   private dispatchRecognized(parsed: RecognizeResult): void {
     switch (parsed.type) {
       case 'bv':
@@ -124,6 +124,12 @@ export struct AddSubscriptionSheet {
         break;
       case 'series':
         this.subscribeSeriesById(parsed.id);
+        break;
+      case 'lists':
+        this.subscribeListsById(parsed.id, parsed.ownerMid);
+        break;
+      case 'ep':
+        this.getUIContext().getPromptAction().showToast({ message: '暂不支持番剧/影视内容' });
         break;
       default:
         break;
@@ -378,6 +384,61 @@ export struct AddSubscriptionSheet {
     }).catch((): void => {
       this.mainBusy = false;
       this.getUIContext().getPromptAction().showToast({ message: '系列信息获取失败' });
+    });
+  }
+
+  // lists 回退链第二步（KI-7 B3 修复）：系列 meta 经 mid 锚点校验 → 订阅；失败/UP 不匹配报「合集/系列信息获取失败」
+  private subscribeSeriesFallback(id: number, anchorMid: number): void {
+    BiliService.fetchSeriesMeta(id).then((meta: SeasonMeta): void => {
+      this.mainBusy = false;
+      const hit: boolean = anchorMid > 0 ? meta.mid === anchorMid : meta.mid > 0;
+      if (hit) {
+        const sub: Subscription = new Subscription();
+        sub.type = Subscription.TYPE_SERIES;
+        sub.sourceId = id;
+        sub.ownerMid = meta.mid;
+        sub.title = meta.name;
+        this.emitSub(sub);
+        return;
+      }
+      this.getUIContext().getPromptAction().showToast({ message: '合集/系列信息获取失败' });
+    }).catch((): void => {
+      this.mainBusy = false;
+      this.getUIContext().getPromptAction().showToast({ message: '合集/系列信息获取失败' });
+    });
+  }
+
+  // lists 无 type 参数回退链（KI-7 B3 修复）：合集与系列共用 id 数字空间、存在撞号（真机实测
+  // 系列 302414 同号命中别 UP 的真实合集），以 URL 自带 {mid}（资源所属 UP）为锚点消歧：
+  // season meta.mid 与锚点匹配才订合集，否则转系列，双失败明确报错；无锚点时以 meta.mid>0
+  // 识别空 meta 桩（BILI_NOTES §3.10）。ponytail: 同 UP 撞号不可消歧, 按合集命中
+  private subscribeListsById(idStr: string, ownerMidStr: string): void {
+    const id: number = parseInt(idStr, 10);
+    const anchorMid: number = parseInt(ownerMidStr, 10);
+    if (isNaN(id) || id <= 0) {
+      this.getUIContext().getPromptAction().showToast({ message: '合集/系列ID无效' });
+      return;
+    }
+    if (this.mainBusy) {
+      return;
+    }
+    this.mainBusy = true;
+    BiliService.fetchSeasonMeta(id).then((meta: SeasonMeta): void => {
+      const hit: boolean = anchorMid > 0 ? meta.mid === anchorMid : meta.mid > 0;
+      if (hit) {
+        this.mainBusy = false;
+        const sub: Subscription = new Subscription();
+        sub.type = Subscription.TYPE_SEASON;
+        sub.sourceId = id;
+        sub.ownerMid = meta.mid;
+        sub.title = meta.name;
+        sub.cover = meta.cover;
+        this.emitSub(sub);
+        return;
+      }
+      this.subscribeSeriesFallback(id, anchorMid);
+    }).catch((): void => {
+      this.subscribeSeriesFallback(id, anchorMid);
     });
   }
 

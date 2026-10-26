@@ -8,7 +8,7 @@
 //      blackboard 风控中转页，全链跟随导致「目标无法识别」）；目标须为 bilibili.com 域名且可被识别器
 //      分类；会话级 LRU 缓存仅存成功结果；短链路径含视频号时零网络短路；不用 @ohos.net.http：其
 //      maxRedirects:0 在真机为「零配额」语义，首个 30x 即抛 2300047；
-//   ④ 目标识别（recognizeInput）：BV / av / 收藏夹 / 合集 / 系列 / UP 空间（含移动端形态），先命中先返回。
+//   ④ 目标识别（recognizeInput）：BV / av / 收藏夹 / 合集 / 系列 / UP 空间（含移动端形态）/ EP 番剧影视，先命中先返回。
 // 纯函数 + 模块级缓存，无 UI 依赖；页面（AddSubscriptionSheet）仅做编排与分发。
 
 import { rcp } from '@kit.RemoteCommunicationKit';
@@ -20,7 +20,7 @@ import { USER_AGENT, REFERER } from './BiliService';
 
 // —— 数据模型 ——
 
-// 识别结果：type 取 '' | 'bv' | 'av' | 'up' | 'fav' | 'season' | 'series'
+// 识别结果：type 取 '' | 'bv' | 'av' | 'up' | 'fav' | 'season' | 'series' | 'lists' | 'ep'
 export class RecognizeResult {
   type: string = '';
   id: string = '';
@@ -103,13 +103,22 @@ export function recognizeInput(input: string): RecognizeResult {
     r.page = page;
     return r;
   }
+  // EP 番剧/影视 URL（v0.6-part4 US2）：bangumi/play/ep|ss 单集/季页，识别为 'ep' 由消费方明确提示暂不支持
+  m = new RegExp('bilibili\\.com/bangumi/play/(?:ep|ss)(\\d+)', 'i').exec(trimmed);
+  if (m !== null) {
+    r.type = 'ep';
+    r.id = m[1];
+    return r;
+  }
   // lists 规则（KI-4 修复 / US4）：host 放宽为 bilibili.com 任意子域，路径兼容桌面 {host}/{mid}/lists/{id}
   // 与移动端 {host}/space/{mid}/lists/{id} 两种形态；桌面形态行为不变
   m = new RegExp('(?:[0-9A-Za-z-]+\\.)*bilibili\\.com(?:/space)?/(\\d+)/lists/(\\d+)').exec(trimmed);
   if (m !== null) {
     r.ownerMid = m[1];
     r.id = m[2];
-    r.type = new RegExp('type=series').test(trimmed) ? 'series' : 'season';
+    // type 参数显式定型（KI-7 B3 修复）：无 type 参数不再默认合集，识别为 'lists' 交消费方回退链判定
+    const typeM: RegExpExecArray | null = new RegExp('type=(season|series)').exec(trimmed);
+    r.type = typeM !== null ? typeM[1] : 'lists';
     return r;
   }
   m = new RegExp('seriesdetail\\?[^&]*sid=(\\d+)').exec(trimmed);
@@ -157,9 +166,17 @@ export function recognizeInput(input: string): RecognizeResult {
     r.id = m[1];
     return r;
   }
+  // EP 番剧/影视纯文本号（v0.6-part4 US2）：如 ep474556 / ss444417，与 URL 形态统一 'ep'
+  m = new RegExp('^(?:ep|ss)(\\d+)$', 'i').exec(trimmed);
+  if (m !== null) {
+    r.type = 'ep';
+    r.id = m[1];
+    return r;
+  }
   // 全文 BV 扫描（KI-7 B4 修复）：无锚定扫描须置于全部 URL 形态规则之后——
-  // 首位时会遮蔽含 BV 参数的合集/收藏夹复合 URL；纯 BV 文本不命中任何 URL 规则，落到此处行为不变
-  m = new RegExp('BV[0-9A-Za-z]{10}').exec(trimmed);
+  // 首位时会遮蔽含 BV 参数的合集/收藏夹复合 URL；纯 BV 文本不命中任何 URL 规则，落到此处行为不变；
+  // 字符集 base58 收严（KI-7 B8 修复）：真实 BV 由 base58 混淆表生成、不含 0/O/I/l
+  m = new RegExp('BV[1-9A-HJ-NP-Za-km-z]{10}').exec(trimmed);
   if (m !== null) {
     r.type = 'bv';
     r.id = m[0];
@@ -238,14 +255,14 @@ function makeError(outcome: ShortLinkOutcome, message: string): ShortLinkResult 
   return r;
 }
 
-// 短链 path 内视频号短路（D7）：如 b23.tv/BV1iMtG6YEyr，path 命中 BV+10 位字母数字时
+// 短链 path 内视频号短路（D7）：如 b23.tv/BV1iMtG6YEyr，path 命中 BV+10 位 base58 字符时
 // 直接产出视频页目标，零网络请求、不写缓存
 function shortLinkBvTarget(url: string): string {
   const m: RegExpExecArray | null = new RegExp('^https?:\\/\\/[^\\/?#]+([^?#]*)', 'i').exec(url);
   if (m === null) {
     return '';
   }
-  const bv: RegExpExecArray | null = new RegExp('BV[0-9A-Za-z]{10}').exec(m[1]);
+  const bv: RegExpExecArray | null = new RegExp('BV[1-9A-HJ-NP-Za-km-z]{10}').exec(m[1]);
   return bv !== null ? `https://www.bilibili.com/video/${bv[0]}` : '';
 }
 

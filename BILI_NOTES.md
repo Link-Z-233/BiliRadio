@@ -449,3 +449,21 @@ csrf 用**新** bili_jct。落盘前必须 nav 验证（本项目现有事务）
 
 **顺带实证**：同晚设备上 b23.tv 的 rcp 请求 3 次超时（`Timeout was reached`，connectMs/readMs 各 8s），同期 api/app.bilibili.com 全部正常；间隔 76s 的用户重试仍超时——为设备网络对 b23.tv 域名**持续性瞬态不可达**（DNS/连接层），非解析逻辑问题、非风控（rcp 层超时拿不到 HTTP 响应）；应用侧重试无收益，换网络/稍后重试自愈。
 
+### 3.9 EP 番剧/影视 URL 形态与拒收决策（v0.6-part4）
+
+- 形态登记（公开页面形态，**未做 PGC API 实测**）：`bilibili.com/bangumi/play/ep{数字}`（单集页）与 `bilibili.com/bangumi/play/ss{数字}`（季页）；分享文案另见纯文本 `ep{数字}`/`ss{数字}` 号。本项目在用端点（§1）无 PGC 域任何接口。
+- 决策：识别为统一 `'ep'` 类型后明确提示「暂不支持番剧/影视内容」，不做 PGC 取数功能；短链（b23.tv）302 至上述页面时逐跳识别即返回目标，消费方提示一致。
+- b23.tv 短链实测样本：暂无（EP 短链跳转目标形态未单独实测，按 bangumi URL 规则覆盖）。
+
+### 3.10 lists URL 无 type 参数的合集/系列歧义与回退链（KI-7 B3）
+
+- 坑：`space.bilibili.com/{mid}/lists/{id}?type=season|series` 的 type 参数标注类型，但无 type 参数形态（部分分享入口产出）无法判定——旧实现默认按合集（season）处理，系列链接必订阅错类型。
+- 回退链（v0.6-part4 修复）：无 type 参数时识别为 `'lists'`，消费方先 `seasons_archives_list`（fetchSeasonMeta）取 meta、`parseApiData` 对 `code !== 0` 抛错即转 `series/series`（fetchSeriesMeta），双失败报「合集/系列信息获取失败」。
+- **实测结论（真机验证轮）**：合集与系列 id **共用数字空间、存在跨 UP 撞号**——系列 `space.bilibili.com/78507973/lists/302414`（虾米日记，mid=78507973）删去 `?type=series` 后，season 端点对同 id 返回**别 UP 的真实合集**（「合集·乐高人仔/其他套装」，mid=428192613，code=0、meta 完整），按报错分型的回退链不触发、误订撞号合集。消歧方案：以 URL 自带 `{mid}`（资源所属 UP）为锚点——season/series meta.mid 与锚点匹配才采纳，撞号合集因 UP 不同被排除；无锚点时以 meta.mid>0 识别空 meta 桩（`fetchSeasonMeta` 对缺失 meta 有「合集 {id}」桩名兜底，mid=0 为其稳定签名）。同 UP 撞号理论上不可消歧（按合集命中），概率极低未处理。
+- **未实测项**：season 端点对无效 id 是否存在 code=0 空 meta 形态（无锚点路径已以 mid>0 守卫）；两端点实测**无 wbi 签名、无 cookie 裸请求亦可访问**（code=0），App 仍走签名链路、不依赖此宽松度。
+
+### 3.11 BV 号 base58 字符集（KI-7 B8）
+
+- 事实：BV 号由 av 号经 base58 混淆表（`FcwAPNKTMug3GV5Lj7EJnHpWsx4tb8haYeviqBz6rkCy12mUSDQX9RdoZf`）生成，**天然不含 0/O/I/l**；形态校验收严为 `BV[1-9A-HJ-NP-Za-km-z]{10}` 无误拦风险。
+- 旁证：PiliPlus 用宽松式 `bv1[0-9a-zA-Z]{9}`（`lib/utils/id_utils.dart:19`，仅锚定第 3 位为 1、不收字符集）——本项目取字符集级更严一级；存在性校验维持网络路径（view 接口失败提示已有）。
+
