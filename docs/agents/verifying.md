@@ -144,3 +144,9 @@
   - 几何推演按 content-box 逐模式算总占位：padding 迁移本身保恒等（内容起点 24/62 迁移前后不变），残带归零后正常态内容起点回正 12（与本轮前基线一致）、编辑态不变——勿按 border-box 直觉推
   - 部署 smoke FAIL_CRASH 未必真崩溃：重装会杀旧进程，先 `hdc shell pidof` 看新进程存活再判；锁屏状态启动报 10106102（开发者模式不可自动解锁），解锁后装包自动重启或 `aa start`
   - hdc 命令全无输出（连 `hdc list targets` 都空）= hdc server 崩了：`hdc kill; hdc start -r; hdc tconn <ip:port>` 恢复；无线设备频繁掉线时验证序列用 `&&` 串联一次跑完
+
+- v0.7-part1-list-adjust（build-only，真机前停·未部署）：
+  - 构建告警「本轮新引入还是既有」判定法：`git diff -U0 -- <告警文件>` 列出改动 hunk 行号区间，与告警行号交叉比对——告警行落在 hunk 外 = 既有告警非本轮回归，勿顺手修（本轮实测：may-throw/WRITE_IMAGEVIDEO 告警行全在 hunk 外，判既有）
+
+- v0.7-part1-list-adjust 再优化批（build-only，真机前停·未部署）：
+  - 多批改动未提交共存时 hunk 交叉比对法依然可靠：两批共享同一 `git diff -U0`，告警行落在全部 hunk 外 = 基线提交未改动行，判既有成立（本轮 14 条改动文件告警全在 hunk 外）；行号法粒度只到「本轮次内/轮次前」，需区分批内归属时按 hunk 内容识别批次

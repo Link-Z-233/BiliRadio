@@ -50,6 +50,8 @@ export class Constants {
   static readonly KEY_ANOMALY_SKIP: string = 'anomalySkip';
   // 数据源异常 bvid 集（JSON 数组字符串，per-bvid 持久化 X 标记，不云同步）
   static readonly KEY_ANOMALY_BVIDS: string = 'anomalyBvids';
+  // 单集插入位置（1=下一首播放 0=队列末播放，默认队列末播放；仅源页单击入队路径生效）
+  static readonly KEY_SINGLE_INSERT_NEXT: string = 'singleInsertNext';
 
   // —— AppStorage 键 ——
   static readonly AS_COLOR_MODE_SETTING: string = 'colorModeSetting';
@@ -332,6 +334,7 @@ export class Constants {
   static readonly TOKEN_FONT_BODY_M: number = 14;
   static readonly TOKEN_FONT_BODY_L: number = 15;
   static readonly TOKEN_FONT_TITLE: number = 16;
+  static readonly TOKEN_FONT_17: number = 17;
   static readonly TOKEN_FONT_18: number = 18;
   static readonly TOKEN_FONT_20: number = 20;
   static readonly TOKEN_FONT_TITLE_L: number = 22;

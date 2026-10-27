@@ -71,7 +71,7 @@ BiliRadio — HarmonyOS NEXT 单模块 B 站电台应用。本文件是 AI 代�
 - **规划轮 vs 实施轮**：可只产出规划（spec/plan/tasks 三份文档）不实施代码；`tasks.md` 是实施路线图，实施时按其中「实施轮次建议」分批执行
 - **子代理行为规范**：`spec-implementation` 只实施已批准任务；`spec-verify` 只验证一次（失败不重调，报告由主代理处理并修复）；零代码轮次（规划轮）禁止触碰任何源码/配置
 - **Phase 4/5 连续执行**：实施与验证之间**不暂停**——`spec-implementation` 完成后立即进入 `spec-verify`，无中间确认门（用户决策，2026-10-14）；实施/验证中的异常按「无人值守模式」四规则处理
-- **验证范围默认值**：**默认仅构建验证（build-only）**——`tasks.md` Verification 阶段默认只含构建+部署（`<!-- verification_scope: build-only -->`）；需要 UI 验证（模拟器/真机）须在 Phase 3 Review Gate 前显式提出，并改标记为 `<!-- verification_scope: build+ui -->`
+- **验证范围默认值**：**默认停到真机前**——构建验证通过即收尾，不执行真机部署/运行/UI 验证（`tasks.md` Verification 阶段默认只含构建+修复与收尾停点，`<!-- verification_scope: build-only -->`）；**Phase 3 起不再询问验证范围**，需要 UI 验证（模拟器/真机）须用户显式提出并改标记为 `<!-- verification_scope: build+ui -->`
 - **bugfix 记录**：直接修复的 bug（不走 SDD 的）统一记入活跃 spec 目录（`spec/feature.json` 所指）的单份 `bugfix.md`，按发生顺序编号分节追加（`## 1.` 起递增）；跟 SDD 流程走的修复不进 `bugfix.md`（任务/验证工件已承载）
 - **当前轮功能再优化**：对本轮 spec 已增添或修改的功能做进一步优化时，**修正活跃目录三工件的原有条目**（就地更新对应 US/FR/D/Task，Input 概述同步，不再以追加条目承载），不另开轮次、不进 `bugfix.md`；全新功能（无原条目可修正）进行新增条目
 - **输出内容默认不带时间戳**：注释只写机制/动机/约束，不写日期；spec 工件（spec.md/plan.md/tasks.md）同样**不带任何日期戳**（Created/Status/Changelog/追加标注一律省略日期）——时间信息由 git 历史承载，bugfix.md 仅按编号分节承载顺序

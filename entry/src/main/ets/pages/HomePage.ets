@@ -128,6 +128,8 @@ export struct HomePage {
   @Local draggingKey: string = '';
   @Local dragOffsetY: number = 0;
   @Local dragBaseline: number = 0;
+  // 置顶飞越（US7）：被置顶行 sub.id，飞行期间 zIndex 抬升盖过其他行，动画结束复位
+  @Local flightKey: string = '';
   private dragActive: boolean = false;
   private dragFromIndex: number = -1;
   // 编辑态挂起的 rebuild 标记（US1）：编辑期间 rebuild 置脏，退出编辑态后补跑一次
@@ -340,6 +342,7 @@ export struct HomePage {
 
   // 置顶（US5 FR-013 / US8 FR-022）：移除该 sub → unshift 首位 → sortOrder 全量归一化 → 落盘 →
   // animateTo 内 provider.moveToFront（相邻交换冒泡 onDataMove）驱动行移动补位动画；已在首位幂等无变化；
+  // 被置顶行飞行期间 zIndex 抬升盖过其他行（US7 飞越），onFinish 复位；
   // 不 rebuild（reload 全量重建会打断移动动画）
   private pinToTop(row: SubRow): void {
     const subId: string = row.sub.id;
@@ -353,7 +356,14 @@ export struct HomePage {
     if (idx <= 0) {
       return;
     }
-    this.getUIContext().animateTo({ duration: Constants.TOKEN_SELECT_ANIM_MS, curve: Curve.EaseOut }, (): void => {
+    this.flightKey = subId;
+    this.getUIContext().animateTo({
+      duration: Constants.TOKEN_SELECT_ANIM_MS,
+      curve: Curve.EaseOut,
+      onFinish: (): void => {
+        this.flightKey = '';
+      }
+    }, (): void => {
       const moved: Subscription = this.subs[idx];
       this.subs.splice(idx, 1);
       this.subs.unshift(moved);
@@ -783,7 +793,7 @@ export struct HomePage {
                 // 把手手动拖拽位移（US9 FR-026）：挂 ListItem 而非根 Row——根 Row 的 .animation()
                 // 会给 translate 平滑滞后（拖拽跟手变橡皮筋）；zIndex 抬升被拖行盖过邻行
                 .translate({ y: this.draggingKey === row.sub.id ? this.dragOffsetY - this.dragBaseline : 0 })
-                .zIndex(this.draggingKey === row.sub.id ? 1 : 0)
+                .zIndex(this.draggingKey === row.sub.id || this.flightKey === row.sub.id ? 1 : 0)
             }, (row: SubRow) => `${row.sub.id}_${row.latestTitle}_${row.newCount}_${row.sub.cover}`)
               .onMove((from: number, to: number): void => {
                 this.applyDragOrder(from, to);

@@ -60,6 +60,9 @@ export struct SettingsPage {
   @Local cellularQuality: QualityTier = QualityTier.Q132K;
   @Local showQualitySheet: boolean = false;
   @Local qualityEditTarget: string = 'wifi'; // 'wifi' | 'cellular'
+  // 单集插入位置（US3）：true=下一首播放 false=队列末播放（默认），仅源页单击入队路径生效
+  @Local singleInsertNext: boolean = false;
+  @Local showSingleInsertSheet: boolean = false;
   // 外观三态选中态（0=跟随系统 1=浅色 2=深色）：由 Appearance 写全局键驱动刷新
   @Local colorModeSetting: NumState =
     connectNum(Constants.AS_COLOR_MODE_SETTING, Appearance.MODE_FOLLOW_SYSTEM);
@@ -106,6 +109,7 @@ export struct SettingsPage {
     this.interruptResume = AppStore.getNumber(Constants.KEY_INTERRUPT_RESUME, 0) === 1;
     this.wifiOnlyDownload = AppStore.getNumber(Constants.KEY_WIFI_ONLY_DOWNLOAD, 0) === 1;
     this.anomalySkipOn = AppStore.getNumber(Constants.KEY_ANOMALY_SKIP, 1) === 1;
+    this.singleInsertNext = AppStore.getNumber(Constants.KEY_SINGLE_INSERT_NEXT, 0) === 1;
     this.wifiQuality = this.readStoredTier(Constants.KEY_WIFI_AUDIO_QUALITY, QualityTier.MAX);
     this.cellularQuality = this.readStoredTier(Constants.KEY_CELLULAR_AUDIO_QUALITY, QualityTier.Q132K);
     this.unsubscribePlayer = this.controller.subscribe((): void => {
@@ -116,6 +120,10 @@ export struct SettingsPage {
     registerSettingsBack((): boolean => {
       if (this.showQualitySheet) {
         this.showQualitySheet = false;
+        return true;
+      }
+      if (this.showSingleInsertSheet) {
+        this.showSingleInsertSheet = false;
         return true;
       }
       return false;
@@ -179,6 +187,22 @@ export struct SettingsPage {
       AppStore.putNumber(Constants.KEY_CELLULAR_AUDIO_QUALITY, tier);
     }
     this.showQualitySheet = false;
+  }
+
+  // —— 单集插入位置（US3）——
+
+  private singleInsertLabel(): string {
+    return this.singleInsertNext ? '下一首播放' : '队列末播放';
+  }
+
+  private singleInsertOptions(): string[] {
+    return ['队列末播放', '下一首播放'];
+  }
+
+  private applySingleInsert(next: boolean): void {
+    this.singleInsertNext = next;
+    AppStore.putNumber(Constants.KEY_SINGLE_INSERT_NEXT, next ? 1 : 0);
+    this.showSingleInsertSheet = false;
   }
 
   private handleAboutIconTap(): void {
@@ -1056,6 +1080,40 @@ export struct SettingsPage {
     .backgroundColor($r('app.color.sheet_background'))
   }
 
+  // 单集插入位置选择面板（US3，复刻音质面板档式）：两选项单选，当前项 ✓ 高亮，选中即持久化并关闭
+  @Builder
+  singleInsertSheetPanel() {
+    Column() {
+      Text('单集插入位置')
+        .fontSize(17)
+        .fontWeight(FontWeight.Bold)
+        .fontColor($r('app.color.text_primary'))
+        .width('100%')
+        .padding({ left: Constants.TOKEN_SPACE_L, right: Constants.TOKEN_SPACE_L, top: Constants.TOKEN_SPACE_L, bottom: Constants.TOKEN_SPACE_S })
+
+      ForEach(this.singleInsertOptions(), (label: string, idx: number) => {
+        Row() {
+          Text(label)
+            .fontSize(Constants.TOKEN_FONT_BODY_L)
+            .fontColor(this.singleInsertLabel() === label ? this.accentColor.value : this.textPrimary())
+            .layoutWeight(1)
+          if (this.singleInsertLabel() === label) {
+            Text('✓')
+              .fontSize(Constants.TOKEN_FONT_BODY_L)
+              .fontColor(this.accentColor.value)
+          }
+        }
+        .width('100%')
+        .padding({ left: Constants.TOKEN_SPACE_L, right: Constants.TOKEN_SPACE_L, top: 13, bottom: 13 })
+        .onClick(() => {
+          this.applySingleInsert(idx === 1);
+        })
+      }, (label: string) => label)
+    }
+    .width('100%')
+    .backgroundColor($r('app.color.sheet_background'))
+  }
+
   build() {
     Stack() {
       Column() {
@@ -1084,6 +1142,16 @@ export struct SettingsPage {
         .width('100%')
         .alignItems(VerticalAlign.Center)
         .padding({ left: Constants.TOKEN_SPACE_L, right: Constants.TOKEN_SPACE_L, top: Constants.TOKEN_SPACE_6, bottom: Constants.TOKEN_SPACE_10 })
+        .bindSheet(this.showSingleInsertSheet, this.singleInsertSheetPanel(), {
+          height: '25%',
+          dragBar: true,
+          showClose: false,
+          backgroundColor: $r('app.color.page_background'),
+          preferType: SheetType.BOTTOM,
+          onDisappear: (): void => {
+            this.showSingleInsertSheet = false;
+          }
+        })
 
         Stack() {
           Scroll(this.settingsScroller) {
@@ -1222,9 +1290,18 @@ export struct SettingsPage {
                   subtitle: '非 Wi-Fi 网络播放需手动确认',
                   showToggle: true,
                   toggleOn: this.wifiOnlyDownload,
+                  showDivider: true,
                   toggleChange: (isOn: boolean): void => {
                     this.wifiOnlyDownload = isOn;
                     AppStore.putNumber(Constants.KEY_WIFI_ONLY_DOWNLOAD, isOn ? 1 : 0);
+                  }
+                })
+                SettingsRow({
+                  title: '单集插入位置',
+                  valueText: this.singleInsertLabel(),
+                  showArrow: true,
+                  rowAction: (): void => {
+                    this.showSingleInsertSheet = true;
                   }
                 })
               }

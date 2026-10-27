@@ -780,7 +780,8 @@ export class PlayerController {
     return AudioQuality.fromStored(AppStore.getNumber(key, -1));
   }
 
-  async loadPlaylistAndPlay(items: BiliVideo[], startIndex: number): Promise<EnqueueResult> {
+  async loadPlaylistAndPlay(items: BiliVideo[], startIndex: number,
+    insertAfterCurrent: boolean = false): Promise<EnqueueResult> {
     // 追加去重：按复合键（bvid+page，占位 0≡1）过滤掉已在歌单中的项，避免重复
     const toAdd: BiliVideo[] = [];
     let skipped: number = 0;
@@ -816,13 +817,25 @@ export class PlayerController {
       }
     }
 
-    // 歌单非空：追加到末尾，不打断当前播放
-    for (let i = 0; i < toAdd.length; i++) {
-      this.playlist.push(toAdd[i]);
+    // 歌单非空：追加到末尾，不打断当前播放；insertAfterCurrent 时插到当前播放条目
+    // 游程（分P 组整组口径）之后，currentIndex 与播放状态零改动
+    const origLen: number = this.playlist.length;
+    let insertAt: number = origLen;
+    if (insertAfterCurrent && this.currentIndex >= 0) {
+      const groups: number[][] = this.getQueueEntryGroups();
+      for (let i = 0; i < groups.length; i++) {
+        if (groups[i].indexOf(this.currentIndex) >= 0) {
+          insertAt = groups[i][groups[i].length - 1] + 1;
+          break;
+        }
+      }
     }
+    this.playlist = this.playlist.slice(0, insertAt).concat(toAdd, this.playlist.slice(insertAt));
     this.playlistVersion++;
     AppStore.savePlaylistFile(this.playlist, this.currentIndex, this.currentTime, this.currentQualityCode);
-    let msg: string = `已追加 ${toAdd.length} 首到歌单末尾`;
+    let msg: string = insertAt < origLen
+      ? `已插入 ${toAdd.length} 首到当前播放之后`
+      : `已追加 ${toAdd.length} 首到歌单末尾`;
     if (skipped > 0) {
       msg += `，去重 ${skipped} 首`;
     }
@@ -1866,6 +1879,61 @@ export class PlayerController {
     Logger.log('player', 'markWatched', `count=${items.length} total=${this.playHistory.length}`);
     this.savePlayHistoryFileAsync();
     this.emitUi();
+  }
+
+  // 批量移动（US1）：选中扁平下标就地重排——toEnd 移到队尾，否则移到当前播放条目游程之后；
+  // 越界下标自然丢弃（与 entries 失步防御），当前播放条目游程内下标剔除（当前条目原位不动，
+  // 游程识别复用 getQueueEntryGroups 单一来源）；movers 与 kept 各自保序重组；
+  // currentIndex 以当前条目复合键在重组后线性重定位（非下标换算）；不动播放器不打断播放；
+  // 随机模式的 shuffleHistory/forwardHistory 为复合键存储，键不随重组失效，零处理
+  moveFlatItems(indices: Set<number>, toEnd: boolean): number {
+    if (indices.size === 0 || this.playlist.length === 0) {
+      return 0;
+    }
+    let runStart: number = -1;
+    let runEnd: number = -1;
+    if (this.currentIndex >= 0) {
+      const groups: number[][] = this.getQueueEntryGroups();
+      for (let i = 0; i < groups.length; i++) {
+        if (groups[i].indexOf(this.currentIndex) >= 0) {
+          runStart = groups[i][0];
+          runEnd = groups[i][groups[i].length - 1];
+          break;
+        }
+      }
+    }
+    const prefix: BiliVideo[] = [];
+    const suffix: BiliVideo[] = [];
+    const movers: BiliVideo[] = [];
+    for (let i = 0; i < this.playlist.length; i++) {
+      if (indices.has(i) && !(i >= runStart && i <= runEnd)) {
+        movers.push(this.playlist[i]);
+      } else if (runEnd < 0 || i <= runEnd) {
+        prefix.push(this.playlist[i]);
+      } else {
+        suffix.push(this.playlist[i]);
+      }
+    }
+    if (movers.length === 0) {
+      return 0;
+    }
+    const currentKey: string = this.currentIndex >= 0 && this.currentIndex < this.playlist.length
+      ? BiliVideo.itemKeyOf(this.playlist[this.currentIndex].bvid, this.playlist[this.currentIndex].page)
+      : '';
+    this.playlist = toEnd ? prefix.concat(suffix, movers) : prefix.concat(movers, suffix);
+    if (currentKey !== '') {
+      for (let i = 0; i < this.playlist.length; i++) {
+        if (BiliVideo.itemKeyOf(this.playlist[i].bvid, this.playlist[i].page) === currentKey) {
+          this.currentIndex = i;
+          break;
+        }
+      }
+    }
+    this.playlistVersion++;
+    AppStore.savePlaylistFile(this.playlist, this.currentIndex, this.currentTime, this.currentQualityCode);
+    this.statusMsg = toEnd ? `已移动 ${movers.length} 首到队尾` : `已移动 ${movers.length} 首到当前播放之后`;
+    this.emitUi();
+    return movers.length;
   }
 
   // 入参为复合键（bvid:page，经 BiliVideo.itemKeyOf 合成）

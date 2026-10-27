@@ -82,6 +82,8 @@ export struct HistorySheet {
   // 多选集合不可变整体换引用更新：V2 @Local 赋值观测不观测 Set 内部变更
   @Local selectedKeys: Set<string> = new Set<string>();
   @Local pressedKey: string = '';
+  // 长按气泡提示（US6）：当前弹气泡的按钮键（单态互斥），onStateChange 气泡消失时清空防残留
+  @Local popupTip: string = '';
   // 面板显隐同源：与 GlassSheet/Index 共享同键实例，关闭时驱动多选复位
   @Local showPlayHistory: BoolState = connectBool(Constants.AS_SHOW_PLAY_HISTORY, false);
   @Local accentColor: StrState =
@@ -606,7 +608,7 @@ export struct HistorySheet {
           .width('100%')
           .transition(TransitionEffect.OPACITY)
         } else {
-          // 多选操作行（US4，对齐队列）：全选/删除所选(计数)/返回
+          // 多选操作行（US4/US5，对齐队列档式）：全选+独立计数/删除所选(纯图标)/返回
           Row() {
             Row() {
               SymbolGlyph($r('sys.symbol.checkmark_circle_on_circle'))
@@ -623,29 +625,69 @@ export struct HistorySheet {
             .onClick(() => {
               this.toggleHistorySelectAll();
             })
+            .bindPopup(this.popupTip === 'selectAll', {
+              message: '全选',
+              placement: Placement.Bottom,
+              autoCancel: true,
+              onStateChange: (e: PopupStateChangeParam): void => {
+                if (!e.isVisible) {
+                  this.popupTip = '';
+                }
+              }
+            })
+            .gesture(
+              LongPressGesture()
+                .onAction((): void => {
+                  this.popupTip = 'selectAll';
+                })
+            )
+
+            Text() {
+              Span('已选')
+                .fontColor($r('app.color.text_primary'))
+              Span(`${this.selectedKeys.size}`)
+                .fontColor(this.accentColor.value)
+              Span('条')
+                .fontColor($r('app.color.text_primary'))
+            }
+            .fontSize(Constants.TOKEN_FONT_17)
+            .margin({ left: Constants.TOKEN_SPACE_XS })
 
             Blank()
 
-            Row({ space: Constants.TOKEN_SPACE_XS }) {
-              SymbolGlyph($r('sys.symbol.trash_fill'))
+            Row() {
+              SymbolGlyph($r('sys.symbol.trash'))
                 .fontSize(Constants.TOKEN_FONT_18)
                 .fontColor([$r('app.color.danger_red')])
-              Text(`${this.selectedKeys.size}`)
-                .fontSize(Constants.TOKEN_FONT_BODY_S)
-                .fontColor($r('app.color.danger_red'))
             }
+            .width(Constants.GLASS_ICON_BTN_SIZE)
             .height(Constants.GLASS_ICON_BTN_SIZE)
-            .padding({ left: Constants.TOKEN_SPACE_10, right: Constants.TOKEN_SPACE_10 })
             .justifyContent(FlexAlign.Center)
-            .alignItems(VerticalAlign.Center)
             .backgroundColor($r('app.color.btn_glass'))
             .backdropBlur(Constants.GLASS_BLUR)
             .border({ width: Constants.GLASS_ICON_BTN_BORDER, color: $r('app.color.btn_border') })
             .borderRadius(Constants.TOKEN_RADIUS_18)
             .opacity(this.selectedKeys.size > 0 ? 1 : Constants.TOKEN_DISABLED_OPACITY)
+            .enabled(this.selectedKeys.size > 0)
             .onClick(() => {
               this.removeSelectedHistory();
             })
+            .bindPopup(this.popupTip === 'remove', {
+              message: '删除所选',
+              placement: Placement.Bottom,
+              autoCancel: true,
+              onStateChange: (e: PopupStateChangeParam): void => {
+                if (!e.isVisible) {
+                  this.popupTip = '';
+                }
+              }
+            })
+            .gesture(
+              LongPressGesture()
+                .onAction((): void => {
+                  this.popupTip = 'remove';
+                })
+            )
 
             Row() {
               SymbolGlyph($r('sys.symbol.chevron_left'))
@@ -663,6 +705,22 @@ export struct HistorySheet {
             .onClick(() => {
               this.exitSelectModeAnimated();
             })
+            .bindPopup(this.popupTip === 'exit', {
+              message: '退出多选',
+              placement: Placement.Bottom,
+              autoCancel: true,
+              onStateChange: (e: PopupStateChangeParam): void => {
+                if (!e.isVisible) {
+                  this.popupTip = '';
+                }
+              }
+            })
+            .gesture(
+              LongPressGesture()
+                .onAction((): void => {
+                  this.popupTip = 'exit';
+                })
+            )
           }
           .width('100%')
           .transition(TransitionEffect.OPACITY)

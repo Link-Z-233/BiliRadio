@@ -165,6 +165,10 @@ export struct QueueSheet {
   @Local selectMode: BoolState = connectBool(Constants.AS_PLAYLIST_SELECT_MODE, false);
   // 多选集合不可变整体换引用更新：V2 @Local 赋值观测不观测 Set 内部变更
   @Local selectedKeys: Set<string> = new Set<string>();
+  // 移动飞越（US1）：被移动条目键集，飞行期间 zIndex 抬升盖在其他条目之上，动画结束重赋值清空
+  @Local flightKeys: Set<string> = new Set<string>();
+  // 长按气泡提示（US6）：当前弹气泡的按钮键（单态互斥），onStateChange 气泡消失时清空防残留
+  @Local popupTip: string = '';
   @Local pressedKey: string = '';
   // 面板显隐同源（v0.3 US7）：与 GlassSheet/Index 共享同键实例，关闭时驱动多选复位
   @Local showQueueSheet: BoolState = connectBool(Constants.AS_SHOW_QUEUE_SHEET, false);
@@ -567,6 +571,45 @@ export struct QueueSheet {
         value: '取消',
         action: (): void => {
         }
+      }
+    });
+  }
+
+  // 批量移动（US1）：收集选中条目扁平下标（单条目=起始下标、组条目=startIndex 起全区间）→
+  // animateTo 闭包内 moveFlatItems 就地重排（不打断播放）+ 成功（>0）即裸退多选（endSweep +
+  // selectMode 翻转 + 清选中，无动画壳）——勾选框收起/头部双态切换与飞越同一起点同参数同步驱动；
+  // 被移动条目飞行期间 zIndex 抬升盖在其他条目之上（条目键稳定，节点复用参与动画）；
+  // onFinish 复位 zIndex → toast 通知结果（广播链异步致动画不生效时 zIndex 仍在此清、
+  // 功能与 toast 不受阻）；moved === 0（仅当前播放条目被选中）不退多选不 toast（闸保留）
+  private moveSelected(toEnd: boolean): void {
+    if (this.selectedKeys.size === 0) {
+      return;
+    }
+    const indices: Set<number> = new Set<number>();
+    for (let i = 0; i < this.entries.length; i++) {
+      if (this.selectedKeys.has(this.entries[i].key)) {
+        for (let j = 0; j < this.entries[i].videos.length; j++) {
+          indices.add(this.entries[i].startIndex + j);
+        }
+      }
+    }
+    this.flightKeys = new Set<string>(this.selectedKeys);
+    let moved: number = 0;
+    this.getUIContext().animateTo({
+      duration: Constants.TOKEN_SELECT_ANIM_MS,
+      curve: Curve.EaseOut,
+      onFinish: (): void => {
+        this.flightKeys = new Set<string>();
+        if (moved > 0) {
+          this.getUIContext().getPromptAction().showToast({
+            message: toEnd ? `已移动 ${moved} 项至队尾` : `已插入 ${moved} 项到当前播放之后`
+          });
+        }
+      }
+    }, (): void => {
+      moved = this.controller.moveFlatItems(indices, toEnd);
+      if (moved > 0) {
+        this.exitSelectMode();
       }
     });
   }
@@ -1054,20 +1097,20 @@ export struct QueueSheet {
 
   build() {
     Stack({ alignContent: Alignment.Top }) {
-      // 单行头部（US1）：标题 + 清除已播/多选/清空三图标；多选态整行替换为多选操作行；
+      // 单行头部（US1/US4）：标题 + 清空/多选/清除已播三图标；多选态整行替换为多选操作行；
       // Stack 承载双态条件渲染 + OPACITY 过渡交叉淡化（进出多选同 animateTo 驱动，FR-006）
       Stack() {
         if (!this.selectMode.value) {
           Row() {
             Text(`播放队列 (${this.entries.length})`)
-              .fontSize(17)
+              .fontSize(Constants.TOKEN_FONT_17)
               .fontWeight(FontWeight.Bold)
               .fontColor(this.textPrimary())
               .layoutWeight(1)
 
             if (this.entries.length > 0) {
               Row() {
-                SymbolGlyph($r('sys.symbol.wand_and_stars'))
+                SymbolGlyph($r('sys.symbol.trash'))
                   .fontSize(Constants.TOKEN_FONT_18)
                   .fontColor([$r('app.color.danger_red')])
               }
@@ -1079,7 +1122,7 @@ export struct QueueSheet {
               .border({ width: 1, color: $r('app.color.btn_border') })
               .borderRadius(Constants.TOKEN_RADIUS_18)
               .onClick(() => {
-                this.confirmClearPlayed();
+                this.clearQueue();
               })
 
               Row() {
@@ -1101,7 +1144,7 @@ export struct QueueSheet {
               })
 
               Row() {
-                SymbolGlyph($r('sys.symbol.trash'))
+                SymbolGlyph($r('sys.symbol.wand_and_stars'))
                   .fontSize(Constants.TOKEN_FONT_18)
                   .fontColor([$r('app.color.danger_red')])
               }
@@ -1114,14 +1157,15 @@ export struct QueueSheet {
               .borderRadius(Constants.TOKEN_RADIUS_18)
               .margin({ left: Constants.TOKEN_SPACE_S })
               .onClick(() => {
-                this.clearQueue();
+                this.confirmClearPlayed();
               })
             }
           }
           .width('100%')
           .transition(TransitionEffect.OPACITY)
         } else {
-          // 多选操作行（US1 FR-006/FR-011/FR-012）：全选/移除所选(计数)/返回全部图标化
+          // 多选操作行（US1/US5）：全选+独立计数 · 移除 · 移到最后 · 下一首播放 · 退出 全部图标化；
+          // 无选中时 移除/移到最后/下一首播放 三按钮共享禁用（opacity 降档 + enabled false）
           Row() {
             Row() {
               SymbolGlyph($r('sys.symbol.checkmark_circle_on_circle'))
@@ -1138,29 +1182,139 @@ export struct QueueSheet {
             .onClick(() => {
               this.toggleSelectAll();
             })
+            .bindPopup(this.popupTip === 'selectAll', {
+              message: '全选',
+              placement: Placement.Bottom,
+              autoCancel: true,
+              onStateChange: (e: PopupStateChangeParam): void => {
+                if (!e.isVisible) {
+                  this.popupTip = '';
+                }
+              }
+            })
+            .gesture(
+              LongPressGesture()
+                .onAction((): void => {
+                  this.popupTip = 'selectAll';
+                })
+            )
+
+            Text() {
+              Span('已选')
+                .fontColor(this.textPrimary())
+              Span(`${this.selectedKeys.size}`)
+                .fontColor(this.accentColor.value)
+              Span('条')
+                .fontColor(this.textPrimary())
+            }
+            .fontSize(Constants.TOKEN_FONT_17)
+            .margin({ left: Constants.TOKEN_SPACE_XS })
 
             Blank()
 
-            Row({ space: Constants.TOKEN_SPACE_XS }) {
-              SymbolGlyph($r('sys.symbol.trash_fill'))
+            Row() {
+              SymbolGlyph($r('sys.symbol.trash'))
                 .fontSize(Constants.TOKEN_FONT_18)
                 .fontColor([$r('app.color.danger_red')])
-              Text(`${this.selectedKeys.size}`)
-                .fontSize(Constants.TOKEN_FONT_BODY_S)
-                .fontColor($r('app.color.danger_red'))
             }
+            .width(Constants.GLASS_ICON_BTN_SIZE)
             .height(Constants.GLASS_ICON_BTN_SIZE)
-            .padding({ left: Constants.TOKEN_SPACE_10, right: Constants.TOKEN_SPACE_10 })
             .justifyContent(FlexAlign.Center)
-            .alignItems(VerticalAlign.Center)
             .backgroundColor($r('app.color.btn_glass'))
             .backdropBlur(Constants.GLASS_BLUR)
             .border({ width: 1, color: $r('app.color.btn_border') })
             .borderRadius(Constants.TOKEN_RADIUS_18)
             .opacity(this.selectedKeys.size > 0 ? 1 : Constants.TOKEN_DISABLED_OPACITY)
+            .enabled(this.selectedKeys.size > 0)
             .onClick(() => {
               this.removeSelected();
             })
+            .bindPopup(this.popupTip === 'remove', {
+              message: '移除所选',
+              placement: Placement.Bottom,
+              autoCancel: true,
+              onStateChange: (e: PopupStateChangeParam): void => {
+                if (!e.isVisible) {
+                  this.popupTip = '';
+                }
+              }
+            })
+            .gesture(
+              LongPressGesture()
+                .onAction((): void => {
+                  this.popupTip = 'remove';
+                })
+            )
+
+            Row() {
+              SymbolGlyph($r('sys.symbol.arrow_down_to_line'))
+                .fontSize(Constants.TOKEN_FONT_18)
+                .fontColor([$r('app.color.text_primary')])
+            }
+            .width(Constants.GLASS_ICON_BTN_SIZE)
+            .height(Constants.GLASS_ICON_BTN_SIZE)
+            .justifyContent(FlexAlign.Center)
+            .backgroundColor($r('app.color.btn_glass'))
+            .backdropBlur(Constants.GLASS_BLUR)
+            .border({ width: 1, color: $r('app.color.btn_border') })
+            .borderRadius(Constants.TOKEN_RADIUS_18)
+            .margin({ left: Constants.TOKEN_SPACE_S })
+            .opacity(this.selectedKeys.size > 0 ? 1 : Constants.TOKEN_DISABLED_OPACITY)
+            .enabled(this.selectedKeys.size > 0)
+            .onClick(() => {
+              this.moveSelected(true);
+            })
+            .bindPopup(this.popupTip === 'toEnd', {
+              message: '移到最后',
+              placement: Placement.Bottom,
+              autoCancel: true,
+              onStateChange: (e: PopupStateChangeParam): void => {
+                if (!e.isVisible) {
+                  this.popupTip = '';
+                }
+              }
+            })
+            .gesture(
+              LongPressGesture()
+                .onAction((): void => {
+                  this.popupTip = 'toEnd';
+                })
+            )
+
+            Row() {
+              SymbolGlyph($r('sys.symbol.forward_end_fill'))
+                .fontSize(Constants.TOKEN_FONT_18)
+                .fontColor([$r('app.color.text_primary')])
+            }
+            .width(Constants.GLASS_ICON_BTN_SIZE)
+            .height(Constants.GLASS_ICON_BTN_SIZE)
+            .justifyContent(FlexAlign.Center)
+            .backgroundColor($r('app.color.btn_glass'))
+            .backdropBlur(Constants.GLASS_BLUR)
+            .border({ width: 1, color: $r('app.color.btn_border') })
+            .borderRadius(Constants.TOKEN_RADIUS_18)
+            .margin({ left: Constants.TOKEN_SPACE_S })
+            .opacity(this.selectedKeys.size > 0 ? 1 : Constants.TOKEN_DISABLED_OPACITY)
+            .enabled(this.selectedKeys.size > 0)
+            .onClick(() => {
+              this.moveSelected(false);
+            })
+            .bindPopup(this.popupTip === 'next', {
+              message: '下一首播放',
+              placement: Placement.Bottom,
+              autoCancel: true,
+              onStateChange: (e: PopupStateChangeParam): void => {
+                if (!e.isVisible) {
+                  this.popupTip = '';
+                }
+              }
+            })
+            .gesture(
+              LongPressGesture()
+                .onAction((): void => {
+                  this.popupTip = 'next';
+                })
+            )
 
             Row() {
               SymbolGlyph($r('sys.symbol.chevron_left'))
@@ -1178,6 +1332,22 @@ export struct QueueSheet {
             .onClick(() => {
               this.exitSelectModeAnimated();
             })
+            .bindPopup(this.popupTip === 'exit', {
+              message: '退出多选',
+              placement: Placement.Bottom,
+              autoCancel: true,
+              onStateChange: (e: PopupStateChangeParam): void => {
+                if (!e.isVisible) {
+                  this.popupTip = '';
+                }
+              }
+            })
+            .gesture(
+              LongPressGesture()
+                .onAction((): void => {
+                  this.popupTip = 'exit';
+                })
+            )
           }
           .width('100%')
           .transition(TransitionEffect.OPACITY)
@@ -1240,6 +1410,7 @@ export struct QueueSheet {
                   }
                 }
               })
+              .zIndex(this.flightKeys.has(entry.key) ? 1 : 0)
             }, (entry: QueueEntry) => entry.key)
           }
           .width('100%')

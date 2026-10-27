@@ -7,6 +7,7 @@ import { BiliService, VideoDetail, UpInfo, FolderInfo } from '../service/BiliSer
 import { PlayHistoryItem } from '../model/PlayHistoryItem';
 import { PlayerController, EnqueueResult } from '../service/PlayerController';
 import { BiliSession } from '../service/BiliSession';
+import { AppStore } from '../service/AppStore';
 import { Constants } from '../service/Constants';
 import { dismissOverlaysForBack } from '../service/BackHandler';
 import { SelectLogic, LongPressGuard, SweepSession, RowDragSession, EdgeAutoScroller } from '../service/SelectLogic';
@@ -296,9 +297,10 @@ struct SourcePage {
     }, (down: boolean): boolean => this.edgeAtEnd(down));
   }
 
-  // 按列表序取选中剧集批量入队（US2）：复用 loadPlaylistAndPlay 全语义（空队列起播/非空追加
-  // 不打断/复合键去重），toast 分型反馈，完成后退出多选清空集合
-  private enqueueSelected(): void {
+  // 按列表序取选中剧集批量入队（US2/US3）：复用 loadPlaylistAndPlay 全语义（空队列起播/非空
+  // 按 insertAfterCurrent 插入当前播放之后或追加队尾，不打断/复合键去重），
+  // toast 分型反馈，完成后退出多选清空集合
+  private enqueueSelected(insertAfterCurrent: boolean): void {
     if (this.selectedKeys.size === 0) {
       return;
     }
@@ -309,7 +311,7 @@ struct SourcePage {
       }
     }
     this.stampFavSource(items);
-    this.controller.loadPlaylistAndPlay(items, 0)
+    this.controller.loadPlaylistAndPlay(items, 0, insertAfterCurrent)
       .then((result: EnqueueResult): void => {
         this.getUIContext().getPromptAction().showToast({ message: PlayerController.enqueueToast(result) });
         this.exitSelectMode();
@@ -600,10 +602,13 @@ struct SourcePage {
     });
   }
 
-  // 入队 + toast 分型反馈（queue-redesign：已加入队列/开始播放/已在队列中）
+  // 入队 + toast 分型反馈（queue-redesign：已加入队列/开始播放/已在队列中）；
+  // 单击路径插入位置受「单集插入位置」设置控制（US3，点击时实时读取生效，
+  // 多选按钮为显式参/添加订阅/历史面板不受影响）
   private enqueueAndToast(items: BiliVideo[]): void {
     this.stampFavSource(items);
-    this.controller.loadPlaylistAndPlay(items, 0)
+    const insertAfterCurrent: boolean = AppStore.getNumber(Constants.KEY_SINGLE_INSERT_NEXT, 0) === 1;
+    this.controller.loadPlaylistAndPlay(items, 0, insertAfterCurrent)
       .then((result: EnqueueResult): void => {
         this.getUIContext().getPromptAction().showToast({ message: PlayerController.enqueueToast(result) });
       })
@@ -653,45 +658,21 @@ struct SourcePage {
     });
   }
 
-  // 多选底部独立悬浮按钮（FR-016）：不可见全宽 Row 承载两枚独立胶囊——左「标记已看完」
-  // （card 底 + text_primary）/ 右「加入队列 (N)」（accent 底 + fg_on_dark，主按钮）；
-  // 无选中共享禁用（opacity 降档 + enabled false）；bottom 避让 MiniPlayer 与导航区；
-  // 各自底边滑入滑出过渡，随 selectMode 同一 animateTo 驱动（进出互逆）
+  // 多选底部独立悬浮按钮（FR-016/US2）：不可见全宽 Row 承载三枚独立胶囊——左「队列末播放 (N)」
+  // （accent 底 + fg_on_dark 主按钮，追加队尾）/ 中「标记已看完」（card 底 + accent 描边）/
+  // 右「下一首播放 (N)」（accent 底 + fg_on_dark 主按钮，插至当前播放之后）；
+  // 无选中三按钮共享禁用（opacity 降档 + enabled false）；bottom 避让 MiniPlayer 与导航区；
+  // 左 START/中 OPACITY/右 END 滑入滑出过渡，随 selectMode 同一 animateTo 驱动（进出互逆）
   @Builder
   private selectActionBar() {
     Row() {
-      Text('标记已看完')
-        .fontSize(Constants.TOKEN_FONT_BODY_M)
-        .fontWeight(FontWeight.Medium)
-        .fontColor($r('app.color.text_primary'))
-        .padding({
-          left: Constants.TOKEN_SPACE_XL,
-          right: Constants.TOKEN_SPACE_XL,
-          top: Constants.TOKEN_SPACE_M,
-          bottom: Constants.TOKEN_SPACE_M
-        })
-        .borderRadius(Constants.TOKEN_RADIUS_XXL)
-        .backgroundColor($r('app.color.card_background'))
-        .shadow({
-          radius: Constants.TOKEN_FLOATING_SHADOW_RADIUS,
-          color: $r('app.color.shadow_ball'),
-          offsetX: 0,
-          offsetY: Constants.TOKEN_FLOATING_SHADOW_OFFSET_Y
-        })
-        .opacity(this.selectedKeys.size > 0 ? 1 : Constants.TOKEN_DISABLED_OPACITY)
-        .animation({ duration: Constants.TOKEN_SELECT_ANIM_MS, curve: Curve.EaseOut })
-        .enabled(this.selectedKeys.size > 0)
-        .onClick(() => {
-          this.confirmMarkWatched();
-        })
-        .transition(TransitionEffect.move(TransitionEdge.START).combine(TransitionEffect.OPACITY))
-      Text(`加入队列 (${this.selectedKeys.size})`)
-        .fontSize(Constants.TOKEN_FONT_BODY_M)
+      Text(`队列末播放 (${this.selectedKeys.size})`)
+        .fontSize(Constants.TOKEN_FONT_BODY_S)
         .fontWeight(FontWeight.Medium)
         .fontColor($r('app.color.fg_on_dark'))
         .padding({
-          left: Constants.TOKEN_SPACE_XL,
-          right: Constants.TOKEN_SPACE_XL,
+          left: Constants.TOKEN_SPACE_M,
+          right: Constants.TOKEN_SPACE_M,
           top: Constants.TOKEN_SPACE_M,
           bottom: Constants.TOKEN_SPACE_M
         })
@@ -707,7 +688,58 @@ struct SourcePage {
         .animation({ duration: Constants.TOKEN_SELECT_ANIM_MS, curve: Curve.EaseOut })
         .enabled(this.selectedKeys.size > 0)
         .onClick(() => {
-          this.enqueueSelected();
+          this.enqueueSelected(false);
+        })
+        .transition(TransitionEffect.move(TransitionEdge.START).combine(TransitionEffect.OPACITY))
+      Text('标记已看完')
+        .fontSize(Constants.TOKEN_FONT_BODY_S)
+        .fontWeight(FontWeight.Medium)
+        .fontColor($r('app.color.text_primary'))
+        .padding({
+          left: Constants.TOKEN_SPACE_M,
+          right: Constants.TOKEN_SPACE_M,
+          top: Constants.TOKEN_SPACE_M,
+          bottom: Constants.TOKEN_SPACE_M
+        })
+        .borderRadius(Constants.TOKEN_RADIUS_XXL)
+        .backgroundColor($r('app.color.card_background'))
+        .border({ width: 1, color: this.accentColor.value, radius: Constants.TOKEN_RADIUS_XXL })
+        .shadow({
+          radius: Constants.TOKEN_FLOATING_SHADOW_RADIUS,
+          color: $r('app.color.shadow_ball'),
+          offsetX: 0,
+          offsetY: Constants.TOKEN_FLOATING_SHADOW_OFFSET_Y
+        })
+        .opacity(this.selectedKeys.size > 0 ? 1 : Constants.TOKEN_DISABLED_OPACITY)
+        .animation({ duration: Constants.TOKEN_SELECT_ANIM_MS, curve: Curve.EaseOut })
+        .enabled(this.selectedKeys.size > 0)
+        .onClick(() => {
+          this.confirmMarkWatched();
+        })
+        .transition(TransitionEffect.OPACITY)
+      Text(`下一首播放 (${this.selectedKeys.size})`)
+        .fontSize(Constants.TOKEN_FONT_BODY_S)
+        .fontWeight(FontWeight.Medium)
+        .fontColor($r('app.color.fg_on_dark'))
+        .padding({
+          left: Constants.TOKEN_SPACE_M,
+          right: Constants.TOKEN_SPACE_M,
+          top: Constants.TOKEN_SPACE_M,
+          bottom: Constants.TOKEN_SPACE_M
+        })
+        .borderRadius(Constants.TOKEN_RADIUS_XXL)
+        .backgroundColor(this.accentColor.value)
+        .shadow({
+          radius: Constants.TOKEN_FLOATING_SHADOW_RADIUS,
+          color: $r('app.color.shadow_ball'),
+          offsetX: 0,
+          offsetY: Constants.TOKEN_FLOATING_SHADOW_OFFSET_Y
+        })
+        .opacity(this.selectedKeys.size > 0 ? 1 : Constants.TOKEN_DISABLED_OPACITY)
+        .animation({ duration: Constants.TOKEN_SELECT_ANIM_MS, curve: Curve.EaseOut })
+        .enabled(this.selectedKeys.size > 0)
+        .onClick(() => {
+          this.enqueueSelected(true);
         })
         .transition(TransitionEffect.move(TransitionEdge.END).combine(TransitionEffect.OPACITY))
     }
