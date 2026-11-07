@@ -51,7 +51,7 @@ B 站 API 探索唯一沉淀点。三段式：§1 本项目（BiliRadio）在用
 
 ## §2 biliRelay API 探索迁移
 
-> 来源：`../bili/biliRelay/docs/B站API试错记录.md`（按原文迁移不改写，仅调整标题层级与编号）。
+> 来源：`../../bili/biliRelay/docs/B站API试错记录.md`（按原文迁移不改写，仅调整标题层级与编号）。
 > 原文环境备注：记录 biliRelay 对 B 站接口的真实试错过程（2026-09-05，M1 真网冒烟期间），包括每次实验的假设 → 结果 → 结论，以及一份「接口挂了怎么排查」的手册；结论已沉淀到 biliRelay 的 `AGENTS.md` 关键技术事实与代码注释，原文保存推理过程和证据，方便将来对照新变化。环境：Windows 11 家宽 IP、Python 3.14、无登录态（匿名）请求为主。
 > 迁移说明：实验 15（Docker 部署验证）为非 API 内容，已剔除；其余章节全量迁入。
 
@@ -410,7 +410,7 @@ csrf 用**新** bili_jct。落盘前必须 nav 验证（本项目现有事务）
 
 ### 3.4 网络出口级风控实证（PC 双客户端探针）
 
-**探针**（2026-10-20 晨，与真机同一出口网络）：① 标准匿名探针——主站暖场领 buvid → nav 取 mixinKey → WBI 签名请求，参数集同 biliRelay 生产（无 dm_img）；② biliRelay 生产链路（`../bili/biliRelay` `get_up_videos`，持久化设备 cookie + 退避重试）。
+**探针**（2026-10-20 晨，与真机同一出口网络）：① 标准匿名探针——主站暖场领 buvid → nav 取 mixinKey → WBI 签名请求，参数集同 biliRelay 生产（无 dm_img）；② biliRelay 生产链路（`../../bili/biliRelay` `get_up_videos`，持久化设备 cookie + 退避重试）。
 
 - 两客户端同获 `-352`（风控校验失败）——与真机 App 的 WBI `-403`/plain `-799` 并存；同网络下三类客户端形态全灭。
 - 判定：风控在**网络出口级**（IP 维度评分），非单一客户端指纹自招；真机换出口（蜂窝网络）冷启动是当前唯一可立即验证的解封路径。

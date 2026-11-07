@@ -50,7 +50,7 @@ BiliRadio — HarmonyOS NEXT 单模块 B 站电台应用。本文件是 AI 代�
 - 代码零注释（除非明确要求 / `ponytail:` 标注）
 - **Constants.ets 是唯一真相源**：所有魔法数字、存储键、AppStorage 键、色值、超时值只在此定义，禁止他处重复
 - **禁 `any`/`unknown`/`as` 类型断言**——ArkTS 严格模式
-- **B 站 API 知识唯一真相源**：仓库根 `BILI_NOTES.md`（§1 本项目在用端点与坑、§2 biliRelay 历史探索迁移、§3 新增实测）——API 行为/字段/风控问题**先查它再动源码**；该文档未覆盖的内容（新端点实测、字段/风控新发现）**须补录进对应章节**再收尾；`../bili/PiliPlus` 仅在 `BILI_NOTES.md` 未覆盖时作旁证，禁止跳过它直接翻外部项目文档
+- **B 站 API 知识唯一真相源**：仓库根 `BILI_NOTES.md`（§1 本项目在用端点与坑、§2 biliRelay 历史探索迁移、§3 新增实测）——API 行为/字段/风控问题**先查它再动源码**；该文档未覆盖的内容（新端点实测、字段/风控新发现）**须补录进对应章节**再收尾；`../../bili/` 下参考项目（清单见「参考项目」节）仅在 `BILI_NOTES.md` 未覆盖时作旁证，禁止跳过它直接翻外部项目文档
 - **令牌/数值规范**（engineering-refactor 轮已落地，2026-10-11）：令牌替换**数值不变**（纯标准化不改观感）；色彩一律 `$r('app.color.*')`、数值一律 `Constants.TOKEN_*`，禁裸数字硬编码（豁免登记 `docs/token-exemptions.md`）；组件规范（列表行/卡片/弹窗/空态）跨页面一致
 
 ## 构建与运行
@@ -100,7 +100,7 @@ BiliRadio — HarmonyOS NEXT 单模块 B 站电台应用。本文件是 AI 代�
 - **`docs/`** — 活文档：架构与模块边界（`architecture.md`）、登记（`token-exemptions.md`）、操作手册（`SECURITY.md`）、已知问题（`PROJECT_NOTES.md`）
 - **`docs/agents/`** — AI 指令文档（调用声明见下）
 - **`spec/`** — 轮次仓库（历轮 spec/plan/tasks 工件，历史文档不得改动）+ 轮次强绑定存档（`charging-archive.md`）；`feature.json` 指向活跃目录
-- **文档引用一律相对路径**：文档中引用仓库内路径相对仓库根（如 `entry/src/main/ets/`），引用仓库外路径相对仓库根上级（如 `../bili/PiliPlus`），禁绝对路径
+- **文档引用一律相对路径**：文档中引用仓库内路径相对仓库根（如 `entry/src/main/ets/`），引用仓库外路径相对仓库根（如 `../../bili/PiliPlus`），禁绝对路径
 - **活文档随代码同步**：源码结构变化（文件增删/职责变更）须同步 `docs/architecture.md` 对应表；模块边界/耦合点、导航层序、状态管理机制变化同步其对应章节
 - **同一事实一处维护**：活文档间禁止重复记载同一事实，重复处以指针代替；整合或删除文档时同步更新全部活文档引用，历史 spec 引用按归档语义不动（先例：architecture-boundary.md 整合入 architecture.md）
 
@@ -114,4 +114,6 @@ BiliRadio — HarmonyOS NEXT 单模块 B 站电台应用。本文件是 AI 代�
 
 ## 参考项目
 
-- `../bili/PiliPlus` — Flutter 哔哩哔哩客户端（音质档位/设置交互参考）
+- `../../bili/PiliPlus` — Flutter 哔哩哔哩客户端（音质档位/设置交互参考）
+- `../../bili/bilibili-API-collect` — 社区 B 站 API 文档合集备份（历史快照可能过时，仅作旁证，以 `BILI_NOTES.md` 实测为准）
+- `../../bili/API` — B 站 PC/安卓客户端解包逆向工作区（业务接口须自行逆向实测，根目录 `接口调用学习笔记.md` 为既有逆向文档；逆向测试结论除补录 `BILI_NOTES.md` 外，须同步维护该笔记）
