@@ -58,6 +58,8 @@ export struct AddSubscriptionSheet {
   };
   // 系统返回拦截句柄（由宿主 HomePage 持有并传入，onWillDismiss PRESS_BACK 时调用）
   @Param backHandler: AddSheetBackHandler = new AddSheetBackHandler();
+  // 分享导入灌入值（US5）：非空即灌入 mainInput 并自动执行一次检索；面板已开再分享经 @Monitor 更新重检索
+  @Param initialInput: string = '';
   private controller: PlayerController = PlayerController.getInstance();
 
   aboutToAppear(): void {
@@ -68,6 +70,18 @@ export struct AddSubscriptionSheet {
     this.isLogged = session.isLogged();
     if (this.isLogged) {
       this.loadFolders();
+    }
+    if (this.initialInput !== '') {
+      this.mainInput = this.initialInput;
+      this.handleMainInput();
+    }
+  }
+
+  @Monitor('initialInput')
+  onInitialInputChange(): void {
+    if (this.initialInput !== '') {
+      this.mainInput = this.initialInput;
+      this.handleMainInput();
     }
   }
 

@@ -56,12 +56,20 @@ function stripTrailingPunctuation(url: string): string {
   return url.substring(0, end);
 }
 
+// B 站域名 http(s) 链接模式（b23.tv / bili2233.cn / bilibili.com 及任意子域，忽略大小写）：抽取与门控共用唯一来源
+const BILI_URL_PATTERN: RegExp = new RegExp(
+  'https?:\\/\\/(?:[0-9A-Za-z-]+\\.)*(?:b23\\.tv|bili2233\\.cn|bilibili\\.com)(?![0-9A-Za-z.-])(?:[/?#][^\\s]*)?',
+  'i');
+
+// 是否含 B 站域名 http(s) 链接（分享导入门控）：extractBiliUrl 未抽到时回退原文，须以本函数区分命中
+export function containsBiliUrl(raw: string): boolean {
+  return BILI_URL_PATTERN.test(raw);
+}
+
 // 抽取文本中第一个 B 站域名（b23.tv / bili2233.cn / bilibili.com 及任意子域，忽略大小写，须带 http(s) 前缀）
 // 的链接并清除尾随标点；未抽到时返回原始去空格文本，供后续分支统一使用清洗结果。
 export function extractBiliUrl(raw: string): string {
-  const m: RegExpExecArray | null = new RegExp(
-    'https?:\\/\\/(?:[0-9A-Za-z-]+\\.)*(?:b23\\.tv|bili2233\\.cn|bilibili\\.com)(?![0-9A-Za-z.-])(?:[/?#][^\\s]*)?',
-    'i').exec(raw);
+  const m: RegExpExecArray | null = BILI_URL_PATTERN.exec(raw);
   if (m === null) {
     return raw.trim();
   }

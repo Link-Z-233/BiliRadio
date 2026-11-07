@@ -150,3 +150,13 @@
 
 - v0.7-part1-list-adjust 再优化批（build-only，真机前停·未部署）：
   - 多批改动未提交共存时 hunk 交叉比对法依然可靠：两批共享同一 `git diff -U0`，告警行落在全部 hunk 外 = 基线提交未改动行，判既有成立（本轮 14 条改动文件告警全在 hunk 外）；行号法粒度只到「本轮次内/轮次前」，需区分批内归属时按 hunk 内容识别批次
+
+- v0.7-part2（build-only，真机前停·未部署）：
+  - 系统分享接收文本字段以本机 d.ts 为准：`SharedRecord.content` 注释明示 text/link 内容走 content、`uri` 仅承载文件 URI（`sdk\default\hms\ets\api\@hms.collaboration.systemShare.d.ts`）——接收侧读 `records[0].uri` 会静默拿空、分享导入整体无效；plan/示例写 uri 时勿按文档记忆照抄，先查 d.ts 再定字段
+  - AGENTS 所载 `arkts_check` 实际调用形式是 `devecocli check arkts <files...>`（裸 `arkts_check` 不在 PATH，报「术语不会被识别」即改走 devecocli 子命令）
+
+- v0.7-part3-invalid-video 队列重排指示错位 bugfix（build-only，真机前停·未部署）：
+  - LazyForEach 同键节点跨 onDataReloaded 复用不重执行生成器闭包（FAQ 828/1642，与 v0.4-fix-multi-part bugfix #1 同源）：行内容靠共享对象引用仍正确、闭包内位置量（startIndex/下标）过期——「重排后高亮/点击错位且滚出缓存区自愈」是此类 bug 的判别特征；尾部追加不动存量位置量所以无感
+  - 免疫修法 = 位置量改复合键：高亮比 `itemKeyOf(...) === currentKey`（@Local，syncFrom 从 controller 当前条目同步，占位 0≡1 归一化天然对齐），点击/扫选/拖选经 `entryIndexOf(key)` 键实时定位下标 + -1 守卫（HistorySheet「点击时实时解析下标」同模式）；行 builder 与 LazyForEach 生成器的 index 参数应一并退场（闭包零位置量才叫根治）
+  - 清理候选：QueueSheet 删除路径的 startIndex 重对齐循环 + notifyDataChange 强制重绑扫描（v0.4 bugfix #1 防崩机制）在位置量清零后成死代码候选——删除前须真机回归删除路径
+

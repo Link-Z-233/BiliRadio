@@ -17,11 +17,12 @@ import { AbilityConstant, Configuration, UIAbility, Want } from '@kit.AbilityKit
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window, display } from '@kit.ArkUI';
 import { BusinessError } from '@kit.BasicServicesKit';
+import { systemShare } from '@kit.ShareKit';
 import { Appearance } from '../service/Appearance';
 import { AppContext } from '../service/AppContext';
 import { Constants } from '../service/Constants';
 import { Logger } from '../service/Logger';
-import { connectNum } from '../service/V2State';
+import { connectNum, connectStr } from '../service/V2State';
 
 export default class EntryAbility extends UIAbility {
   private mainWindow: window.Window | undefined = undefined;
@@ -36,6 +37,31 @@ export default class EntryAbility extends UIAbility {
     // getContext() 解析失败被静默吞掉，真机日志文件自安装起 0 字节（US9 落盘失效根因）
     Logger.init(this.context);
     hilog.info(Constants.LOG_DOMAIN, Constants.LOG_TAG, '%{public}s', 'Ability onCreate');
+    this.handleSharedWant(want);
+  }
+
+  onNewWant(want: Want, launchParam: AbilityConstant.LaunchParam): void {
+    hilog.info(Constants.LOG_DOMAIN, Constants.LOG_TAG, '%{public}s', 'Ability onNewWant');
+    this.handleSharedWant(want);
+  }
+
+  // 系统分享接收传输层（US5）：onCreate/onNewWant 经 getSharedData 取分享数据（onForeground 取不到，
+  // 官方 FAQ 证实），首条文本记录原文写全局键交 UI 层消费；失败静默记日志不崩；
+  // Ability 层零业务逻辑（不引 extractBiliUrl）
+  private handleSharedWant(want: Want): void {
+    systemShare.getSharedData(want).then((data: systemShare.SharedData): void => {
+      const records: Array<systemShare.SharedRecord> = data.getRecords();
+      if (records.length === 0) {
+        return;
+      }
+      const text: string = records[0].content ?? '';
+      if (text !== '') {
+        connectStr(Constants.AS_SHARE_IMPORT_TEXT, '').value = text;
+      }
+    }).catch((err: BusinessError): void => {
+      hilog.warn(Constants.LOG_DOMAIN, Constants.LOG_TAG,
+        'getSharedData unavailable. Code: %{public}d, message: %{public}s', err.code, err.message);
+    });
   }
 
   onDestroy(): void {

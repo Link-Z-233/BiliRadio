@@ -74,6 +74,8 @@ export class Constants {
   static readonly AS_SHOW_SETTINGS_PAGE: string = 'showSettingsPage';
   static readonly AS_SHOW_LOG_PAGE: string = 'showLogPage';
   static readonly AS_HOME_REFRESH_TICK: string = 'homeRefreshTick';
+  // 系统分享导入文本传输键（US5）：EntryAbility 取分享原文写入，HomePage 消费即清
+  static readonly AS_SHARE_IMPORT_TEXT: string = 'shareImportText';
 
   // —— 受限色值（窗口层 API / Canvas 2D 不接受颜色资源引用，只能写字面量） ——
   // 仅能在此唯一定义，禁止其他文件重复声明
@@ -207,8 +209,9 @@ export class Constants {
   // —— 加载更多失败冷却（US2）：失败后冷却期内禁用重试，防止弱网下反复请求 ——
   static readonly LOAD_OLDER_FAIL_COOLDOWN_MS: number = 3000;
 
-  // —— 刷新止血与反馈（v0.5-part4 risk-control）：静默刷新跨启动 CD / Web 链风控进程冷却 / 静默失败 toast 去重窗 ——
-  static readonly HOME_SILENT_REFRESH_CD_MS: number = 15 * 60 * 1000;
+  // —— 刷新止血与反馈（v0.5-part4 risk-control）：静默刷新 CD（⑭ 分层：冷启动 15 分钟 / 回前台与回首页类 1 小时）/ Web 链风控进程冷却 / 静默失败 toast 去重窗 ——
+  static readonly HOME_COLD_START_REFRESH_CD_MS: number = 15 * 60 * 1000;
+  static readonly HOME_FOREGROUND_REFRESH_CD_MS: number = 60 * 60 * 1000;
   static readonly WEB_CHAIN_COOLDOWN_MS: number = 10 * 60 * 1000;
   static readonly SILENT_REFRESH_FAIL_DEDUP_MS: number = 3000;
 
@@ -250,6 +253,17 @@ export class Constants {
   // —— 刷新结果通知（v0.5-part4 risk-control）：手动刷新成功 / 静默刷新失败（N 由失败订阅数代入）——
   static readonly TOAST_REFRESHED: string = '已更新';
   static readonly TOAST_SILENT_REFRESH_FAIL: string = 'N 个订阅刷新失败';
+  // 静默刷新新集正向增量提醒（N 由全源新集总数增量代入）
+  static readonly TOAST_NEW_EPISODES_FOUND: string = '发现 N 集新节目';
+  // —— 订阅源详情页「更多」菜单文案（v0.7-part2 US6）——
+  static readonly MENU_LABEL_REFRESH: string = '刷新';
+  static readonly MENU_LABEL_UNSUBSCRIBE: string = '取消订阅';
+  // 下拉刷新自定义提示区文案（US6 真机反馈修正，refreshingContent 承载，onStateChange 全状态机切换）
+  static readonly REFRESH_HINT_PULL: string = '下拉刷新';
+  static readonly REFRESH_HINT_RELEASE: string = '释放刷新';
+  static readonly REFRESH_HINT_REFRESHING: string = '刷新中';
+  // 分享导入拒收文案（US5）：分享文本抽不到 B 站链接时提示，不弹面板
+  static readonly TOAST_SHARE_UNSUPPORTED: string = '不支持分享的内容';
   // —— 关于页外链二次确认（v0.4-Part1-ux-fixes US7）：确认后 openLink 拉起系统浏览器 ——
   static readonly DIALOG_OPEN_LINK_TITLE: string = '跳转到外部浏览器？';
   // —— 队列空态引导（queue-redesign US1） ——
@@ -362,6 +376,8 @@ export class Constants {
   static readonly TOKEN_SPACE_10: number = 10;
   static readonly TOKEN_SPACE_14: number = 14;
   static readonly TOKEN_SPACE_20: number = 20;
+  // 刷新提示行最小高：refreshingContent 自定义区高度随下拉距离自适应，无最小高约束会塌缩
+  static readonly TOKEN_REFRESH_HINT_MIN_H: number = 32;
 
   // —— 订阅导入导出（v0.6-part3 sub-manage）——
   // 导出缓存文件名（cacheDir，每次导出覆盖写）

@@ -158,6 +158,12 @@ struct Index {
     return dismissOverlaysForBack();
   }
 
+  // 回前台触发首页重算+静默刷新尝试（US1）：页面级生命周期是回前台唯一挂点（子组件无此生命周期），
+  // bump 既有全局键经 HomePage @Monitor 驱动，三层门（CD/TTL/防重入）收敛多触发点
+  onPageShow(): void {
+    connectNum(Constants.AS_HOME_REFRESH_TICK, 0).value = Date.now();
+  }
+
   build() {
     Stack({ alignContent: Alignment.Bottom }) {
       Column()

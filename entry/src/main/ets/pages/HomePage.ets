@@ -4,14 +4,23 @@ import { SubscriptionStore } from '../service/SubscriptionStore';
 import { Constants } from '../service/Constants';
 import { AppStore } from '../service/AppStore';
 import { registerHomeEditBack } from '../service/BackHandler';
+import { EdgeAutoScroller } from '../service/SelectLogic';
 import { connectBool, connectNum, connectStr, NumState, StrState } from '../service/V2State';
+import { extractBiliUrl, containsBiliUrl, normalizeShortLinkUrl, isBiliShortLink, resolveShortLink,
+  ShortLinkResult, ShortLinkOutcome, recognizeInput, RecognizeResult } from '../service/LinkResolver';
+import { BiliService } from '../service/BiliService';
+import { PlayerController, EnqueueResult } from '../service/PlayerController';
 import { CoverThumb } from '../component/CoverThumb';
 import { AddSubscriptionSheet, AddSheetBackHandler } from './AddSubscriptionSheet';
+import { componentUtils } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 
 interface PopupStateChange {
   isVisible: boolean;
 }
+
+// 把手拖拽边缘自动滚动量视口用 id（US4，同 SourcePage SWEEP_LIST_ID 先例）
+const DRAG_LIST_ID: string = 'homeSubList';
 
 class SubRow {
   sub: Subscription = new Subscription();
@@ -115,6 +124,10 @@ export struct HomePage {
   @Local navBarHeight: NumState = connectNum(Constants.AS_NAV_BAR_HEIGHT, 0);
   // 源页退出（onHidden）经全局键触发重算（US4 返回首页徽标清除）
   @Local homeRefreshTick: NumState = connectNum(Constants.AS_HOME_REFRESH_TICK, 0);
+  // 系统分享导入传输键（US5）：EntryAbility 取分享原文写入，HomePage 唯一消费方，消费即清
+  @Local shareImportText: StrState = connectStr(Constants.AS_SHARE_IMPORT_TEXT, '');
+  // 分享抽得 B 站链接（US5）：AddSubscriptionSheet initialInput 灌入源，面板关闭即清
+  @Local shareSheetInput: string = '';
   @Local rowCount: number = 0;
   @Local showAddSheet: boolean = false;
   @Local pressedKey: string = '';
@@ -123,8 +136,8 @@ export struct HomePage {
   // 长按行菜单显隐键（US5）：当前弹菜单行的 sub.id，空串表示无菜单
   @Local menuKey: string = '';
   // 把手手动拖拽态（US9 FR-026）：draggingKey 被拖行 sub.id（空串无拖拽）、dragOffsetY/dragBaseline
-  // 为 translate 绑定所需响应式量（offsetY-按压起算累积纵偏移 GestureEvent.offsetY、
-  // baseline-当前槽位偏移基准，swap 换位随方向累进阈值，两者差即被拖行位移）
+  // 为 translate 绑定所需响应式量（offsetY-换位判定位移＝手指累积纵偏移＋拖拽期间滚动增量（US4 边缘滚动
+  // 并入，被拖行 translate 锁手指）、baseline-当前槽位偏移基准，swap 换位随方向累进阈值，两者差即被拖行位移）
   @Local draggingKey: string = '';
   @Local dragOffsetY: number = 0;
   @Local dragBaseline: number = 0;
@@ -132,6 +145,11 @@ export struct HomePage {
   @Local flightKey: string = '';
   private dragActive: boolean = false;
   private dragFromIndex: number = -1;
+  // 手指累积纵偏移（GestureEvent.offsetY）与起拖 yOffset 快照（US4）：换位判定位移 = 手指偏移 +（当前 yOffset − 快照）
+  private dragFingerY: number = 0;
+  private dragStartYOffset: number = 0;
+  // 把手拖拽边缘自动滚动器（US4，SelectLogic 原样复用）
+  private edgeScroller: EdgeAutoScroller = new EdgeAutoScroller();
   // 编辑态挂起的 rebuild 标记（US1）：编辑期间 rebuild 置脏，退出编辑态后补跑一次
   private rebuildPending: boolean = false;
   // 添加订阅面板的系统返回拦截句柄（onWillDismiss PRESS_BACK 时经其询问面板是否消费）
@@ -148,7 +166,9 @@ export struct HomePage {
   aboutToAppear(): void {
     this.subs = SubscriptionStore.loadSubscriptions();
     this.rebuild();
-    this.silentRefresh();
+    this.silentRefresh(Constants.HOME_COLD_START_REFRESH_CD_MS);
+    // 分享导入兜底读（US5）：冷启动 EntryAbility 写键早于页面挂载，@Monitor 未覆盖的写入在此消费
+    this.consumeShareImport();
     // 编辑态系统返回消费句柄（US1）：句柄内自判编辑态，非编辑态返回 false 放行后续层
     registerHomeEditBack((): boolean => {
       if (this.editMode) {
@@ -185,10 +205,100 @@ export struct HomePage {
     this.provider.reload(rows);
   }
 
-  // US4：源页退出经全局键触发（onPop 对无参 pop() 永不回调，见 SourcePage.onHidden 注释）
+  // US4：源页退出经全局键触发（onPop 对无参 pop() 永不回调，见 SourcePage.onHidden 注释）；
+  // US1：Index.onPageShow 回前台、⑭：SettingsPage.aboutToDisappear 设置层关闭同键触发，重算外补调静默刷新；
+  // CD 分层（⑭）：本链（回前台/源页退出/设置层关闭）1 小时，冷启动 aboutToAppear 直调 15 分钟
   @Monitor('homeRefreshTick.value')
   onHomeRefreshTick(): void {
     this.rebuild();
+    this.silentRefresh(Constants.HOME_FOREGROUND_REFRESH_CD_MS);
+  }
+
+  // 系统分享导入（US5）：热启动写键经此触发，镜像 homeRefreshTick 监听模式
+  @Monitor('shareImportText.value')
+  onShareImportText(): void {
+    this.consumeShareImport();
+  }
+
+  // 分享导入消费门控（US5）：拷贝后清键（面板已开再分享可二次触发）；抽不到 B 站链接 toast 拒收；
+  // 抽到 → 路由（视频类直接入队不开面板消闪，出错回退开面板走面板链）
+  private consumeShareImport(): void {
+    const raw: string = this.shareImportText.value;
+    if (raw === '') {
+      return;
+    }
+    this.shareImportText.value = '';
+    if (!containsBiliUrl(raw)) {
+      this.getUIContext().getPromptAction().showToast({ message: Constants.TOAST_SHARE_UNSUPPORTED });
+      return;
+    }
+    this.routeShareImport(extractBiliUrl(raw));
+  }
+
+  // 分享路由（US5 消闪）：短链先解析（失败回退开面板由面板链给既有分型提示）；
+  // 识别为视频（bv/av）→ 直接入队播放；其余（订阅类/ep/无法识别）开面板走既有检索链
+  private routeShareImport(cleaned: string): void {
+    const normalized: string = normalizeShortLinkUrl(cleaned);
+    if (!isBiliShortLink(normalized)) {
+      this.dispatchShareTarget(cleaned, cleaned);
+      return;
+    }
+    resolveShortLink(normalized).then((res: ShortLinkResult): void => {
+      if (res.outcome !== ShortLinkOutcome.OK) {
+        this.openShareSheet(cleaned);
+        return;
+      }
+      this.dispatchShareTarget(res.target, cleaned);
+    }).catch((): void => {
+      this.openShareSheet(cleaned);
+    });
+  }
+
+  // 分享目标分发（US5 消闪）：bv 直接入队；av 经 aid 归一化（查询失败回退开面板）；
+  // 其余类型开面板（面板内 up/fav/season/series/lists 订阅流程、ep 拒收、识别失败提示均为既有链）
+  private dispatchShareTarget(target: string, fallback: string): void {
+    const parsed: RecognizeResult = recognizeInput(target);
+    if (parsed.type === 'bv') {
+      this.enqueueSharedVideo(parsed.id, parsed.page, fallback);
+      return;
+    }
+    if (parsed.type === 'av') {
+      const aid: number = parseInt(parsed.id, 10);
+      if (isNaN(aid) || aid <= 0) {
+        this.openShareSheet(fallback);
+        return;
+      }
+      BiliService.fetchVideoInfoByAid(aid).then((video: BiliVideo): void => {
+        if (video.bvid === '') {
+          this.openShareSheet(fallback);
+          return;
+        }
+        this.enqueueSharedVideo(video.bvid, parsed.page, fallback);
+      }).catch((): void => {
+        this.openShareSheet(fallback);
+      });
+      return;
+    }
+    this.openShareSheet(fallback);
+  }
+
+  // 分享视频直接入队（US5 消闪）：成功（APPENDED/STARTED/DUPLICATE）仅 toast 不开面板；
+  // FAILED/异常回退开面板（面板自动重试走既有 playBv 链给失败 toast）
+  private enqueueSharedVideo(bvid: string, page: number, fallback: string): void {
+    PlayerController.getInstance().addSingleVideo(bvid, page).then((result: EnqueueResult): void => {
+      if (result === EnqueueResult.FAILED) {
+        this.openShareSheet(fallback);
+        return;
+      }
+      this.getUIContext().getPromptAction().showToast({ message: PlayerController.enqueueToast(result) });
+    }).catch((): void => {
+      this.openShareSheet(fallback);
+    });
+  }
+
+  private openShareSheet(input: string): void {
+    this.shareSheetInput = input;
+    this.showAddSheet = true;
   }
 
   private persistRefreshedSub(sub: Subscription, ok: boolean): void {
@@ -196,7 +306,7 @@ export struct HomePage {
     this.rebuild();
   }
 
-  private async silentRefresh(): Promise<void> {
+  private async silentRefresh(cdMs: number): Promise<void> {
     if (this.refreshingNow) {
       return;
     }
@@ -204,9 +314,11 @@ export struct HomePage {
     await AppStore.init();
     const elapsed: number = Date.now() - AppStore.getNumber(Constants.KEY_LAST_SILENT_REFRESH_AT, 0);
     // D9：时钟回拨（elapsed 为负）视为 CD 过期放行
-    if (elapsed >= 0 && elapsed < Constants.HOME_SILENT_REFRESH_CD_MS) {
+    if (elapsed >= 0 && elapsed < cdMs) {
       return;
     }
+    // 过 CD 门才有对比窗（US2）：发起刷新前快照全源新集总数，直读 SubscriptionStore 不经行缓存
+    const newCountBefore: number = this.totalNewCount();
     this.refreshingNow = true;
     let failCount: number = 0;
     SubscriptionStore.refreshAll(this.subs, false, (sub: Subscription, ok: boolean): void => {
@@ -215,16 +327,33 @@ export struct HomePage {
       }
       this.persistRefreshedSub(sub, ok);
     }).then((): void => {
-      this.finishSilentRefresh(failCount);
+      this.finishSilentRefresh(failCount, newCountBefore);
     }).catch((): void => {
-      this.finishSilentRefresh(failCount);
+      this.finishSilentRefresh(failCount, newCountBefore);
     });
   }
 
-  // 静默刷新收尾（v0.5-part4 US3）：写 CD 时间戳 + 失败源聚合 toast（去重窗内只弹一次；CD 跳过路径零提示）
-  private finishSilentRefresh(failCount: number): void {
+  // 全源新集总数（US2）：Σ countNew(loadEpisodes, lastSeenAt)，直读 SubscriptionStore
+  private totalNewCount(): number {
+    const subs: Subscription[] = SubscriptionStore.loadSubscriptions();
+    let total: number = 0;
+    for (let i = 0; i < subs.length; i++) {
+      total += Subscription.countNew(SubscriptionStore.loadEpisodes(subs[i].id), subs[i].lastSeenAt);
+    }
+    return total;
+  }
+
+  // 静默刷新收尾（v0.5-part4 US3）：写 CD 时间戳 + 失败源聚合 toast（去重窗内只弹一次；CD 跳过路径零提示）；
+  // 新集正向增量 toast（US2）：重算总数仅认增量 N>0，与失败 toast 按各自语义并存
+  private finishSilentRefresh(failCount: number, newCountBefore: number): void {
     this.refreshingNow = false;
     AppStore.putNumber(Constants.KEY_LAST_SILENT_REFRESH_AT, Date.now());
+    const newCountDelta: number = this.totalNewCount() - newCountBefore;
+    if (newCountDelta > 0) {
+      this.getUIContext().getPromptAction().showToast({
+        message: Constants.TOAST_NEW_EPISODES_FOUND.replace('N', `${newCountDelta}`)
+      });
+    }
     if (failCount > 0) {
       const now: number = Date.now();
       if (now - this.lastSilentFailToastAt >= Constants.SILENT_REFRESH_FAIL_DEDUP_MS) {
@@ -251,6 +380,7 @@ export struct HomePage {
       return;
     }
     this.dragActive = false;
+    this.edgeScroller.stop();
     this.draggingKey = '';
     this.dragOffsetY = 0;
     this.dragBaseline = 0;
@@ -312,6 +442,41 @@ export struct HomePage {
         this.provider.swapNotify(from, target);
       });
     }
+  }
+
+  // 换位判定位移（US4）：手指累积纵偏移 +（当前 yOffset − 起拖快照），纯手指移动与纯边缘滚动同套基准
+  private dragSwapOffset(): number {
+    return this.dragFingerY + (this.scroller.currentOffset().yOffset - this.dragStartYOffset);
+  }
+
+  // 把手拖拽边缘带检查（US4，SourcePage 边缘带模式同构）：globalY 进顶部/底部带起滚、出带停滚
+  private checkDragEdge(globalY: number): void {
+    const rect: componentUtils.ComponentInfo =
+      this.getUIContext().getComponentUtils().getRectangleById(DRAG_LIST_ID);
+    const topY: number = this.getUIContext().px2vp(rect.windowOffset.y);
+    const bottomY: number = topY + this.getUIContext().px2vp(rect.size.height);
+    if (globalY <= topY + Constants.SELECT_SWEEP_EDGE_ZONE) {
+      this.startDragEdgeScroll(false);
+    } else if (globalY >= bottomY - Constants.SELECT_SWEEP_EDGE_ZONE) {
+      this.startDragEdgeScroll(true);
+    } else {
+      this.edgeScroller.stop();
+    }
+  }
+
+  // 尽头停滚（US4）：向下 isAtEnd、向上回顶
+  private dragEdgeAtEnd(downward: boolean): boolean {
+    if (downward) {
+      return this.scroller.isAtEnd();
+    }
+    return this.scroller.currentOffset().yOffset <= 0;
+  }
+
+  private startDragEdgeScroll(downward: boolean): void {
+    this.edgeScroller.start(this.scroller, downward, (): void => {
+      this.dragOffsetY = this.dragSwapOffset();
+      this.processDragSwap(this.dragOffsetY);
+    }, (down: boolean): boolean => this.dragEdgeAtEnd(down));
   }
 
   // 把手拖拽松手归位（US9 FR-026）：animateTo 内 dragOffsetY→dragBaseline（相对位移归零平滑落槽），
@@ -457,6 +622,7 @@ export struct HomePage {
   @Builder
   private addSheetBuilder() {
     AddSubscriptionSheet({
+      initialInput: this.shareSheetInput,
       backHandler: this.addSheetBack,
       onSubscribed: (sub: Subscription): void => {
         this.addSubscription(sub);
@@ -565,6 +731,8 @@ export struct HomePage {
               }
               this.dragActive = true;
               this.draggingKey = row.sub.id;
+              this.dragFingerY = e.offsetY;
+              this.dragStartYOffset = this.scroller.currentOffset().yOffset;
               this.dragOffsetY = e.offsetY;
               this.dragBaseline = e.offsetY;
               this.dragFromIndex = idx;
@@ -573,14 +741,17 @@ export struct HomePage {
               if (this.draggingKey !== row.sub.id) {
                 return;
               }
-              this.dragOffsetY = e.offsetY;
-              this.processDragSwap(e.offsetY);
+              this.dragFingerY = e.offsetY;
+              this.dragOffsetY = this.dragSwapOffset();
+              this.processDragSwap(this.dragOffsetY);
+              this.checkDragEdge(e.fingerList[0].globalY);
             })
             .onActionEnd((): void => {
               if (this.draggingKey !== row.sub.id) {
                 return;
               }
               this.dragActive = false;
+              this.edgeScroller.stop();
               this.settleDrag();
             })
             .onActionCancel((): void => {
@@ -588,6 +759,7 @@ export struct HomePage {
                 return;
               }
               this.dragActive = false;
+              this.edgeScroller.stop();
               this.settleDrag();
             }),
           LongPressGesture()
@@ -801,16 +973,16 @@ export struct HomePage {
           }
           .width('100%')
           .height('100%')
+          .id(DRAG_LIST_ID)
           .padding({ left: Constants.TOKEN_SPACE_M, right: Constants.TOKEN_SPACE_M, top: Constants.TOKEN_SPACE_XS })
-          // MiniPlayer 悬浮化（FR-015）：底部 padding 是内容裁剪边界（内容不能从胶囊下划过的根因），
-          // 改挂 contentEndOffset——视口延伸至屏底、内容滚动时从胶囊下方穿过（毛玻璃透出），
-          // 滚到底最后一条完整露出在胶囊上方
-          .contentEndOffset(Constants.MINI_PLAYER_CLEARANCE + this.navBarHeight.value)
           // US9：内容不足一屏时 List 默认不开启边缘效果，须显式 alwaysEnabled 才有过冲物理回弹
           .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
         }
         .width('100%')
         .layoutWeight(1)
+        // 列表底缘永久让位 MiniPlayer（US3，原 FR-015 下穿过设计废止）：视口底缘收至胶囊上方（两态恒生效），
+        // 内建拖拽底部触发区随视口上提；同值同式迁移自原 contentEndOffset，滚到底最后一条静止位零跳变
+        .padding({ bottom: Constants.MINI_PLAYER_CLEARANCE + this.navBarHeight.value })
       }
     }
     .width('100%')
@@ -821,6 +993,8 @@ export struct HomePage {
       preferType: SheetType.BOTTOM,
       onDisappear: (): void => {
         this.showAddSheet = false;
+        // 清分享灌入值（US5）：下次「＋」打开面板回到空输入，不重放旧分享检索
+        this.shareSheetInput = '';
       },
       onWillDismiss: (dismiss: DismissSheetAction) => {
         // 系统返回时若面板处于二级视图（收藏夹/合集与系列），拦截关闭并退回一级视图；

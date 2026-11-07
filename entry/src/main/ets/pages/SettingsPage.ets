@@ -131,6 +131,8 @@ export struct SettingsPage {
   }
 
   aboutToDisappear(): void {
+    // 设置层关闭（Index 条件渲染卸载）= 回首页时刻（⑭）：bump 既有键驱动首页重算 + 1 小时 CD 门内静默刷新尝试
+    connectNum(Constants.AS_HOME_REFRESH_TICK, 0).value = Date.now();
     registerSettingsBack(undefined);
     this.unsubscribePlayer();
     this.unsubscribePlayer = (): void => {};
@@ -313,9 +315,9 @@ export struct SettingsPage {
       if (result.newSubs.length === 0) {
         return;
       }
-      // 先 bump 令首页立即显示新源（未刷新态），串行刷新完成/失败后再 bump 更新封面剧集
+      // 新订阅串行拉取（导入链自拉数据，不经 CD），完成/失败后 bump 令首页重算显示封面剧集；
+      // 回首页的刷新时机由 SettingsPage.aboutToDisappear 关闭 bump 承担（⑭，1 小时 CD 门收敛）
       const tick: NumState = connectNum(Constants.AS_HOME_REFRESH_TICK, 0);
-      tick.value++;
       SubscriptionStore.refreshAll(result.newSubs, true, (sub: Subscription, ok: boolean): void => {
         if (ok) {
           SubscriptionStore.persistRefreshedSub(sub, true);

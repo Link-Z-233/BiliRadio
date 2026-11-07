@@ -159,8 +159,9 @@ class PlaylistDataSource implements IDataSource {
 @ComponentV2
 export struct QueueSheet {
   @Local entries: QueueEntry[] = [];
-  @Local currentIndex: number = -1;
-  @Local currentItemEnded: boolean = false;
+  // 当前条目复合键（非下标）：LazyForEach 同键节点跨 reload 复用不重跑生成器闭包，
+  // 重排后闭包内位置量（startIndex/下标）过期，键比对免疫（同 v0.4-fix-multi-part bugfix #1 闭包过期类）
+  @Local currentKey: string = '';
   @Local playlistVersion: number = -1;
   @Local selectMode: BoolState = connectBool(Constants.AS_PLAYLIST_SELECT_MODE, false);
   // 多选集合不可变整体换引用更新：V2 @Local 赋值观测不观测 Set 内部变更
@@ -287,8 +288,9 @@ export struct QueueSheet {
         }
       }
     }
-    this.currentIndex = c.currentIndex;
-    this.currentItemEnded = c.currentItemEnded;
+    this.currentKey = c.currentIndex >= 0 && c.currentIndex < c.playlist.length
+      ? BiliVideo.itemKeyOf(c.playlist[c.currentIndex].bvid, c.playlist[c.currentIndex].page)
+      : '';
   }
 
   // 组头标题：纯视频标题（videoTitle，旧数据/占位回退 title）
@@ -341,6 +343,16 @@ export struct QueueSheet {
     const list: BiliVideo[] = this.controller.playlist;
     for (let i = 0; i < list.length; i++) {
       if (BiliVideo.itemKeyOf(list[i].bvid, list[i].page) === key) {
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  // 条目实时行位：闭包 index 重排/增删后过期（同 currentKey 字段注释），拖选/扫选锚点按键现查
+  private entryIndexOf(key: string): number {
+    for (let i = 0; i < this.entries.length; i++) {
+      if (this.entries[i].key === key) {
         return i;
       }
     }
@@ -787,7 +799,7 @@ export struct QueueSheet {
   // 按压高亮 + 长按进多选（选中本组条目）+ Pan 拖选与单条目整行同构；
   // 非多选点击整组续播（两段判定），多选点击整组切换
   @Builder
-  videoHeaderRow(entry: QueueEntry, index: number) {
+  videoHeaderRow(entry: QueueEntry) {
     Row() {
       // 勾选框区拖选（FR-014）：外包 Column 承载扫选手势，热区限勾选框列，
       // 行主体 Sequence 拖选（只增不减）与勾选框扫选（可加可减）并存互不冲突
@@ -810,7 +822,7 @@ export struct QueueSheet {
             if (!this.selectMode.value || event.fingerList.length === 0) {
               return;
             }
-            this.startSweep(index, event);
+            this.startSweep(this.entryIndexOf(entry.key), event);
           })
           .onActionUpdate((event: GestureEvent): void => {
             if (this.sweepSession === null) {
@@ -872,12 +884,12 @@ export struct QueueSheet {
             if (!this.selectMode.value) {
               this.enterSelectMode();
               this.selectedKeys = new Set<string>([entry.key]);
-              this.dragStartEntryIndex = index;
+              this.dragStartEntryIndex = this.entryIndexOf(entry.key);
             }
           }),
         PanGesture({ fingers: 1, direction: PanDirection.Vertical })
           .onActionUpdate((event: GestureEvent) => {
-            if (!this.selectMode.value) {
+            if (!this.selectMode.value || this.dragStartEntryIndex < 0) {
               return;
             }
             const target: number = this.targetEntryIndex(this.dragStartEntryIndex, event.offsetY);
@@ -888,14 +900,14 @@ export struct QueueSheet {
   }
 
   // 组条目分P 窄行（plan D9）：无封面，Pn + 分P 标题 + 时长，左缩进对齐头行标题；
-  // 点击切播（扁平下标 = startIndex+偏移）、当前播放高亮；多选点击/长按均为整条目（组）语义；
+  // 点击切播与当前播放高亮均按复合键实时解析（同 currentKey 字段注释）；多选点击/长按均为整条目（组）语义；
   // 已播 ✓ 分P 粒度（(bvid,page) 命中历史 -1）；拖选/按压与头行同构（组为最小管理粒度，D15-Trim 语义保持）
   @Builder
-  queuePartRow(part: BiliVideo, entry: QueueEntry, entryIndex: number, partIdx: number) {
+  queuePartRow(part: BiliVideo, entry: QueueEntry) {
     Row() {
       Text(this.partRowTitle(part))
         .fontSize(Constants.TOKEN_FONT_BODY_M)
-        .fontColor(entry.startIndex + partIdx === this.currentIndex ? this.accentColor.value : this.textPrimary())
+        .fontColor(BiliVideo.itemKeyOf(part.bvid, part.page) === this.currentKey ? this.accentColor.value : this.textPrimary())
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
         .layoutWeight(1)
@@ -937,7 +949,10 @@ export struct QueueSheet {
       if (this.selectMode.value) {
         this.toggleSelect(entry.key);
       } else {
-        this.controller.playIndex(entry.startIndex + partIdx, 0);
+        const idx: number = this.indexOfQueueItem(part.bvid, part.page);
+        if (idx >= 0) {
+          this.controller.playIndex(idx, 0);
+        }
       }
     })
     .gesture(
@@ -948,12 +963,12 @@ export struct QueueSheet {
             if (!this.selectMode.value) {
               this.enterSelectMode();
               this.selectedKeys = new Set<string>([entry.key]);
-              this.dragStartEntryIndex = entryIndex;
+              this.dragStartEntryIndex = this.entryIndexOf(entry.key);
             }
           }),
         PanGesture({ fingers: 1, direction: PanDirection.Vertical })
           .onActionUpdate((event: GestureEvent) => {
-            if (!this.selectMode.value) {
+            if (!this.selectMode.value || this.dragStartEntryIndex < 0) {
               return;
             }
             const target: number = this.targetEntryIndex(this.dragStartEntryIndex, event.offsetY);
@@ -966,7 +981,7 @@ export struct QueueSheet {
   // 单条目整行（原有渲染原样保留）：封面 + 标题 + UP 主/时长；多选态行首恒挂载 Checkbox
   // 容器（宽度/透明度随 selectMode 动画）；选择/按压/手势改条目键
   @Builder
-  queueFullRow(entry: QueueEntry, index: number) {
+  queueFullRow(entry: QueueEntry) {
     Row() {
       // 勾选框区拖选（FR-014）：外包 Column 承载扫选手势，热区限勾选框列，
       // 行主体 Sequence 拖选（只增不减）与勾选框扫选（可加可减）并存互不冲突
@@ -989,7 +1004,7 @@ export struct QueueSheet {
             if (!this.selectMode.value || event.fingerList.length === 0) {
               return;
             }
-            this.startSweep(index, event);
+            this.startSweep(this.entryIndexOf(entry.key), event);
           })
           .onActionUpdate((event: GestureEvent): void => {
             if (this.sweepSession === null) {
@@ -1008,13 +1023,13 @@ export struct QueueSheet {
           })
       )
 
-      CoverThumb({ cover: entry.videos[0].cover, highlight: entry.startIndex === this.currentIndex, accent: this.accentColor.value })
+      CoverThumb({ cover: entry.videos[0].cover, highlight: BiliVideo.itemKeyOf(entry.videos[0].bvid, entry.videos[0].page) === this.currentKey, accent: this.accentColor.value })
 
       Column() {
         Row() {
           Text(entry.videos[0].title)
             .fontSize(Constants.TOKEN_FONT_BODY_M)
-            .fontColor(entry.startIndex === this.currentIndex ? this.accentColor.value : this.textPrimary())
+            .fontColor(BiliVideo.itemKeyOf(entry.videos[0].bvid, entry.videos[0].page) === this.currentKey ? this.accentColor.value : this.textPrimary())
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
             .layoutWeight(1)
@@ -1069,7 +1084,10 @@ export struct QueueSheet {
         this.toggleSelect(entry.key);
       } else {
         // 仅切换歌曲，不跳转播放页
-        this.controller.playIndex(entry.startIndex, 0);
+        const idx: number = this.indexOfQueueItem(entry.videos[0].bvid, entry.videos[0].page);
+        if (idx >= 0) {
+          this.controller.playIndex(idx, 0);
+        }
       }
     })
     .gesture(
@@ -1080,12 +1098,12 @@ export struct QueueSheet {
             if (!this.selectMode.value) {
               this.enterSelectMode();
               this.selectedKeys = new Set<string>([entry.key]);
-              this.dragStartEntryIndex = index;
+              this.dragStartEntryIndex = this.entryIndexOf(entry.key);
             }
           }),
         PanGesture({ fingers: 1, direction: PanDirection.Vertical })
           .onActionUpdate((event: GestureEvent) => {
-            if (!this.selectMode.value) {
+            if (!this.selectMode.value || this.dragStartEntryIndex < 0) {
               return;
             }
             const target: number = this.targetEntryIndex(this.dragStartEntryIndex, event.offsetY);
@@ -1379,19 +1397,19 @@ export struct QueueSheet {
       } else {
         Stack() {
           List({ space: 0, scroller: this.listScroller }) {
-            LazyForEach(this.listSource, (entry: QueueEntry, index: number) => {
+            LazyForEach(this.listSource, (entry: QueueEntry) => {
               ListItem() {
                 // 条目分发渲染（plan D9）：组条目 = Column{ 头行 + ForEach(分P 窄行) } 一体滑动，
                 // 单条目沿用整行；外层键 = 条目键，组内键 = 分P 复合键
                 if (entry.isGroup) {
                   Column() {
-                    this.videoHeaderRow(entry, index)
-                    ForEach(entry.videos, (part: BiliVideo, partIdx: number) => {
-                      this.queuePartRow(part, entry, index, partIdx)
+                    this.videoHeaderRow(entry)
+                    ForEach(entry.videos, (part: BiliVideo) => {
+                      this.queuePartRow(part, entry)
                     }, (part: BiliVideo) => BiliVideo.itemKeyOf(part.bvid, part.page))
                   }
                 } else {
-                  this.queueFullRow(entry, index)
+                  this.queueFullRow(entry)
                 }
               }
               // 条目级横删（plan D6）：组条目整组滑出（组/单删双弹窗），多选态不挂载删除动作

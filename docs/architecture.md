@@ -22,17 +22,23 @@ entry/src/main/ets/
 └── model/                   数据模型（6）
 ```
 
+### entryability/
+
+| 文件 | 职责 |
+|------|------|
+| `EntryAbility.ets` | 应用入口：沉浸式窗口与避让区同步、外观/日志/播放器初始化编排、系统分享接收传输层（onCreate/onNewWant 取分享原文写全局键 `AS_SHARE_IMPORT_TEXT`，零业务逻辑） |
+
 ### pages/
 
 | 文件 | 职责 |
 |------|------|
-| `Index.ets` | 唯一 `@Entry` 单页壳：五层 z 序挂载、debug 冷启动恢复 |
-| `HomePage.ets` | 首页订阅源列表（新集徽标 / 长按进排序编辑态拖拽调序 / 左滑删除 / 空态） |
+| `Index.ets` | 唯一 `@Entry` 单页壳：五层 z 序挂载、debug 冷启动恢复、onPageShow 回前台 bump 首页刷新键 |
+| `HomePage.ets` | 首页订阅源列表（新集徽标 / 长按进排序编辑态拖拽调序 / 左滑删除 / 空态）；列表底缘永久让位 MiniPlayer（v0.7-part2-refresh-share 起，原「内容从胶囊下穿过」设计废止）；把手拖拽边缘自动滚动（EdgeAutoScroller 复用）；静默刷新 CD 门/新集增量 toast；分享导入消费门控（extractBiliUrl 开面板 / 拒收 toast） |
 | `SourcePage.ets` | 订阅源详情（剧集列表 / 多选 / 刷新 / fav 入队 stamp 与归属回填） |
 | `PlayerOverlay.ets` | 播放浮层（封面取色 / 音质档位 / 倍速） |
 | `SettingsPage.ets` | 设置页（账号 / 播放 / 外观 / 订阅管理导出导入 / 历史与日志入口 / 关于） |
 | `LogPage.ets` | 日志页（L2 层；导出 / 清空 / 分类过滤） |
-| `AddSubscriptionSheet.ets` | 添加订阅面板（链接识别 / UID / UP / 合集 / 收藏夹） |
+| `AddSubscriptionSheet.ets` | 添加订阅面板（链接识别 / UID / UP / 合集 / 收藏夹 / 分享导入 initialInput 灌入自动检索） |
 
 ### component/
 
@@ -89,7 +95,7 @@ entry/src/main/ets/
 | `GripDetector.ets` | 握持手势检测（驱动胶囊侧别） |
 | `Logger.ets` | 日志（hilog + 沙箱滚动文件 + 导出） |
 | `V2State.ets` | V2 全局键基础设施（AppStorageV2 包装类） |
-| `SelectLogic.ets` | 多选共享逻辑（源页 / 队列 / 历史三处共用） |
+| `SelectLogic.ets` | 多选共享逻辑与边缘自动滚动器（源页 / 队列 / 历史多选、首页把手拖拽共用） |
 | `BackHandler.ets` | 返回链统一入口（逐层关闭浮层；首页编辑态句柄最前消费） |
 | `Constants.ets` | 唯一常量真相源（存储键 / AppStorage 键 / 令牌 / 魔法数字） |
 | `AppContext.ets` | UIAbilityContext 全局持有 |
