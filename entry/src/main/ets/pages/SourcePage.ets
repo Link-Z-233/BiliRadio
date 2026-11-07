@@ -111,8 +111,6 @@ struct SourcePage {
   @Local sub: Subscription = new Subscription();
   // 已播集契约同 selectedKeys：V2 @Local 赋值观测不观测 Set 内部变更，整体换引用驱动行上标记即时刷新
   @Local playedSet: Set<string> = new Set<string>();
-  // 数据源异常集（v0.5-part5）：随 playedSet 同点从 controller.anomalySet 拷贝，行上 X 标记
-  @Local anomalySet: Set<string> = new Set<string>();
   // 长按守卫（FR-009）：堵长按后的回退 onClick，三处多选统一模式
   private longPressGuard: LongPressGuard = new LongPressGuard();
   private scroller: Scroller = new Scroller();
@@ -504,7 +502,6 @@ struct SourcePage {
       }
     }
     this.playedSet = played;
-    this.anomalySet = new Set<string>(this.controller.anomalySet);
   }
 
   private refreshSource(): void {
@@ -1124,10 +1121,15 @@ struct SourcePage {
                             .fontColor([$r('app.color.success_green')])
                             .margin({ left: this.isNew(item) || item.isUpowerExclusive ? Constants.TOKEN_SPACE_S : 0 })
                         }
-                        if (this.anomalySet.has(item.bvid)) {
+                        if (this.controller.hasInvalid(item.bvid)) {
                           SymbolGlyph($r('sys.symbol.xmark_circle'))
                             .fontSize(Constants.TOKEN_FONT_TITLE)
                             .fontColor([$r('app.color.danger_red')])
+                            .margin({ left: this.isNew(item) || this.isPlayed(item) ? Constants.TOKEN_SPACE_S : 0 })
+                        } else if (this.controller.hasAnomaly(item.bvid)) {
+                          SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
+                            .fontSize(Constants.TOKEN_FONT_TITLE)
+                            .fontColor([$r('app.color.warning_amber')])
                             .margin({ left: this.isNew(item) || this.isPlayed(item) ? Constants.TOKEN_SPACE_S : 0 })
                         }
                       }

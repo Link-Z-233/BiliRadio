@@ -802,11 +802,17 @@ export struct HistorySheet {
                   .layoutWeight(1)
                   .margin({ left: Constants.TOKEN_SPACE_10 })
 
-                  // 数据源异常标记（v0.5-part5）：行尾红 X，对齐队列条目视觉档
-                  if (this.controller.hasAnomaly(row.bvid)) {
+                  // 失效标记（v0.7-part3）：行尾红 X（-404 无法取流），对齐队列条目视觉档；
+                  // 异常标记（感叹号，amber）次之：X 与感叹号防御性共存时 X 优先
+                  if (this.controller.hasInvalid(row.bvid)) {
                     SymbolGlyph($r('sys.symbol.xmark_circle'))
                       .fontSize(Constants.TOKEN_FONT_TITLE)
                       .fontColor([$r('app.color.danger_red')])
+                      .margin({ left: Constants.TOKEN_SPACE_XS })
+                  } else if (this.controller.hasAnomaly(row.bvid)) {
+                    SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
+                      .fontSize(Constants.TOKEN_FONT_TITLE)
+                      .fontColor([$r('app.color.warning_amber')])
                       .margin({ left: Constants.TOKEN_SPACE_XS })
                   }
                 }

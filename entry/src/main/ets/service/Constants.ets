@@ -46,10 +46,10 @@ export class Constants {
   static readonly KEY_UNFAVORITE_ASK: string = 'unfavoriteAsk';
   // 上次首页静默刷新完成时刻（毫秒时间戳）：跨启动 CD 判定基准（D9 回拨规则）
   static readonly KEY_LAST_SILENT_REFRESH_AT: string = 'lastSilentRefreshAt';
-  // 异常源自动跳过（1=跳过试听流 0=照常播放，默认跳过）
-  static readonly KEY_ANOMALY_SKIP: string = 'anomalySkip';
-  // 数据源异常 bvid 集（JSON 数组字符串，per-bvid 持久化 X 标记，不云同步）
+  // 数据源异常 bvid 集（JSON 数组字符串，per-bvid 持久化异常标记，不云同步）
   static readonly KEY_ANOMALY_BVIDS: string = 'anomalyBvids';
+  // 失效 bvid 集（JSON 数组字符串，per-bvid 持久化 X 标记，-404 判定，不云同步）
+  static readonly KEY_INVALID_BVIDS: string = 'invalidBvids';
   // 单集插入位置（1=下一首播放 0=队列末播放，默认队列末播放；仅源页单击入队路径生效）
   static readonly KEY_SINGLE_INSERT_NEXT: string = 'singleInsertNext';
 
@@ -247,9 +247,13 @@ export class Constants {
   // —— 播放出错提醒（US6）：同一 bvid+阶段时间窗内去重（仅广播提醒去重，日志恒记）与 toast 文案 ——
   static readonly PLAYBACK_ERROR_DEDUP_MS: number = 3000;
   static readonly TOAST_PLAYBACK_ERROR: string = '播放出错，请稍后重试';
-  // —— 数据源异常提醒（v0.5-part5）：跳过推进 / 照常播放试听流两种模式的 toast 文案 ——
-  static readonly TOAST_ANOMALY_SKIP: string = '已跳过试听内容，完整版需充电';
-  static readonly TOAST_ANOMALY_TRIAL: string = '当前为试听内容，完整版需充电';
+  // —— 播放失败分型文案（v0.7-part3）：确定性失败 toast（失效/大会员/时长异常）与瞬时失败重试提示 ——
+  static readonly TOAST_INVALID_SKIP: string = '视频已失效，已跳过';
+  static readonly TOAST_VIP_SKIP: string = '需要大会员，已跳过';
+  static readonly TOAST_NETWORK_RETRY: string = '网络异常，请检查网络后重试';
+  static readonly TOAST_RISK_RETRY: string = '请求被拦截，请稍后重试';
+  // —— 数据源异常提醒（v0.5-part5）：时长异常跳过 toast（报观测事实，不说明原因） ——
+  static readonly TOAST_ANOMALY_SKIP: string = '音源异常，已跳过';
   // —— 刷新结果通知（v0.5-part4 risk-control）：手动刷新成功 / 静默刷新失败（N 由失败订阅数代入）——
   static readonly TOAST_REFRESHED: string = '已更新';
   static readonly TOAST_SILENT_REFRESH_FAIL: string = 'N 个订阅刷新失败';

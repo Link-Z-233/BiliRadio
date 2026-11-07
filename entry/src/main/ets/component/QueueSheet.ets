@@ -923,10 +923,15 @@ export struct QueueSheet {
           .fontColor([$r('app.color.success_green')])
           .margin({ left: Constants.TOKEN_SPACE_XS })
       }
-      if (!this.selectMode.value && this.controller.hasAnomaly(part.bvid)) {
+      if (!this.selectMode.value && this.controller.hasInvalid(part.bvid)) {
         SymbolGlyph($r('sys.symbol.xmark_circle'))
           .fontSize(Constants.TOKEN_FONT_TITLE)
           .fontColor([$r('app.color.danger_red')])
+          .margin({ left: Constants.TOKEN_SPACE_XS })
+      } else if (!this.selectMode.value && this.controller.hasAnomaly(part.bvid)) {
+        SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
+          .fontSize(Constants.TOKEN_FONT_TITLE)
+          .fontColor([$r('app.color.warning_amber')])
           .margin({ left: Constants.TOKEN_SPACE_XS })
       }
     }
@@ -1056,11 +1061,17 @@ export struct QueueSheet {
           .fontColor([$r('app.color.success_green')])
           .margin({ left: Constants.TOKEN_SPACE_XS })
       }
-      // 数据源异常标记（v0.5-part5）：行尾红 X，与 ✓ 同视觉档可并存
-      if (!this.selectMode.value && this.controller.hasAnomaly(entry.videos[0].bvid)) {
+      // 失效标记（v0.7-part3）：行尾红 X（-404 无法取流），与 ✓ 同视觉档可并存；
+      // 异常标记（感叹号，amber）次之：X 与感叹号防御性共存时 X 优先
+      if (!this.selectMode.value && this.controller.hasInvalid(entry.videos[0].bvid)) {
         SymbolGlyph($r('sys.symbol.xmark_circle'))
           .fontSize(Constants.TOKEN_FONT_TITLE)
           .fontColor([$r('app.color.danger_red')])
+          .margin({ left: Constants.TOKEN_SPACE_XS })
+      } else if (!this.selectMode.value && this.controller.hasAnomaly(entry.videos[0].bvid)) {
+        SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
+          .fontSize(Constants.TOKEN_FONT_TITLE)
+          .fontColor([$r('app.color.warning_amber')])
           .margin({ left: Constants.TOKEN_SPACE_XS })
       }
     }

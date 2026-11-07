@@ -53,8 +53,6 @@ export struct SettingsPage {
   // —— 新增设置开关状态 ——
   @Local interruptResume: boolean = false;
   @Local wifiOnlyDownload: boolean = false;
-  // 异常源自动跳过（v0.5-part5）：默认开，关闭则照常播放试听流
-  @Local anomalySkipOn: boolean = true;
   // —— 音质（audio-quality-settings）：双网络默认档 + 单 sheet 选择器（编辑目标标记）——
   @Local wifiQuality: QualityTier = QualityTier.MAX;
   @Local cellularQuality: QualityTier = QualityTier.Q132K;
@@ -108,7 +106,6 @@ export struct SettingsPage {
     this.unfavoriteAskOn = AppStore.getNumber(Constants.KEY_UNFAVORITE_ASK, 1) === 1;
     this.interruptResume = AppStore.getNumber(Constants.KEY_INTERRUPT_RESUME, 0) === 1;
     this.wifiOnlyDownload = AppStore.getNumber(Constants.KEY_WIFI_ONLY_DOWNLOAD, 0) === 1;
-    this.anomalySkipOn = AppStore.getNumber(Constants.KEY_ANOMALY_SKIP, 1) === 1;
     this.singleInsertNext = AppStore.getNumber(Constants.KEY_SINGLE_INSERT_NEXT, 0) === 1;
     this.wifiQuality = this.readStoredTier(Constants.KEY_WIFI_AUDIO_QUALITY, QualityTier.MAX);
     this.cellularQuality = this.readStoredTier(Constants.KEY_CELLULAR_AUDIO_QUALITY, QualityTier.Q132K);
@@ -1241,17 +1238,6 @@ export struct SettingsPage {
                   toggleChange: (isOn: boolean): void => {
                     this.interruptResume = isOn;
                     AppStore.putNumber(Constants.KEY_INTERRUPT_RESUME, isOn ? 1 : 0);
-                  }
-                })
-                SettingsRow({
-                  title: '跳过未充电视频',
-                  subtitle: '检测到试听内容时提示并自动播放下一首',
-                  showToggle: true,
-                  toggleOn: this.anomalySkipOn,
-                  showDivider: true,
-                  toggleChange: (isOn: boolean): void => {
-                    this.anomalySkipOn = isOn;
-                    AppStore.putNumber(Constants.KEY_ANOMALY_SKIP, isOn ? 1 : 0);
                   }
                 })
                 SettingsRow({

@@ -11,7 +11,7 @@ B 站 API 探索唯一沉淀点。三段式：§1 本项目（BiliRadio）在用
 | 端点 | 用途 | 鉴权/签名 | 备注 |
 | --- | --- | --- | --- |
 | `GET api.bilibili.com/x/web-interface/view` | 视频详情（bvid/aid） | 匿名可用 | 风控最松 |
-| `GET api.bilibili.com/x/player/playurl` | 播放取流 | 登录 Cookie | `qn=16` + `fnval=4048`（DASH 音频）/`fnval=0`（兜底）；稿件在但不给播回 `-404`，会员/付费 `-104`，风控 `-412` |
+| `GET api.bilibili.com/x/player/playurl` | 播放取流 | 登录 Cookie | `qn=16` + `fnval=4048`（DASH 音频）/`fnval=0`（兜底）；稿件在但不给播回 `-404`（失效，本项目 X 标记判定源），会员/付费 `-104`（大会员专限，本项目异常标记判定源），风控 `-412`；`-104` 经 playurl/view 的实测形态待真机标注 |
 | `POST api.bilibili.com/x/click-interface/web/heartbeat` | 播放心跳上报 | 登录 Cookie | `Constants.BILI_HEARTBEAT_URL` |
 | `GET api.bilibili.com/x/web-interface/nav` | 登录态校验 + WBI 密钥源 | 匿名需 buvid cookie | 签名钥在 `data.wbi_img`（属性名非 `wbi`）；匿名返回需 buvid cookie + Referer `https://www.bilibili.com/`；未登录时 `data` 非空、wbi_img 仍在 |
 | `GET api.bilibili.com/x/frontend/finger/spi` | buvid3/buvid4 设备指纹 | 匿名 | `BiliSession` 暖场用 |
@@ -22,7 +22,7 @@ B 站 API 探索唯一沉淀点。三段式：§1 本项目（BiliRadio）在用
 | `GET api.bilibili.com/x/space/wbi/acc/info` | UP 主信息 | WBI 签名 | `-352` 频发：最多 3 轮「WBI acc/info → card 兜底」，轮间重置 buvid 指数退避 |
 | `GET api.bilibili.com/x/web-interface/card` | UP 信息兜底 | WBI 签名 | acc/info 风控失败后的降级 |
 | `GET api.bilibili.com/x/v3/fav/folder/created/list-all` | 收藏夹列表 | 登录 Cookie | AddSubscriptionSheet |
-| `GET api.bilibili.com/x/v3/fav/resource/list` | 收藏夹条目 | 匿名可查公开夹 | 无 rights 类逐条权限字段，仅 `attr`(int) |
+| `GET api.bilibili.com/x/v3/fav/resource/list` | 收藏夹条目 | 匿名可查公开夹 | 无 rights 类逐条权限字段，仅 `attr`(int)；本项目只滤 `attr&1`（失效）与「已失效视频」标题，不含会员标记——收藏夹可下发大会员专限 UGC 进入订阅列表（用户领域知识，待实测） |
 | `POST api.bilibili.com/x/v3/fav/resource/deal` | 收藏/取消收藏 | 登录 Cookie + bili_jct | |
 | `GET api.bilibili.com/x/polymer/web-space/seasons_series_list` | 合集/系列列举 | **无需 WBI（带签名反致 -400，见 §3.1）** | 匿名裸请求 code=0 正常（2026-10 核查） |
 | `GET api.bilibili.com/x/polymer/web-space/seasons_archives_list` | 合集条目 | 匿名 | `season_id` 单参数即可，meta 自带 mid/名称/总数 |

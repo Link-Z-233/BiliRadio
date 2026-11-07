@@ -241,8 +241,8 @@ function isUpQueryFatal(err: Object): boolean {
 }
 
 // 风控类错误判定（v0.5-part4 D7）：-352/-412/-403/-799 错误码 + 非 JSON 风控页特征（checkJsonBody 抛错含「风控」），
-// 与 isUpQueryFatal（业务类）互补，供 Web 链冷却置位与重试分流
-function isRiskControlError(err: Object): boolean {
+// 与 isUpQueryFatal（业务类）互补，供 Web 链冷却置位与重试分流；v0.7-part3 起导出供 PlayerController 失败分类
+export function isRiskControlError(err: Object): boolean {
   const msg: string = err instanceof Error ? err.message : String(err);
   return msg.indexOf('-352') >= 0 || msg.indexOf('-412') >= 0 ||
     msg.indexOf('-403') >= 0 || msg.indexOf('-799') >= 0 || msg.indexOf('风控') >= 0;

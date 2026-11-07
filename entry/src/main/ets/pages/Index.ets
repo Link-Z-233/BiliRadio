@@ -102,7 +102,7 @@ struct Index {
     this.unsubPlayer = controller.subscribe((): void => {
       if (controller.errorTick !== this.lastErrorTick) {
         this.lastErrorTick = controller.errorTick;
-        this.getUIContext().getPromptAction().showToast({ message: Constants.TOAST_PLAYBACK_ERROR });
+        this.getUIContext().getPromptAction().showToast({ message: controller.errorMsg });
       }
       if (controller.unfavToastTick !== this.lastUnfavToastTick) {
         this.lastUnfavToastTick = controller.unfavToastTick;

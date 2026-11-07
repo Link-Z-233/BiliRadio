@@ -4,7 +4,8 @@ import { util } from '@kit.ArkTS';
 // B站 WBI 签名：polymer 系列接口（合集/追更等）的通用鉴权参数。
 // 算法：从 nav 接口 wbi_img.img_url/sub_url 的文件名拼出原始 key，
 // 按固定 mixinKeyEncTab 表重排取前 32 位得到 mixinKey；
-// 签名串 = 排序后的参数(过滤 !'()* 后) + mixinKey，MD5 得 w_rid，再附 wts 时间戳。
+// 参数含 wts 时间戳一并排序(过滤 !'()* 后)拼 query，
+// MD5(query + mixinKey) 得 w_rid（wts 必须参与签名，漏签即 -403）。
 const MIXIN_KEY_ENC_TAB: number[] = [
   46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35,
   27, 43, 5, 49, 33, 9, 42, 19, 29, 28, 14, 39, 12, 38, 41, 13,
@@ -33,19 +34,22 @@ export class WbiSigner {
   }
 
   static async signParams(params: Record<string, string>, mixinKey: string): Promise<string> {
-    const keys: string[] = Object.keys(params).sort();
+    const wts: string = Math.floor(Date.now() / 1000).toString();
+    const keys: string[] = Object.keys(params);
+    keys.push('wts');
+    keys.sort();
     let query: string = '';
     for (let i = 0; i < keys.length; i++) {
       const k: string = keys[i];
-      const v: string = params[k].replace(/[!'()*]/g, '');
+      const rawV: string = k === 'wts' ? wts : params[k];
+      const v: string = rawV.replace(/[!'()*]/g, '');
       if (query !== '') {
         query += '&';
       }
       query += encodeURIComponent(k) + '=' + encodeURIComponent(v);
     }
-    const wts: string = Math.floor(Date.now() / 1000).toString();
     const wRid: string = await WbiSigner.md5(query + mixinKey);
-    return query + '&wts=' + wts + '&w_rid=' + wRid;
+    return query + '&w_rid=' + wRid;
   }
 
   private static async md5(input: string): Promise<string> {

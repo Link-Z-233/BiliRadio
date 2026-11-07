@@ -1,5 +1,5 @@
 import { AudioPlayer } from './AudioPlayer';
-import { BiliService, VideoDetail } from './BiliService';
+import { BiliService, VideoDetail, isRiskControlError } from './BiliService';
 import { BiliSession } from './BiliSession';
 import { SecureStore } from './SecureStore';
 import { AppStore, PlaylistSnapshot } from './AppStore';
@@ -37,6 +37,20 @@ export const PLAY_MODES: PlayMode[] = [
   PlayMode.REPEAT_ONE,
   PlayMode.REVERSE
 ];
+
+// 取流失败分类（v0.7-part3 D1）：确定性（失效/大会员）自动跳过并标记，瞬时（风控/网络/其他）停等人工
+enum PlayErrorKind {
+  INVALID = 0,
+  VIP = 1,
+  RISK = 2,
+  NETWORK = 3,
+  OTHER = 4
+}
+
+class PlayErrorInfo {
+  kind: PlayErrorKind = PlayErrorKind.OTHER;
+  msg: string = '';
+}
 
 // seekBy 连按合并防抖窗口已收敛至 Constants.SEEK_BY_DEBOUNCE_MS（全库唯一常量点）
 
@@ -109,10 +123,11 @@ export class PlayerController {
   // —— 播放错误事件（v0.5-part3 US6）：零装饰器，快照字段 + errorTick 版本计数随 emitUi 广播，
   // 消费方（Index）订阅回调内比对 tick 变化触发系统 toast ——
   // stage：'prepare'（取流/准备失败）| 'play'（播放器运行时错误）；
-  // time-window 去重见 playbackError
+  // errorMsg：分型文案（v0.7-part3），Index toast 消费；time-window 去重见 playbackError
   errorStage: string = '';
   errorBvid: string = '';
   errorCode: number = 0;
+  errorMsg: string = '';
   errorTick: number = 0;
   private errorLastAt: Map<string, number> = new Map<string, number>();
 
@@ -126,6 +141,10 @@ export class PlayerController {
   anomalySet: Set<string> = new Set<string>();
   private anomalyToastLastAt: number = 0;
   private anomalyGuardLogged: boolean = false;
+
+  // —— 失效标记（v0.7-part3 invalid-video）：零装饰器，invalidSet 快照随 emitUi 广播，
+  // 消费方 hasInvalid 直查；仅本地 preferences，不云同步；失效判定优先——标 X 同时摘异常标记（D2） ——
+  invalidSet: Set<string> = new Set<string>();
 
   // —— 异常 toast 广播（v0.6-part2 US1）：零装饰器，toast 快照 + tick 版本计数随 emitUi 广播，
   // 消费方（Index）订阅回调内比对 tick 变化触发系统 toast ——
@@ -234,7 +253,8 @@ export class PlayerController {
   // 播放错误统一入口（US6）：hilog+应用日志恒记（可追溯）；stage+bvid 时间窗去重仅门控广播，
   // 防「重试连环失败/播放器反复 error」刷屏；去重通过才更新错误快照并递增 errorTick，
   // 消费方比对 tick 弹一次性 toast；Map 无淘汰，键空间=实际播放过的 bvid×2 阶段，量级可忽略
-  playbackError(stage: string, code: number, bvid: string): void {
+  playbackError(stage: string, code: number, bvid: string,
+    errorMsg: string = Constants.TOAST_PLAYBACK_ERROR): void {
     hilog.warn(Constants.LOG_DOMAIN, Constants.LOG_TAG,
       'playback error: stage=%{public}s code=%{public}d bvid=%{public}s', stage, code, bvid);
     Logger.log('player', 'playbackError', `stage=${stage} code=${code} bvid=${bvid}`);
@@ -248,6 +268,7 @@ export class PlayerController {
     this.errorStage = stage;
     this.errorBvid = bvid;
     this.errorCode = code;
+    this.errorMsg = errorMsg;
     this.errorTick++;
     this.emitUi();
   }
@@ -295,6 +316,40 @@ export class PlayerController {
     this.emitUi();
   }
 
+  private loadInvalidSet(): Set<string> {
+    const set: Set<string> = new Set<string>();
+    try {
+      const arr: string[] = JSON.parse(AppStore.getString(Constants.KEY_INVALID_BVIDS, '[]')) as string[];
+      for (let i = 0; i < arr.length; i++) {
+        if (arr[i] !== '') {
+          set.add(arr[i]);
+        }
+      }
+    } catch (e) {
+      hilog.warn(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'loadInvalidSet failed');
+    }
+    return set;
+  }
+
+  private persistInvalidSet(): void {
+    AppStore.putString(Constants.KEY_INVALID_BVIDS, JSON.stringify(Array.from(this.invalidSet)));
+  }
+
+  hasInvalid(bvid: string): boolean {
+    return this.invalidSet.has(bvid);
+  }
+
+  private markInvalid(bvid: string): void {
+    if (this.invalidSet.has(bvid)) {
+      return;
+    }
+    this.invalidSet.add(bvid);
+    this.persistInvalidSet();
+    this.clearAnomaly(bvid);
+    Logger.log('player', 'invalid mark', `bvid=${bvid}`);
+    this.emitUi();
+  }
+
   // 异常 toast 去重窗（FR-008）：沿用 PLAYBACK_ERROR_DEDUP_MS 窗口，窗内只弹一次；日志恒记
   private showAnomalyToast(message: string): void {
     const now: number = Date.now();
@@ -307,9 +362,37 @@ export class PlayerController {
     this.emitUi();
   }
 
+  // 取流失败五档分类（v0.7-part3 D1）：消息提取不改 BiliService 抛错结构；确定性两档 msg 为空
+  // （调用方按 kind 取 Constants 分型文案），瞬时三档 msg 即分型文案；OTHER 透传好友文案
+  // （-101 登录失效等），raw 模板归 '' 由调用方兜底
+  private static classifyPlayError(message: string): PlayErrorInfo {
+    const info: PlayErrorInfo = new PlayErrorInfo();
+    if (message === 'Bili API error -404') {
+      info.kind = PlayErrorKind.INVALID;
+      return info;
+    }
+    if (message === 'Bili API error -104') {
+      info.kind = PlayErrorKind.VIP;
+      return info;
+    }
+    if (isRiskControlError(message)) {
+      info.kind = PlayErrorKind.RISK;
+      info.msg = Constants.TOAST_RISK_RETRY;
+      return info;
+    }
+    if (message.indexOf('HTTP request failed') === 0) {
+      info.kind = PlayErrorKind.NETWORK;
+      info.msg = Constants.TOAST_NETWORK_RETRY;
+      return info;
+    }
+    info.kind = PlayErrorKind.OTHER;
+    info.msg = message.indexOf('Bili API error') === 0 ? '' : message;
+    return info;
+  }
+
   // 数据源异常判定（D1/D2）：prepared 是流时长唯一可信取值点；元数据/流时长任一无效跳过判定（FR-009）；
-  // 仅判「显著短于」（反向常源于元数据不可靠，不判）；异常标 X（幂等，复用 prepared 分支不重复写盘），
-  // 流恢复完整自动摘 X（D6）；拉流失败不进本判定点天然不标 X（D9）。
+  // 仅判「显著短于」（反向常源于元数据不可靠，不判）；异常标感叹号（幂等，复用 prepared 分支不重复写盘），
+  // 流恢复完整自动摘（D6）；拉流失败不进本判定点（catch 分类接管）。
   // 返回 true = 跳过分流已接管本次 prepared，调用方不得再起播
   private handleAnomalyOnPrepared(): boolean {
     if (this.currentIndex < 0 || this.currentIndex >= this.playlist.length) {
@@ -327,11 +410,6 @@ export class PlayerController {
       return false;
     }
     this.markAnomaly(item.bvid);
-    if (AppStore.getNumber(Constants.KEY_ANOMALY_SKIP, 1) !== 1) {
-      this.showAnomalyToast(Constants.TOAST_ANOMALY_TRIAL);
-      Logger.log('player', 'anomaly trial play', `bvid=${item.bvid} streamMs=${this.duration}`);
-      return false;
-    }
     const nextIndex: number = this.currentIndex + 1;
     if (nextIndex >= this.playlist.length) {
       this.showAnomalyToast(Constants.TOAST_ANOMALY_SKIP);
@@ -339,6 +417,7 @@ export class PlayerController {
       this.playIntent = false;
       this.currentItemEnded = true;
       this.statusMsg = '播放结束';
+      AppStore.savePlaylistFile(this.playlist, this.currentIndex, 0, this.currentQualityCode);
       return true;
     }
     this.showAnomalyToast(Constants.TOAST_ANOMALY_SKIP);
@@ -359,6 +438,7 @@ export class PlayerController {
       this.playHistoryVersion++;
 
       this.anomalySet = this.loadAnomalySet();
+      this.invalidSet = this.loadInvalidSet();
 
       BiliService.ensureBuvid().catch((): void => {});
 
@@ -477,8 +557,12 @@ export class PlayerController {
       ).catch((): void => {});
 
       if (autoStartIndex >= 0 && AppStore.getNumber(Constants.KEY_AUTO_PLAY_ON_START, 0) === 1) {
-        this.statusMsg = '自动继续播放上次进度';
-        this.playIndex(autoStartIndex, autoStartPos).catch((): void => {});
+        // 恢复目标已标记（失效/异常，plan D6）不自动续播：显示态照常（条目/进度/标记可见），等用户操作
+        const restoreItem: BiliVideo = this.playlist[autoStartIndex];
+        if (!this.hasInvalid(restoreItem.bvid) && !this.hasAnomaly(restoreItem.bvid)) {
+          this.statusMsg = '自动继续播放上次进度';
+          this.playIndex(autoStartIndex, autoStartPos).catch((): void => {});
+        }
       }
 
       // 网络稳定切换监听（audio-quality-settings FR-010）：进程生命周期内单例注册，
@@ -507,6 +591,17 @@ export class PlayerController {
     this.isPlaying = playing;
   }
 
+  // 取流失败停口（v0.7-part3，镜像 onError 运行时错误处置）：意图复位（FR-008）+ 停声（FR-015）
+  // + 媒体会话停播；跳过路径不停声（后续 playIndex 成功衔接时自然重建释放旧流）
+  private stopFailedPlayback(statusText: string): void {
+    this.playIntent = false;
+    this.setPlaying(false);
+    this.player.pause();
+    this.mediaSession.updateState(false, this.currentTime);
+    this.mediaSession.stopBackground();
+    this.statusMsg = statusText;
+  }
+
   private onPlayerState(state: string): void {
     hilog.info(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'player state: %{public}s, playIntent=%{public}d',
       state, this.playIntent ? 1 : 0);
@@ -524,7 +619,7 @@ export class PlayerController {
             item.cover, item.ownerName, true);
         }
       }
-      // 数据源异常判定（v0.5-part5 T004/T005）：流时长 vs 元数据时长，异常按设置跳过/续播
+      // 数据源异常判定（v0.5-part5 T004/T005）：流时长 vs 元数据时长，异常恒跳过（v0.7-part3 开关废止）
       if (this.handleAnomalyOnPrepared()) {
         this.emitUi();
         return;
@@ -1053,10 +1148,35 @@ export class PlayerController {
       }
       const error = err as BusinessError;
       this.isPreparing = false;
-      this.statusMsg = `播放失败: ${error.message}`;
+      // 失败条目即时持久化为当前条目（FR-014）：进度归 0，跳过成功后由成功路径覆盖写
+      AppStore.savePlaylistFile(this.playlist, this.currentIndex, 0, this.currentQualityCode);
+      const info: PlayErrorInfo = PlayerController.classifyPlayError(error.message);
       // BiliService 抛 plain Error 时 code 为 undefined，typeof 归一为 0（取流失败通常无错误码语义）
       const code: number = typeof error.code === 'number' ? error.code : 0;
-      this.playbackError('prepare', code, item.bvid);
+      const nextIndex: number = this.currentIndex + 1;
+      if (info.kind === PlayErrorKind.INVALID || info.kind === PlayErrorKind.VIP) {
+        Logger.log('player', 'play fail deterministic',
+          `kind=${Number(info.kind)} bvid=${item.bvid} hasNext=${nextIndex < this.playlist.length ? 1 : 0}`);
+        if (info.kind === PlayErrorKind.INVALID) {
+          this.markInvalid(item.bvid);
+        } else {
+          this.markAnomaly(item.bvid);
+        }
+        this.showAnomalyToast(info.kind === PlayErrorKind.INVALID
+          ? Constants.TOAST_INVALID_SKIP : Constants.TOAST_VIP_SKIP);
+        if (nextIndex < this.playlist.length) {
+          this.playIndex(nextIndex, 0).catch((): void => {});
+        } else {
+          this.stopFailedPlayback(info.kind === PlayErrorKind.INVALID ? '视频已失效' : '需要大会员');
+        }
+        this.emitUi();
+        return;
+      }
+      const displayMsg: string = info.msg !== '' ? info.msg : Constants.TOAST_PLAYBACK_ERROR;
+      Logger.log('player', 'play fail transient',
+        `kind=${Number(info.kind)} bvid=${item.bvid} raw=${error.message}`);
+      this.stopFailedPlayback(displayMsg);
+      this.playbackError('prepare', code, item.bvid, displayMsg);
       this.emitUi();
     }
   }
@@ -1541,7 +1661,20 @@ export class PlayerController {
       return await this.loadPlaylistAndPlay([target], 0);
     } catch (err) {
       const error = err as BusinessError;
-      this.statusMsg = `解析失败: ${error.message}`;
+      // 解析失败分型（plan D7）：-404 失效 / -104 大会员直报短语；风控/网络按分型文案；
+      // 好友文案（-101 登录失效等）透传；raw 模板归兜底；不入队（FAILED），HomePage 与订阅弹窗两入口同收
+      const info: PlayErrorInfo = PlayerController.classifyPlayError(error.message);
+      let msg: string;
+      if (info.kind === PlayErrorKind.INVALID) {
+        msg = '视频不存在或已失效';
+      } else if (info.kind === PlayErrorKind.VIP) {
+        msg = '需要大会员';
+      } else {
+        msg = info.msg !== '' ? info.msg : '解析失败，请稍后重试';
+      }
+      Logger.log('player', 'addSingleVideo fail',
+        `kind=${Number(info.kind)} bvid=${trimmed} raw=${error.message}`);
+      this.statusMsg = msg;
       this.emitUi();
       return EnqueueResult.FAILED;
     }
@@ -1709,7 +1842,7 @@ export class PlayerController {
 
   // 完播标记（plan R5）：当前条目 progress=-1 即时写盘（对齐 B 站「-1=看完」语义）；
   // 已是 -1 则幂等跳过（含跳过写盘），避免播放 tick 高频重复落盘；
-  // 异常条目设防（D5）：试听播完≠看完，两条自动写 -1 路径（completed/95% 阈值）均经此处，
+  // 异常条目设防（D5）：异常条目播完≠看完，两条自动写 -1 路径（completed/95% 阈值）均经此处，
   // bvid 命中异常集不写 -1（不产假 ✓ 不污染云同步）；手动「标记已看完」不经此处不受拦
   private markCurrentHistoryCompleted(): void {
     if (this.currentIndex < 0 || this.currentIndex >= this.playlist.length) {
@@ -2071,7 +2204,7 @@ export class PlayerController {
   }
 
   // 清除已播（v0.3-bugfix-round2 US3 重写）：已听完判定与播放模式无关——播放历史 progress===-1 即已听完，
-  // 数据源异常条目（X 标记，v0.5-part5 追加）一并纳入；移除 playlist 中全部命中条目
+  // 失效（X，v0.7-part3）与异常标记条目一并纳入；移除 playlist 中全部命中条目
   // （含命中的当前播放条目，v0.6-part1 追加）；
   // 复用 removeSelectedFromPlaylist 批量链路
   // （removingCurrent/removedBeforeCurrent 索引修正、空队列重置、持久化全套语义）；
@@ -2114,28 +2247,30 @@ export class PlayerController {
     return idx >= 0 && this.playHistory[idx].progress === -1;
   }
 
-  // 可清理集合：playlist 中已听完或数据源异常（X 标记）的全部复合键，含命中的当前播放条目
+  // 可清理集合：playlist 中已听完、失效（X，v0.7-part3 追加）或异常标记的全部复合键，含命中的当前播放条目
   // （v0.6-part1 追加：当前在播条目已看完/异常同样移除，复用 removingCurrent 自动切播链路）
   private collectPlayedRemovable(): string[] {
     const result: string[] = [];
     for (let i = 0; i < this.playlist.length; i++) {
       const item: BiliVideo = this.playlist[i];
-      if (this.isPlayed(item.bvid) || this.hasAnomaly(item.bvid)) {
+      if (this.isPlayed(item.bvid) || this.hasInvalid(item.bvid) || this.hasAnomaly(item.bvid)) {
         result.push(BiliVideo.itemKeyOf(item.bvid, item.page));
       }
     }
     return result;
   }
 
-  // 条目口径已播可清计数（v0.4-queue-multi-p-item plan D7）：bvid 已播完（isPlayed）或
-  // 数据源异常（hasAnomaly，v0.5-part5 追加）的条目数（组算 1，含命中的当前播放条目，v0.6-part1 追加）；
+  // 条目口径已播可清计数（v0.4-queue-multi-p-item plan D7）：bvid 已播完（isPlayed）、
+  // 失效（hasInvalid，v0.7-part3 追加）或异常标记（hasAnomaly，v0.5-part5 追加）的条目数
+  // （组算 1，含命中的当前播放条目，v0.6-part1 追加）；
   // collectPlayedRemovable/clearPlayedItems 的分P 键集合不动
   playedRemovableCount(): number {
     const groups: number[][] = this.getQueueEntryGroups();
     let count: number = 0;
     for (let g = 0; g < groups.length; g++) {
       const run: number[] = groups[g];
-      if (this.isPlayed(this.playlist[run[0]].bvid) || this.hasAnomaly(this.playlist[run[0]].bvid)) {
+      if (this.isPlayed(this.playlist[run[0]].bvid) || this.hasInvalid(this.playlist[run[0]].bvid) ||
+        this.hasAnomaly(this.playlist[run[0]].bvid)) {
         count++;
       }
     }
