@@ -336,7 +336,9 @@ struct SourcePage {
 
   // 按列表序取选中剧集批量入队（US2/US3）：复用 loadPlaylistAndPlay 全语义（空队列起播/非空
   // 按 insertAfterCurrent 插入当前播放之后或追加队尾，不打断/复合键去重），
-  // toast 分型反馈，完成后退出多选清空集合
+  // toast 分型反馈，完成后退出多选清空集合；
+  // fav 行数据源无任何标志字段（BILI_NOTES §3.12）：批量入队先经详情链并行补全（修订⑥），
+  // UP 源/合集行自带标志不拉详情
   private enqueueSelected(insertAfterCurrent: boolean): void {
     if (this.selectedKeys.size === 0) {
       return;
@@ -347,15 +349,46 @@ struct SourcePage {
         items.push(this.episodes[i]);
       }
     }
-    this.stampFavSource(items);
-    this.controller.loadPlaylistAndPlay(items, 0, insertAfterCurrent)
-      .then((result: EnqueueResult): void => {
-        this.getUIContext().getPromptAction().showToast({ message: PlayerController.enqueueToast(result) });
-        this.exitSelectMode();
-      })
-      .catch((): void => {
-        this.exitSelectMode();
-      });
+    const prepared: Promise<BiliVideo[]> = this.sub.type === Subscription.TYPE_FAV
+      ? this.completeFavItemsViaDetail(items)
+      : Promise.resolve(items);
+    prepared.then((finalItems: BiliVideo[]): void => {
+      this.stampFavSource(finalItems);
+      this.controller.loadPlaylistAndPlay(finalItems, 0, insertAfterCurrent)
+        .then((result: EnqueueResult): void => {
+          this.getUIContext().getPromptAction().showToast({ message: PlayerController.enqueueToast(result) });
+          this.exitSelectMode();
+        })
+        .catch((): void => {
+          this.exitSelectMode();
+        });
+    }).catch((): void => {
+      this.exitSelectMode();
+    });
+  }
+
+  // fav 批量入队详情补全：按并发上限分批并行 fetchVideoDetail（有界并发），成功取 detail.parts
+  // （标志/多P 展开语义与单击 playEpisode 一致，互动拦截由 loadPlaylistAndPlay 兜底过滤），
+  // 单条失败降级原列表行（该条无标志、互动不拦），按列表序保序展开
+  private async completeFavItemsViaDetail(items: BiliVideo[]): Promise<BiliVideo[]> {
+    const completed: BiliVideo[] = [];
+    for (let start: number = 0; start < items.length; start += Constants.TOKEN_FAV_ENQUEUE_DETAIL_CONCURRENCY) {
+      const end: number = Math.min(start + Constants.TOKEN_FAV_ENQUEUE_DETAIL_CONCURRENCY, items.length);
+      const pending: Promise<BiliVideo[]>[] = [];
+      for (let i: number = start; i < end; i++) {
+        const item: BiliVideo = items[i];
+        pending.push(BiliService.fetchVideoDetail(item.bvid)
+          .then((detail: VideoDetail): BiliVideo[] => detail.parts)
+          .catch((): BiliVideo[] => [item]));
+      }
+      for (let i: number = 0; i < pending.length; i++) {
+        const parts: BiliVideo[] = await pending[i];
+        for (let p: number = 0; p < parts.length; p++) {
+          completed.push(parts[p]);
+        }
+      }
+    }
+    return completed;
   }
 
   // 标记已看完（FR-007）：二次确认（N 动态替换）→ markWatched 批量写本地历史（bvid 级幂等，仅本地）→
@@ -968,6 +1001,86 @@ struct SourcePage {
     .padding({ left: Constants.TOKEN_SPACE_M, right: Constants.TOKEN_SPACE_M, top: Constants.TOKEN_SPACE_XS, bottom: Constants.TOKEN_SPACE_10 })
   }
 
+  // 特殊标记封面 pill（v0.7-part4 R2）：类型色底 + 符号/文字，封面右上角并排互不覆盖；
+  // 大会员无符号、加粗大字即标识；无标志不渲染；多选模式与其他角标一致保持可见
+  @Builder
+  private markPills(video: BiliVideo) {
+    Row({ space: Constants.TOKEN_SPACE_XXS }) {
+      if (video.isUpowerExclusive) {
+        Row({ space: Constants.TOKEN_SPACE_XXS }) {
+          SymbolGlyph($r('sys.symbol.bolt'))
+            .fontSize(Constants.TOKEN_FONT_AUX)
+            .fontColor([$r('app.color.fg_on_dark')])
+          Text('充电')
+            .fontSize(Constants.TOKEN_FONT_AUX)
+            .fontWeight(FontWeight.Bold)
+            .fontColor($r('app.color.fg_on_dark'))
+        }
+        .padding({
+          left: Constants.TOKEN_SPACE_XS,
+          right: Constants.TOKEN_SPACE_XS,
+          top: Constants.TOKEN_SPACE_XXS,
+          bottom: Constants.TOKEN_SPACE_XXS
+        })
+        .borderRadius(Constants.TOKEN_RADIUS_S)
+        .backgroundColor($r('app.color.upower_pill_bg'))
+      }
+      if (video.isInteractive) {
+        Row({ space: Constants.TOKEN_SPACE_XXS }) {
+          SymbolGlyph($r('sys.symbol.arrowshape_3_triangle_path'))
+            .fontSize(Constants.TOKEN_FONT_AUX)
+            .fontColor([$r('app.color.fg_on_dark')])
+          Text('互动')
+            .fontSize(Constants.TOKEN_FONT_AUX)
+            .fontWeight(FontWeight.Bold)
+            .fontColor($r('app.color.fg_on_dark'))
+        }
+        .padding({
+          left: Constants.TOKEN_SPACE_XS,
+          right: Constants.TOKEN_SPACE_XS,
+          top: Constants.TOKEN_SPACE_XXS,
+          bottom: Constants.TOKEN_SPACE_XXS
+        })
+        .borderRadius(Constants.TOKEN_RADIUS_S)
+        .backgroundColor($r('app.color.interactive_pill_bg'))
+      }
+      if (video.isPaid) {
+        Row({ space: Constants.TOKEN_SPACE_XXS }) {
+          SymbolGlyph($r('sys.symbol.creditcard'))
+            .fontSize(Constants.TOKEN_FONT_AUX)
+            .fontColor([$r('app.color.fg_on_dark')])
+          Text('付费')
+            .fontSize(Constants.TOKEN_FONT_AUX)
+            .fontWeight(FontWeight.Bold)
+            .fontColor($r('app.color.fg_on_dark'))
+        }
+        .padding({
+          left: Constants.TOKEN_SPACE_XS,
+          right: Constants.TOKEN_SPACE_XS,
+          top: Constants.TOKEN_SPACE_XXS,
+          bottom: Constants.TOKEN_SPACE_XXS
+        })
+        .borderRadius(Constants.TOKEN_RADIUS_S)
+        .backgroundColor($r('app.color.paid_pill_bg'))
+      }
+      if (video.isVipExclusive) {
+        Text('大会员')
+          .fontSize(Constants.TOKEN_FONT_AUX)
+          .fontWeight(FontWeight.Bold)
+          .fontColor($r('app.color.fg_on_dark'))
+          .padding({
+            left: Constants.TOKEN_SPACE_XS,
+            right: Constants.TOKEN_SPACE_XS,
+            top: Constants.TOKEN_SPACE_XXS,
+            bottom: Constants.TOKEN_SPACE_XXS
+          })
+          .borderRadius(Constants.TOKEN_RADIUS_S)
+          .backgroundColor($r('app.color.vip_pill_bg'))
+      }
+    }
+    .margin(Constants.TOKEN_SPACE_XXS)
+  }
+
   @Builder
   private moreMenuBuilder() {
     Menu() {
@@ -1052,12 +1165,15 @@ struct SourcePage {
                         })
                     )
                     Stack({ alignContent: Alignment.BottomEnd }) {
-                      CoverThumb({
-                        cover: item.cover,
-                        thumbWidth: Constants.EPISODE_THUMB_W,
-                        thumbHeight: Constants.EPISODE_THUMB_H,
-                        radius: Constants.TOKEN_RADIUS_M
-                      })
+                      Stack({ alignContent: Alignment.TopEnd }) {
+                        CoverThumb({
+                          cover: item.cover,
+                          thumbWidth: Constants.EPISODE_THUMB_W,
+                          thumbHeight: Constants.EPISODE_THUMB_H,
+                          radius: Constants.TOKEN_RADIUS_M
+                        })
+                        this.markPills(item)
+                      }
                       if (item.duration > 0) {
                         Text(formatDuration(item.duration))
                           .fontSize(Constants.TOKEN_FONT_BODY_S)
@@ -1101,36 +1217,29 @@ struct SourcePage {
                             .margin({ left: Constants.TOKEN_SPACE_XS })
                         }
                         Blank()
-                        // 充电角标待定（WBI 风控未放行无法测试；注释保留，恢复=取消注释）
-                        // if (item.isUpowerExclusive) {
-                        //   Text('充电')
-                        //     .fontSize(Constants.TOKEN_FONT_AUX)
-                        //     .fontWeight(FontWeight.Bold)
-                        //     .fontColor($r('app.color.gold_accent'))
-                        // }
                         if (this.isNew(item)) {
                           Text('NEW')
                             .fontSize(Constants.TOKEN_FONT_AUX)
                             .fontWeight(FontWeight.Bold)
                             .fontColor(this.accentColor.value)
-                            .margin({ left: item.isUpowerExclusive ? Constants.TOKEN_SPACE_S : 0 })
+                            .margin({ left: Constants.TOKEN_SPACE_XS })
                         }
                         if (this.isPlayed(item)) {
                           SymbolGlyph($r('sys.symbol.checkmark_circle'))
                             .fontSize(Constants.TOKEN_FONT_TITLE)
                             .fontColor([$r('app.color.success_green')])
-                            .margin({ left: this.isNew(item) || item.isUpowerExclusive ? Constants.TOKEN_SPACE_S : 0 })
+                            .margin({ left: Constants.TOKEN_SPACE_XS })
                         }
                         if (this.controller.hasInvalid(item.bvid)) {
                           SymbolGlyph($r('sys.symbol.xmark_circle'))
                             .fontSize(Constants.TOKEN_FONT_TITLE)
                             .fontColor([$r('app.color.danger_red')])
-                            .margin({ left: this.isNew(item) || this.isPlayed(item) ? Constants.TOKEN_SPACE_S : 0 })
+                            .margin({ left: Constants.TOKEN_SPACE_XS })
                         } else if (this.controller.hasAnomaly(item.bvid)) {
                           SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
                             .fontSize(Constants.TOKEN_FONT_TITLE)
                             .fontColor([$r('app.color.warning_amber')])
-                            .margin({ left: this.isNew(item) || this.isPlayed(item) ? Constants.TOKEN_SPACE_S : 0 })
+                            .margin({ left: Constants.TOKEN_SPACE_XS })
                         }
                       }
                       .width('100%')

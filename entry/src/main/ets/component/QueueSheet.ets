@@ -366,6 +366,10 @@ export struct QueueSheet {
     v.page = entry.page;
     v.videoTitle = entry.videoTitle !== '' ? entry.videoTitle : entry.title;
     v.partTitle = entry.partTitle;
+    v.isUpowerExclusive = entry.isUpowerExclusive;
+    v.isInteractive = entry.isInteractive;
+    v.isPaid = entry.isPaid;
+    v.isVipExclusive = entry.isVipExclusive;
     this.controller.playDownloadedSong(v);
   }
 
@@ -899,12 +903,46 @@ export struct QueueSheet {
     )
   }
 
+  // 特殊标记标题前缀（v0.7-part4 R2）：充电/互动/付费图标、大会员「大」单字，与行尾 ✓/X/! 分位，
+  // 多选模式隐藏（对齐既有门控）
+  @Builder
+  specialMarkPrefix(video: BiliVideo) {
+    if (!this.selectMode.value &&
+      (video.isUpowerExclusive || video.isInteractive || video.isPaid || video.isVipExclusive)) {
+      Row({ space: Constants.TOKEN_SPACE_XS }) {
+        if (video.isUpowerExclusive) {
+          SymbolGlyph($r('sys.symbol.bolt'))
+            .fontSize(Constants.TOKEN_FONT_TITLE)
+            .fontColor([$r('app.color.gold_accent')])
+        }
+        if (video.isInteractive) {
+          SymbolGlyph($r('sys.symbol.arrowshape_3_triangle_path'))
+            .fontSize(Constants.TOKEN_FONT_TITLE)
+            .fontColor([$r('app.color.interactive_badge')])
+        }
+        if (video.isPaid) {
+          SymbolGlyph($r('sys.symbol.creditcard'))
+            .fontSize(Constants.TOKEN_FONT_TITLE)
+            .fontColor([$r('app.color.warning_amber')])
+        }
+        if (video.isVipExclusive) {
+          Text('大')
+            .fontSize(Constants.TOKEN_FONT_BODY_S)
+            .fontWeight(FontWeight.Bold)
+            .fontColor($r('app.color.primary_color'))
+        }
+      }
+      .margin({ right: Constants.TOKEN_SPACE_XS })
+    }
+  }
+
   // 组条目分P 窄行（plan D9）：无封面，Pn + 分P 标题 + 时长，左缩进对齐头行标题；
   // 点击切播与当前播放高亮均按复合键实时解析（同 currentKey 字段注释）；多选点击/长按均为整条目（组）语义；
   // 已播 ✓ 分P 粒度（(bvid,page) 命中历史 -1）；拖选/按压与头行同构（组为最小管理粒度，D15-Trim 语义保持）
   @Builder
   queuePartRow(part: BiliVideo, entry: QueueEntry) {
     Row() {
+      this.specialMarkPrefix(part)
       Text(this.partRowTitle(part))
         .fontSize(Constants.TOKEN_FONT_BODY_M)
         .fontColor(BiliVideo.itemKeyOf(part.bvid, part.page) === this.currentKey ? this.accentColor.value : this.textPrimary())
@@ -1032,6 +1070,7 @@ export struct QueueSheet {
 
       Column() {
         Row() {
+          this.specialMarkPrefix(entry.videos[0])
           Text(entry.videos[0].title)
             .fontSize(Constants.TOKEN_FONT_BODY_M)
             .fontColor(BiliVideo.itemKeyOf(entry.videos[0].bvid, entry.videos[0].page) === this.currentKey ? this.accentColor.value : this.textPrimary())

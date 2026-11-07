@@ -632,9 +632,16 @@ export class BiliService {
           item.ownerName = owner['name'] as string;
         }
       }
-      // 充电/付费标记待定（WBI 风控未放行无法测试；注释保留，恢复=取消注释）
-      // const ugcPayRaw: Object = rec['ugc_pay'];
-      // item.isUpowerExclusive = ugcPayRaw !== undefined && ugcPayRaw !== null && Number(ugcPayRaw) > 0;
+      // 特殊标记（v0.7-part4，仅合集/系列链在位字段）：互动 = interactive_video，付费 = ugc_pay>0；
+      // 充电/大会员无字段不标（天然盲区，不补数）
+      const interactiveRaw: Object = rec['interactive_video'];
+      const ugcPayRaw: Object = rec['ugc_pay'];
+      item.isInteractive = interactiveRaw !== undefined && interactiveRaw !== null && Boolean(interactiveRaw);
+      item.isPaid = ugcPayRaw !== undefined && ugcPayRaw !== null && Number(ugcPayRaw) > 0;
+      if (item.isInteractive || item.isPaid) {
+        Logger.log('net', '特殊标记archives',
+          `bvid=${bvid} 互动=${item.isInteractive ? 1 : 0} 付费=${item.isPaid ? 1 : 0}`);
+      }
       items.push(item);
     }
     return items;
@@ -1051,17 +1058,49 @@ export class BiliService {
       if (rec['author'] !== undefined && rec['author'] !== null) {
         item.ownerName = rec['author'] as string;
       }
-      // 充电/付费标记待定（WBI 风控未放行无法测试；注释保留，恢复=取消注释）——
-      // 判据只认明确 True/非 0：Web 链 is_charging_arc/elec_arc_type，APP 链 ugc_pay/is_ugcpay
-      // const chargingArcRaw: Object = rec['is_charging_arc'];
-      // const elecTypeRaw: Object = rec['elec_arc_type'];
-      // const ugcPayRaw: Object = rec['ugc_pay'];
-      // const ugcPayFlagRaw: Object = rec['is_ugcpay'];
-      // item.isUpowerExclusive =
-      //   (chargingArcRaw !== undefined && chargingArcRaw !== null && Boolean(chargingArcRaw)) ||
-      //   (elecTypeRaw !== undefined && elecTypeRaw !== null && Number(elecTypeRaw) > 0) ||
-      //   (ugcPayRaw !== undefined && ugcPayRaw !== null && Number(ugcPayRaw) > 0) ||
-      //   (ugcPayFlagRaw !== undefined && ugcPayFlagRaw !== null && Boolean(ugcPayFlagRaw));
+      // 特殊标记（v0.7-part4，判据只认明确真值，字段缺失跳过）：
+      // 充电 = Web vlist is_charging_arc/elec_arc_type + APP cursor badges 文案「充电专属」（该链唯一信号，精确匹配防改版误标）
+      const chargingArcRaw: Object = rec['is_charging_arc'];
+      const elecTypeRaw: Object = rec['elec_arc_type'];
+      let upowerHit: boolean = (chargingArcRaw !== undefined && chargingArcRaw !== null && Boolean(chargingArcRaw)) ||
+        (elecTypeRaw !== undefined && elecTypeRaw !== null && Number(elecTypeRaw) > 0);
+      const badgesRaw: Object = rec['badges'];
+      if (!upowerHit && badgesRaw !== undefined && badgesRaw !== null) {
+        const badges: Object[] = badgesRaw as Object[];
+        for (let b = 0; b < badges.length; b++) {
+          const badgeRec: Record<string, Object> = badges[b] as Record<string, Object>;
+          const badgeText: Object = badgeRec['text'];
+          if (badgeText !== undefined && badgeText !== null && badgeText as string === '充电专属') {
+            upowerHit = true;
+            break;
+          }
+        }
+      }
+      item.isUpowerExclusive = upowerHit;
+      // 互动 = is_steins（APP cursor）/ is_steins_gate（Web vlist）/ attribute bit29
+      const steinsRaw: Object = rec['is_steins'];
+      const steinsGateRaw: Object = rec['is_steins_gate'];
+      const attributeRaw: Object = rec['attribute'];
+      item.isInteractive = (steinsRaw !== undefined && steinsRaw !== null && Boolean(steinsRaw)) ||
+        (steinsGateRaw !== undefined && steinsGateRaw !== null && Boolean(steinsGateRaw)) ||
+        (attributeRaw !== undefined && attributeRaw !== null && (Number(attributeRaw) & (1 << 29)) > 0);
+      // 付费 = is_pay（Web vlist）/ ugc_pay>0 或 is_ugcpay（APP cursor）/ is_pugv（课程，R2 归付费类）
+      const isPayRaw: Object = rec['is_pay'];
+      const ugcPayRaw: Object = rec['ugc_pay'];
+      const ugcPayFlagRaw: Object = rec['is_ugcpay'];
+      const pugvRaw: Object = rec['is_pugv'];
+      item.isPaid = (isPayRaw !== undefined && isPayRaw !== null && Boolean(isPayRaw)) ||
+        (ugcPayRaw !== undefined && ugcPayRaw !== null && Number(ugcPayRaw) > 0) ||
+        (ugcPayFlagRaw !== undefined && ugcPayFlagRaw !== null && Boolean(ugcPayFlagRaw)) ||
+        (pugvRaw !== undefined && pugvRaw !== null && Boolean(pugvRaw));
+      // 大会员 = is_pgc（仅 APP cursor 链，Web/合集无字段不标）
+      const pgcRaw: Object = rec['is_pgc'];
+      item.isVipExclusive = pgcRaw !== undefined && pgcRaw !== null && Boolean(pgcRaw);
+      if (item.isUpowerExclusive || item.isInteractive || item.isPaid || item.isVipExclusive) {
+        Logger.log('net', '特殊标记vlist',
+          `bvid=${bvid} 充电=${item.isUpowerExclusive ? 1 : 0} 互动=${item.isInteractive ? 1 : 0}` +
+          ` 付费=${item.isPaid ? 1 : 0} 大会员=${item.isVipExclusive ? 1 : 0}`);
+      }
       items.push(item);
     }
   }
@@ -1775,6 +1814,48 @@ export class BiliService {
         video.view = stat['view'] as number;
       }
     }
+    // 特殊标记（v0.7-part4 R2）：本链为 web-interface/view——充电读顶层 is_upower_exclusive（官方文档位置），
+    // rights 同名兜底；rights.pay（大会员，与充电互斥防双标）/ugc_pay（付费）/is_stein_gate（互动）按官方 rights 表；
+    // charging_pay/charging_plus/interaction 为 APP v2/view 字段，本链通常缺失，判存在即命中、缺失跳过
+    const chargingPayRaw: Object = data['charging_pay'];
+    const chargingPlusRaw: Object = data['charging_plus'];
+    const interactionRaw: Object = data['interaction'];
+    const topUpowerRaw: Object = data['is_upower_exclusive'];
+    let upowerHit: boolean = (topUpowerRaw !== undefined && topUpowerRaw !== null && Boolean(topUpowerRaw)) ||
+      (chargingPayRaw !== undefined && chargingPayRaw !== null) ||
+      (chargingPlusRaw !== undefined && chargingPlusRaw !== null);
+    let interactiveHit: boolean = interactionRaw !== undefined && interactionRaw !== null;
+    let paidHit: boolean = false;
+    let vipHit: boolean = false;
+    const rightsRaw: Object = data['rights'];
+    if (rightsRaw !== undefined && rightsRaw !== null) {
+      const rights: Record<string, Object> = rightsRaw as Record<string, Object>;
+      const upowerExclusiveRaw: Object = rights['is_upower_exclusive'];
+      if (upowerExclusiveRaw !== undefined && upowerExclusiveRaw !== null && Boolean(upowerExclusiveRaw)) {
+        upowerHit = true;
+      }
+      const steinGateRaw: Object = rights['is_stein_gate'];
+      if (steinGateRaw !== undefined && steinGateRaw !== null && Number(steinGateRaw) > 0) {
+        interactiveHit = true;
+      }
+      const ugcPayRaw: Object = rights['ugc_pay'];
+      if (ugcPayRaw !== undefined && ugcPayRaw !== null && Number(ugcPayRaw) > 0) {
+        paidHit = true;
+      }
+      const payRaw: Object = rights['pay'];
+      if (payRaw !== undefined && payRaw !== null && Number(payRaw) > 0 && !upowerHit) {
+        vipHit = true;
+      }
+    }
+    video.isUpowerExclusive = upowerHit;
+    video.isInteractive = interactiveHit;
+    video.isPaid = paidHit;
+    video.isVipExclusive = vipHit;
+    if (upowerHit || interactiveHit || paidHit || vipHit) {
+      Logger.log('net', '特殊标记detail',
+        `bvid=${video.bvid} 充电=${upowerHit ? 1 : 0} 互动=${interactiveHit ? 1 : 0}` +
+        ` 付费=${paidHit ? 1 : 0} 大会员=${vipHit ? 1 : 0} 链=web-view`);
+    }
     video.videoTitle = video.title;
     return video;
   }
@@ -1838,6 +1919,10 @@ export class BiliService {
     part.view = video.view;
     part.pubdate = video.pubdate;
     part.desc = video.desc;
+    part.isUpowerExclusive = video.isUpowerExclusive;
+    part.isInteractive = video.isInteractive;
+    part.isPaid = video.isPaid;
+    part.isVipExclusive = video.isVipExclusive;
     part.page = page;
     part.videoTitle = video.videoTitle !== '' ? video.videoTitle : video.title;
     return part;

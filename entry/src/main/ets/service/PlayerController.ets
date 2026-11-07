@@ -26,7 +26,8 @@ export enum EnqueueResult {
   APPENDED = 0,
   STARTED = 1,
   DUPLICATE = 2,
-  FAILED = 3
+  FAILED = 3,
+  INTERACTIVE = 4
 }
 
 export const PLAYBACK_RATES: number[] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
@@ -38,13 +39,16 @@ export const PLAY_MODES: PlayMode[] = [
   PlayMode.REVERSE
 ];
 
-// 取流失败分类（v0.7-part3 D1）：确定性（失效/大会员）自动跳过并标记，瞬时（风控/网络/其他）停等人工
+// 取流失败分类（v0.7-part3 D1）：确定性（失效/大会员）自动跳过并标记，瞬时（风控/网络/其他）停等人工；
+// UPOWER/PAID（v0.7-part4）：充电专属（87007/87008）/付费未购买（87005）门禁码，确定性直报原因
 enum PlayErrorKind {
   INVALID = 0,
   VIP = 1,
   RISK = 2,
   NETWORK = 3,
-  OTHER = 4
+  OTHER = 4,
+  UPOWER = 5,
+  PAID = 6
 }
 
 class PlayErrorInfo {
@@ -190,6 +194,9 @@ export class PlayerController {
     }
     if (result === EnqueueResult.DUPLICATE) {
       return Constants.TOAST_ENQUEUE_DUPLICATE;
+    }
+    if (result === EnqueueResult.INTERACTIVE) {
+      return Constants.TOAST_INTERACTIVE_BLOCKED;
     }
     return Constants.TOAST_ENQUEUE_FAILED;
   }
@@ -362,7 +369,7 @@ export class PlayerController {
     this.emitUi();
   }
 
-  // 取流失败五档分类（v0.7-part3 D1）：消息提取不改 BiliService 抛错结构；确定性两档 msg 为空
+  // 取流失败七档分类（v0.7-part3 D1 + part4 门禁码）：消息提取不改 BiliService 抛错结构；确定性档 msg 为空
   // （调用方按 kind 取 Constants 分型文案），瞬时三档 msg 即分型文案；OTHER 透传好友文案
   // （-101 登录失效等），raw 模板归 '' 由调用方兜底
   private static classifyPlayError(message: string): PlayErrorInfo {
@@ -373,6 +380,14 @@ export class PlayerController {
     }
     if (message === 'Bili API error -104') {
       info.kind = PlayErrorKind.VIP;
+      return info;
+    }
+    if (message === 'Bili API error 87007' || message === 'Bili API error 87008') {
+      info.kind = PlayErrorKind.UPOWER;
+      return info;
+    }
+    if (message === 'Bili API error 87005') {
+      info.kind = PlayErrorKind.PAID;
       return info;
     }
     if (isRiskControlError(message)) {
@@ -877,15 +892,25 @@ export class PlayerController {
 
   async loadPlaylistAndPlay(items: BiliVideo[], startIndex: number,
     insertAfterCurrent: boolean = false): Promise<EnqueueResult> {
-    // 追加去重：按复合键（bvid+page，占位 0≡1）过滤掉已在歌单中的项，避免重复
+    // 追加去重：按复合键（bvid+page，占位 0≡1）过滤掉已在歌单中的项，避免重复；
+    // 互动视频无条件过滤（US3：音频流对剧情树无意义），全互动直接拦截不入队不播放
     const toAdd: BiliVideo[] = [];
     let skipped: number = 0;
+    let interactiveSkipped: number = 0;
     for (let i = 0; i < items.length; i++) {
-      if (this.indexOfItem(items[i].bvid, items[i].page) >= 0) {
+      if (items[i].isInteractive) {
+        interactiveSkipped++;
+      } else if (this.indexOfItem(items[i].bvid, items[i].page) >= 0) {
         skipped++;
       } else {
         toAdd.push(items[i]);
       }
+    }
+    if (items.length > 0 && interactiveSkipped === items.length) {
+      Logger.log('player', 'enqueue interactive blocked', `count=${items.length}`);
+      this.statusMsg = Constants.TOAST_INTERACTIVE_BLOCKED;
+      this.emitUi();
+      return EnqueueResult.INTERACTIVE;
     }
 
     // 歌单为空：整体生成并开始播放（保持首次生成的随机/顺序起点行为）
@@ -901,7 +926,11 @@ export class PlayerController {
       this.duration = 0;
       AppStore.savePlaylistFile(this.playlist, startIndex, 0, this.currentQualityCode);
       if (toAdd.length > 0) {
-        this.statusMsg = `已添加 ${toAdd.length} 首，开始播放`;
+        let startMsg: string = `已添加 ${toAdd.length} 首，开始播放`;
+        if (interactiveSkipped > 0) {
+          startMsg += `，已跳过 ${interactiveSkipped} 个互动视频`;
+        }
+        this.statusMsg = startMsg;
         this.emitUi();
         await this.playIndex(startIndex, 0);
         return EnqueueResult.STARTED;
@@ -933,6 +962,9 @@ export class PlayerController {
       : `已追加 ${toAdd.length} 首到歌单末尾`;
     if (skipped > 0) {
       msg += `，去重 ${skipped} 首`;
+    }
+    if (interactiveSkipped > 0) {
+      msg += `，已跳过 ${interactiveSkipped} 个互动视频`;
     }
     this.statusMsg = msg;
     this.emitUi();
@@ -1154,7 +1186,9 @@ export class PlayerController {
       // BiliService 抛 plain Error 时 code 为 undefined，typeof 归一为 0（取流失败通常无错误码语义）
       const code: number = typeof error.code === 'number' ? error.code : 0;
       const nextIndex: number = this.currentIndex + 1;
-      if (info.kind === PlayErrorKind.INVALID || info.kind === PlayErrorKind.VIP) {
+      const deterministic: boolean = info.kind === PlayErrorKind.INVALID || info.kind === PlayErrorKind.VIP ||
+        info.kind === PlayErrorKind.UPOWER || info.kind === PlayErrorKind.PAID;
+      if (deterministic) {
         Logger.log('player', 'play fail deterministic',
           `kind=${Number(info.kind)} bvid=${item.bvid} hasNext=${nextIndex < this.playlist.length ? 1 : 0}`);
         if (info.kind === PlayErrorKind.INVALID) {
@@ -1162,12 +1196,18 @@ export class PlayerController {
         } else {
           this.markAnomaly(item.bvid);
         }
-        this.showAnomalyToast(info.kind === PlayErrorKind.INVALID
-          ? Constants.TOAST_INVALID_SKIP : Constants.TOAST_VIP_SKIP);
+        const skipToast: string = info.kind === PlayErrorKind.INVALID ? Constants.TOAST_INVALID_SKIP
+          : info.kind === PlayErrorKind.VIP ? Constants.TOAST_VIP_SKIP
+          : info.kind === PlayErrorKind.UPOWER ? Constants.TOAST_UPOWER_SKIP
+          : Constants.TOAST_PAID_SKIP;
+        this.showAnomalyToast(skipToast);
         if (nextIndex < this.playlist.length) {
           this.playIndex(nextIndex, 0).catch((): void => {});
         } else {
-          this.stopFailedPlayback(info.kind === PlayErrorKind.INVALID ? '视频已失效' : '需要大会员');
+          const stopStatus: string = info.kind === PlayErrorKind.INVALID ? '视频已失效'
+            : info.kind === PlayErrorKind.VIP ? '需要大会员'
+            : info.kind === PlayErrorKind.UPOWER ? '需要充电' : '需要付费';
+          this.stopFailedPlayback(stopStatus);
         }
         this.emitUi();
         return;
@@ -1897,6 +1937,10 @@ export class PlayerController {
         existing.viewAt = Math.floor(Date.now() / 1000);
         existing.videoTitle = video.videoTitle !== '' ? video.videoTitle : video.title;
         existing.partTitle = video.partTitle;
+        existing.isUpowerExclusive = video.isUpowerExclusive;
+        existing.isInteractive = video.isInteractive;
+        existing.isPaid = video.isPaid;
+        existing.isVipExclusive = video.isVipExclusive;
         if (video.page > 0) {
           existing.page = video.page;
         }

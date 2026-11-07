@@ -26,6 +26,11 @@ export class PlayHistoryItem {
   @Trace page: number = 0;
   @Trace videoTitle: string = '';
   @Trace partTitle: string = '';
+  // 特殊标记（v0.7-part4）：由对应 BiliVideo 同步，历史页角标用
+  @Trace isUpowerExclusive: boolean = false;
+  @Trace isInteractive: boolean = false;
+  @Trace isPaid: boolean = false;
+  @Trace isVipExclusive: boolean = false;
 
   // playedAtMs 为毫秒时间戳（调用方传 Date.now()），内部转秒存入 viewAt
   static fromVideo(video: BiliVideo, sourceType: number, playedAtMs: number): PlayHistoryItem {
@@ -42,6 +47,10 @@ export class PlayHistoryItem {
     r.page = video.page > 0 ? video.page : 1;
     r.videoTitle = video.videoTitle !== '' ? video.videoTitle : video.title;
     r.partTitle = video.partTitle;
+    r.isUpowerExclusive = video.isUpowerExclusive;
+    r.isInteractive = video.isInteractive;
+    r.isPaid = video.isPaid;
+    r.isVipExclusive = video.isVipExclusive;
     return r;
   }
 
@@ -59,6 +68,10 @@ export class PlayHistoryItem {
       'page': this.page,
       'videoTitle': this.videoTitle,
       'partTitle': this.partTitle,
+      'isUpowerExclusive': this.isUpowerExclusive,
+      'isInteractive': this.isInteractive,
+      'isPaid': this.isPaid,
+      'isVipExclusive': this.isVipExclusive,
     };
     return rec;
   }
@@ -103,6 +116,18 @@ export class PlayHistoryItem {
     }
     if (rec['partTitle'] !== undefined) {
       r.partTitle = rec['partTitle'] as string;
+    }
+    if (rec['isUpowerExclusive'] !== undefined) {
+      r.isUpowerExclusive = rec['isUpowerExclusive'] as boolean;
+    }
+    if (rec['isInteractive'] !== undefined) {
+      r.isInteractive = rec['isInteractive'] as boolean;
+    }
+    if (rec['isPaid'] !== undefined) {
+      r.isPaid = rec['isPaid'] as boolean;
+    }
+    if (rec['isVipExclusive'] !== undefined) {
+      r.isVipExclusive = rec['isVipExclusive'] as boolean;
     }
     if (r.videoTitle === '') {
       r.videoTitle = r.title;

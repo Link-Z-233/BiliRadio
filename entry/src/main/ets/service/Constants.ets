@@ -250,6 +250,10 @@ export class Constants {
   // —— 播放失败分型文案（v0.7-part3）：确定性失败 toast（失效/大会员/时长异常）与瞬时失败重试提示 ——
   static readonly TOAST_INVALID_SKIP: string = '视频已失效，已跳过';
   static readonly TOAST_VIP_SKIP: string = '需要大会员，已跳过';
+  // —— 门禁码直报（v0.7-part4 special-marks）：充电/付费门禁跳过 toast 与互动拦截文案 ——
+  static readonly TOAST_UPOWER_SKIP: string = '需要充电，已跳过';
+  static readonly TOAST_PAID_SKIP: string = '需要付费，已跳过';
+  static readonly TOAST_INTERACTIVE_BLOCKED: string = '互动视频不支持播放';
   static readonly TOAST_NETWORK_RETRY: string = '网络异常，请检查网络后重试';
   static readonly TOAST_RISK_RETRY: string = '请求被拦截，请稍后重试';
   // —— 数据源异常提醒（v0.5-part5）：时长异常跳过 toast（报观测事实，不说明原因） ——
@@ -418,6 +422,9 @@ export class Constants {
   // 把手手动拖拽换位阈值（vp，US9 FR-026）：行起始间距 = 行高（封面 52 + 上下 padding 10×2）
   // + List space 8；无 API 实测行高，行高统一前提下取常量
   static readonly TOKEN_DRAG_SWAP_DISTANCE: number = 80;
+
+  // —— fav 批量入队详情补全（v0.7-part4 R2）：并行拉详情的有界并发上限（条），保守初值待真机校准 ——
+  static readonly TOKEN_FAV_ENQUEUE_DETAIL_CONCURRENCY: number = 3;
 }
 
 // 延时工具：全库唯一实现，供各处「等待固定时长」复用。

@@ -18,6 +18,9 @@ export class BiliVideo {
   @Trace partTitle: string = '';
   @Trace videoTitle: string = '';
   @Trace isUpowerExclusive: boolean = false;
+  @Trace isInteractive: boolean = false;
+  @Trace isPaid: boolean = false;
+  @Trace isVipExclusive: boolean = false;
   @Trace folderOwnerMid: number = 0;
 
   static create(bvid: string, aid: number, cid: number, title: string, cover: string, duration: number): BiliVideo {
@@ -51,6 +54,9 @@ export class BiliVideo {
       'partTitle': this.partTitle,
       'videoTitle': this.videoTitle,
       'isUpowerExclusive': this.isUpowerExclusive,
+      'isInteractive': this.isInteractive,
+      'isPaid': this.isPaid,
+      'isVipExclusive': this.isVipExclusive,
       'folderOwnerMid': this.folderOwnerMid,
     };
     return rec;
@@ -111,6 +117,15 @@ export class BiliVideo {
     }
     if (rec['isUpowerExclusive'] !== undefined) {
       v.isUpowerExclusive = rec['isUpowerExclusive'] as boolean;
+    }
+    if (rec['isInteractive'] !== undefined) {
+      v.isInteractive = rec['isInteractive'] as boolean;
+    }
+    if (rec['isPaid'] !== undefined) {
+      v.isPaid = rec['isPaid'] as boolean;
+    }
+    if (rec['isVipExclusive'] !== undefined) {
+      v.isVipExclusive = rec['isVipExclusive'] as boolean;
     }
     if (rec['folderOwnerMid'] !== undefined) {
       v.folderOwnerMid = rec['folderOwnerMid'] as number;

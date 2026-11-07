@@ -43,9 +43,14 @@
     { "name": "btn_border", "value": "#26000000" },
     { "name": "success_green", "value": "#34C759" },
     { "name": "warning_amber", "value": "#FF9500" },
+    { "name": "interactive_badge", "value": "#9C6BFF" },
     { "name": "item_pressed_background", "value": "#12000000" },
     { "name": "vip_badge_bg", "value": "#FB7299" },
     { "name": "vip_badge_text", "value": "#FFFFFF" },
-    { "name": "duration_badge_scrim", "value": "#99000000" }
+    { "name": "duration_badge_scrim", "value": "#99000000" },
+    { "name": "upower_pill_bg", "value": "#D9B8860B" },
+    { "name": "interactive_pill_bg", "value": "#D99C6BFF" },
+    { "name": "paid_pill_bg", "value": "#D9FF9500" },
+    { "name": "vip_pill_bg", "value": "#D9FB7299" }
   ]
 }

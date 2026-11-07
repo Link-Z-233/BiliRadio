@@ -231,6 +231,10 @@ export struct HistorySheet {
       v.page = item.page;
       v.videoTitle = item.videoTitle !== '' ? item.videoTitle : item.title;
       v.partTitle = item.partTitle;
+      v.isUpowerExclusive = item.isUpowerExclusive;
+      v.isInteractive = item.isInteractive;
+      v.isPaid = item.isPaid;
+      v.isVipExclusive = item.isVipExclusive;
       await this.controller.playDownloadedSong(v);
       connectBool(Constants.AS_SHOW_PLAYER_OVERLAY, false).value = true;
     } catch (err) {
@@ -324,6 +328,38 @@ export struct HistorySheet {
     .height('100%')
     .justifyContent(FlexAlign.Center)
     .padding({ left: Constants.TOKEN_SPACE_M, right: Constants.TOKEN_SPACE_M })
+  }
+
+  // 特殊标记标题前缀（v0.7-part4 R2）：充电/互动/付费图标、大会员「大」单字，数据来自代表分P 历史，
+  // 与行尾 X/! 分位
+  @Builder
+  specialMarkPrefix(item: PlayHistoryItem) {
+    if (item.isUpowerExclusive || item.isInteractive || item.isPaid || item.isVipExclusive) {
+      Row({ space: Constants.TOKEN_SPACE_XS }) {
+        if (item.isUpowerExclusive) {
+          SymbolGlyph($r('sys.symbol.bolt'))
+            .fontSize(Constants.TOKEN_FONT_TITLE)
+            .fontColor([$r('app.color.gold_accent')])
+        }
+        if (item.isInteractive) {
+          SymbolGlyph($r('sys.symbol.arrowshape_3_triangle_path'))
+            .fontSize(Constants.TOKEN_FONT_TITLE)
+            .fontColor([$r('app.color.interactive_badge')])
+        }
+        if (item.isPaid) {
+          SymbolGlyph($r('sys.symbol.creditcard'))
+            .fontSize(Constants.TOKEN_FONT_TITLE)
+            .fontColor([$r('app.color.warning_amber')])
+        }
+        if (item.isVipExclusive) {
+          Text('大')
+            .fontSize(Constants.TOKEN_FONT_BODY_S)
+            .fontWeight(FontWeight.Bold)
+            .fontColor($r('app.color.primary_color'))
+        }
+      }
+      .margin({ right: Constants.TOKEN_SPACE_XS })
+    }
   }
 
   private toggleSelect(key: string): void {
@@ -788,11 +824,16 @@ export struct HistorySheet {
                   CoverThumb({ cover: row.latest.cover })
 
                   Column() {
-                    Text(this.rowTitle(row))
-                      .fontSize(Constants.TOKEN_FONT_BODY_M)
-                      .fontColor($r('app.color.text_primary'))
-                      .maxLines(1)
-                      .textOverflow({ overflow: TextOverflow.Ellipsis })
+                    Row() {
+                      this.specialMarkPrefix(row.latest)
+                      Text(this.rowTitle(row))
+                        .fontSize(Constants.TOKEN_FONT_BODY_M)
+                        .fontColor($r('app.color.text_primary'))
+                        .maxLines(1)
+                        .textOverflow({ overflow: TextOverflow.Ellipsis })
+                        .layoutWeight(1)
+                    }
+                    .width('100%')
                     Text(this.historyMetaText(row.latest))
                       .fontSize(Constants.TOKEN_FONT_AUX)
                       .fontColor($r('app.color.text_secondary'))
