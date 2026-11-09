@@ -160,3 +160,6 @@
   - 免疫修法 = 位置量改复合键：高亮比 `itemKeyOf(...) === currentKey`（@Local，syncFrom 从 controller 当前条目同步，占位 0≡1 归一化天然对齐），点击/扫选/拖选经 `entryIndexOf(key)` 键实时定位下标 + -1 守卫（HistorySheet「点击时实时解析下标」同模式）；行 builder 与 LazyForEach 生成器的 index 参数应一并退场（闭包零位置量才叫根治）
   - 清理候选：QueueSheet 删除路径的 startIndex 重对齐循环 + notifyDataChange 强制重绑扫描（v0.4 bugfix #1 防崩机制）在位置量清零后成死代码候选——删除前须真机回归删除路径
 
+- v0.7-part4-special-marks R2（build-only，真机前停·未部署）：
+  - 跨模型复用 @Builder 的结构化类型坑：QueueSheet/HistorySheet 各自实现 specialMarkPrefix 时形参照抄 BiliVideo，但 HistorySheet 行数据源是 HistoryRow.latest（PlayHistoryItem）——两模型四个标记字段同构也不行，arkts-no-structural-typing + assignability 双报错；复制同构 builder 到新宿主时先核行数据源的真实模型类型，形参随宿主数据源改（builder 只读标记四字段，改形参类型即最小修复）
+

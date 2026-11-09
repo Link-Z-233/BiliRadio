@@ -467,3 +467,34 @@ csrf 用**新** bili_jct。落盘前必须 nav 验证（本项目现有事务）
 - 事实：BV 号由 av 号经 base58 混淆表（`FcwAPNKTMug3GV5Lj7EJnHpWsx4tb8haYeviqBz6rkCy12mUSDQX9RdoZf`）生成，**天然不含 0/O/I/l**；形态校验收严为 `BV[1-9A-HJ-NP-Za-km-z]{10}` 无误拦风险。
 - 旁证：PiliPlus 用宽松式 `bv1[0-9a-zA-Z]{9}`（`lib/utils/id_utils.dart:19`，仅锚定第 3 位为 1、不收字符集）——本项目取字符集级更严一级；存在性校验维持网络路径（view 接口失败提示已有）。
 
+### 3.12 特殊视频标记四链字段探针（充电/互动/付费/大会员，v0.8 special-marks 前置）
+
+**探针**（2026-11-07，PC 出口与真机同网，标准 WBI 签名 wts 参与 MD5 + TV appkey MD5 签名两链，主站/SPI/ExClimbWuzhi 暖场，请求间隔 5s 低密度）：
+
+- **APP v2/view**（`app.bilibili.com/x/v2/view`，TV appkey 签名，code=0）：充电稿 BV12RYx6TE9r 实证 `charging_pay={"level":20}`、`charging_plus={"pass":false}`、`RejectPage={"business":1,"primary_text":"该视频为「世纪风暴」专属视频","secondary_text":"开通「12元档包月充电」即可观看"}`、`attribute_v3=4`；**rights 对象无 upower/stein 系字段**（Web view 独有），`rights.elec=1` 仅表「支持充电」非专属。互动稿 BV1UE411y7Wy 实证顶层 `interaction={"graph_version":1762245,...}`。
+- **APP cursor**（UP 主列表主链）：充电稿在首页命中，充电判定**只能靠 `badges` 数组**——`[{"text":"充电专属","text_color":"#FFFFFF","bg_color":"#FF6699","bg_style":1,"icon":"..."}]`，布尔群 `is_steins`/`is_ugcpay`/`ugc_pay`/`is_pugv`/`is_pgc` 对充电稿全 false/0（无充电布尔字段）；`cover_left_text`/`cover_left_icon` 在位（本样本空）。互动正样本未取得（2019 老稿不在前 2 页，is_steins 字段在位由负样本+API 文档旁证）。
+- **Web WBI vlist**（`x/space/wbi/arc/search`）：字段群在位 `is_charging_arc`/`elec_arc_type`/`elec_arc_badge`/`is_steins_gate`/`is_pay`/`attribute`（老番茄首条 16384=bit14）；正样本未取得——小约翰可汗 -352、GoldenEggs 翻页前撞风控。
+- **seasons_archives_list / series archives**：`interactive_video`（互动，API-collect 未收录）、`ugc_pay`（付费）在位；**无充电字段**——合集/系列源可标互动+付费、不可标充电。
+- **fav**：匿名探测无公开夹可测（小约翰可汗/影视风暴无公开夹，老番茄默认夹空）；行级形状待真机登录态验证。
+- **web view**（`x/web-interface/view`）：本 PC 出口恒 HTTP 412 HTML 拦截页（暖场后仍拦，3 样本），端点级风控；rights 形状待浏览器验证。
+
+**风控状态机演变**（同出口同轮内）：space WBI 先放行（老番茄/GoldenEggs code=0）→ 特定 UP -352 → 后续请求升级 412——**同出口累计请求密度触发端点级升级**，探针须一次性低密度设计、失败不重试、跨日冷却。
+
+**重要附带发现**：项目 `WbiSigner.ets` 签名不含 wts（`md5(query+mixinKey)` 后追加 wts），标准算法 **wts 须参与 MD5**；探针用标准算法 PC 出口直接放行 space WBI（对比 §3.2 真机 -403 / §3.4 -352）——**真机 Web 链恒 -403 的真实根因即此签名 bug**（§3.2「应用侧风控未放行」、§3.4「网络出口级评分」结论被推翻：出口与设备指纹均无碍，签名修复即放行）。**已修复并真机验证**（`spec/v0.7-part3-invalid-video/bugfix.md` #1）：`signParams` 将 wts 并入签名，6 处调用点零改动；真机（MatePad Pro）刷新小约翰可汗订阅，WBI `arc/search` HTTP 200（「第1轮WBI成功」，此前恒 -403），无任何 error 条目——Web 链真机解封确认，Web vlist 字段群（`is_charging_arc`/`is_steins_gate`/`is_pay` 等）成为可用数据源。
+
+**未实测项**（浏览器/真机验证清单）：① Web vlist 充电正样本（`is_charging_arc=true` 行）与互动正样本（`is_steins_gate=true` 行）；② web view rights 的 `is_upower_exclusive` 等字段形状；③ playurl 门禁码 87007（充电专属）/87005（付费）登录态实测；④ fav resource/list 行级形状；⑤ 付费稿（`is_pay=1`）正样本（罕见）。
+
+### 3.13 真机反馈排查实测（v0.7-part4 R2 修订依据）
+
+**fav 行级形状（补 §3.12 未实测项④，2026-11-08，登录态 PC 出口，20 行样本两 API）**：旧 API `/x/v3/fav/resource/list` 与新 API `/x/v2/medialist/resource/list`（PiliPlus 行模型旁证）行级**均无任何特殊标志字段**——无 charging/stein/pay/pugv/upower 系字段，`attr` 只有私密位（bit0）含义；PiliPlus 收藏页也不渲染特殊角标。**结论：fav 行是标志盲区，仅能靠详情链补全**（本 app 收藏夹批量入队已按此实施）。
+
+**fav 批量入队标志丢失根因**：入队统一经 `fetchVideoDetail`→`parseVideoFromViewData`（`x/web-interface/view`）重建条目，初版解析漏 `rights.pay`/`rights.ugc_pay` 且充电字段读错位置（读 `rights.is_upower_exclusive`，官方文档 web view 该字段在**响应顶层**，`docs/video/info.md` 顶层 is_upower_exclusive；rights 表有 `pay`/`ugc_pay`/`is_stein_gate`）——解析侧漏字段即入队丢标志，修解析一处覆盖全部入队路径（单击/「+」添加/分享导入/fav 批量）。
+
+**互动正样本（补 §3.12 真机样本，APP view）**：BV1hT2TB9EkB「【互动视频/轮回式/剧情向】爱与你消失之日」（UP 果蝇轰 mid 8469526）——APP view `interaction={graph_version:1336134,...}` 在位、rights 全零；APP view 链互动判定以 `interaction` 对象存在为准，`rights.is_stein_gate` 是 web view 链信号。
+
+**课程归类（is_pugv）**：B 站课堂付费课程标志，属付费购买内容非大会员权益——归付费类（isPaid）；大会员专享 UGC 的权威信号为 web view `rights.pay>0`（与充电互斥判定防双标），APP cursor 链 `is_pgc` 为 PGC 引用。
+
+**web view PC 出口 412**：同日 3 样本全 412（暖场后仍拦），同 §3.12 端点级风控结论——web view rights 形状直测不可行，字段依据为官方文档旁证，真机日志验证解析命中（待回填）。
+
+**PC asar chunk 参考价值**：MineFavorite/FavoriteVideos 仅为收藏夹列表/收藏对话框组件，只读 `attr` bit0（私密），无行级角标逻辑——PC 端对 fav 角标设计无参考价值。
+
