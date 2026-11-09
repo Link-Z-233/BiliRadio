@@ -904,11 +904,10 @@ export struct QueueSheet {
   }
 
   // 特殊标记标题前缀（v0.7-part4 R2）：充电/互动/付费图标、大会员「大」单字，与行尾 ✓/X/! 分位，
-  // 多选模式隐藏（对齐既有门控）
+  // 多选模式不隐藏（用户决策，与历史面板取齐）
   @Builder
   specialMarkPrefix(video: BiliVideo) {
-    if (!this.selectMode.value &&
-      (video.isUpowerExclusive || video.isInteractive || video.isPaid || video.isVipExclusive)) {
+    if (video.isUpowerExclusive || video.isInteractive || video.isPaid || video.isVipExclusive) {
       Row({ space: Constants.TOKEN_SPACE_XS }) {
         if (video.isUpowerExclusive) {
           SymbolGlyph($r('sys.symbol.bolt'))
@@ -955,18 +954,18 @@ export struct QueueSheet {
           .fontColor(this.textSecondary())
           .margin({ left: Constants.TOKEN_SPACE_S })
       }
-      if (!this.selectMode.value && this.controller.isPartPlayed(part.bvid, part.page)) {
+      if (this.controller.isPartPlayed(part.bvid, part.page)) {
         SymbolGlyph($r('sys.symbol.checkmark_circle'))
           .fontSize(Constants.TOKEN_FONT_TITLE)
           .fontColor([$r('app.color.success_green')])
           .margin({ left: Constants.TOKEN_SPACE_XS })
       }
-      if (!this.selectMode.value && this.controller.hasInvalid(part.bvid)) {
+      if (this.controller.hasInvalid(part.bvid)) {
         SymbolGlyph($r('sys.symbol.xmark_circle'))
           .fontSize(Constants.TOKEN_FONT_TITLE)
           .fontColor([$r('app.color.danger_red')])
           .margin({ left: Constants.TOKEN_SPACE_XS })
-      } else if (!this.selectMode.value && this.controller.hasAnomaly(part.bvid)) {
+      } else if (this.controller.hasAnomaly(part.bvid)) {
         SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
           .fontSize(Constants.TOKEN_FONT_TITLE)
           .fontColor([$r('app.color.warning_amber')])
@@ -1094,7 +1093,7 @@ export struct QueueSheet {
       .margin({ left: Constants.TOKEN_SPACE_10 })
 
       // 已播标记（US4）：非当前条目且已播完时行尾绿 ✓，对齐 SourcePage NEW 徽标视觉
-      if (!this.selectMode.value && this.controller.isPlayed(entry.videos[0].bvid)) {
+      if (this.controller.isPlayed(entry.videos[0].bvid)) {
         SymbolGlyph($r('sys.symbol.checkmark_circle'))
           .fontSize(Constants.TOKEN_FONT_TITLE)
           .fontColor([$r('app.color.success_green')])
@@ -1102,12 +1101,12 @@ export struct QueueSheet {
       }
       // 失效标记（v0.7-part3）：行尾红 X（-404 无法取流），与 ✓ 同视觉档可并存；
       // 异常标记（感叹号，amber）次之：X 与感叹号防御性共存时 X 优先
-      if (!this.selectMode.value && this.controller.hasInvalid(entry.videos[0].bvid)) {
+      if (this.controller.hasInvalid(entry.videos[0].bvid)) {
         SymbolGlyph($r('sys.symbol.xmark_circle'))
           .fontSize(Constants.TOKEN_FONT_TITLE)
           .fontColor([$r('app.color.danger_red')])
           .margin({ left: Constants.TOKEN_SPACE_XS })
-      } else if (!this.selectMode.value && this.controller.hasAnomaly(entry.videos[0].bvid)) {
+      } else if (this.controller.hasAnomaly(entry.videos[0].bvid)) {
         SymbolGlyph($r('sys.symbol.exclamationmark_circle'))
           .fontSize(Constants.TOKEN_FONT_TITLE)
           .fontColor([$r('app.color.warning_amber')])

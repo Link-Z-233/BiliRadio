@@ -891,14 +891,15 @@ export class PlayerController {
   }
 
   async loadPlaylistAndPlay(items: BiliVideo[], startIndex: number,
-    insertAfterCurrent: boolean = false): Promise<EnqueueResult> {
+    insertAfterCurrent: boolean = false, allowInteractive: boolean = false): Promise<EnqueueResult> {
     // 追加去重：按复合键（bvid+page，占位 0≡1）过滤掉已在歌单中的项，避免重复；
-    // 互动视频无条件过滤（US3：音频流对剧情树无意义），全互动直接拦截不入队不播放
+    // 互动视频默认过滤（US3：音频流对剧情树无意义），全互动直接拦截不入队不播放；
+    // allowInteractive 豁免（收藏夹源不拦，修订⑩）：互动稿照常入队走默认路线
     const toAdd: BiliVideo[] = [];
     let skipped: number = 0;
     let interactiveSkipped: number = 0;
     for (let i = 0; i < items.length; i++) {
-      if (items[i].isInteractive) {
+      if (!allowInteractive && items[i].isInteractive) {
         interactiveSkipped++;
       } else if (this.indexOfItem(items[i].bvid, items[i].page) >= 0) {
         skipped++;

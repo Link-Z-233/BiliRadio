@@ -254,6 +254,8 @@ export class Constants {
   static readonly TOAST_UPOWER_SKIP: string = '需要充电，已跳过';
   static readonly TOAST_PAID_SKIP: string = '需要付费，已跳过';
   static readonly TOAST_INTERACTIVE_BLOCKED: string = '互动视频不支持播放';
+  // —— fav 批量入队过程提示（v0.7-part4 真机反馈）：详情补全数秒，确认时即时反馈 ——
+  static readonly TOAST_FAV_COMPLETING: string = '正在补全标志…';
   static readonly TOAST_NETWORK_RETRY: string = '网络异常，请检查网络后重试';
   static readonly TOAST_RISK_RETRY: string = '请求被拦截，请稍后重试';
   // —— 数据源异常提醒（v0.5-part5）：时长异常跳过 toast（报观测事实，不说明原因） ——

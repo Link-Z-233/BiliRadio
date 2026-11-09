@@ -113,6 +113,8 @@ struct SourcePage {
   @Local playedSet: Set<string> = new Set<string>();
   // 长按守卫（FR-009）：堵长按后的回退 onClick，三处多选统一模式
   private longPressGuard: LongPressGuard = new LongPressGuard();
+  // 批量入队在途标记：fav 详情补全耗时数秒，期间重复确认入队直接忽略（防重入）
+  private enqueueInFlight: boolean = false;
   private scroller: Scroller = new Scroller();
   private navPathStack: NavPathStack = new NavPathStack();
   private controller: PlayerController = PlayerController.getInstance();
@@ -334,13 +336,14 @@ struct SourcePage {
     }, (down: boolean): boolean => this.edgeAtEnd(down));
   }
 
-  // 按列表序取选中剧集批量入队（US2/US3）：复用 loadPlaylistAndPlay 全语义（空队列起播/非空
-  // 按 insertAfterCurrent 插入当前播放之后或追加队尾，不打断/复合键去重），
-  // toast 分型反馈，完成后退出多选清空集合；
+  // 按列表序取选中剧集批量入队（US2/US3）：先快照选中集再退多选（动画即刻起播，对齐队列/历史
+  // 「先退多选再操作」模式，避免网络耗时吞掉退出动画），复用 loadPlaylistAndPlay 全语义
+  // （空队列起播/非空按 insertAfterCurrent 插入当前播放之后或追加队尾，不打断/复合键去重），
+  // toast 分型反馈；fav 补全耗时数秒，确认时先弹过程提示、在途重复确认忽略（防重入）；
   // fav 行数据源无任何标志字段（BILI_NOTES §3.12）：批量入队先经详情链并行补全（修订⑥），
   // UP 源/合集行自带标志不拉详情
   private enqueueSelected(insertAfterCurrent: boolean): void {
-    if (this.selectedKeys.size === 0) {
+    if (this.enqueueInFlight || this.selectedKeys.size === 0) {
       return;
     }
     const items: BiliVideo[] = [];
@@ -349,21 +352,27 @@ struct SourcePage {
         items.push(this.episodes[i]);
       }
     }
-    const prepared: Promise<BiliVideo[]> = this.sub.type === Subscription.TYPE_FAV
+    this.exitSelectMode();
+    const favPath: boolean = this.sub.type === Subscription.TYPE_FAV;
+    const prepared: Promise<BiliVideo[]> = favPath
       ? this.completeFavItemsViaDetail(items)
       : Promise.resolve(items);
+    if (favPath) {
+      this.enqueueInFlight = true;
+      this.getUIContext().getPromptAction().showToast({ message: Constants.TOAST_FAV_COMPLETING });
+    }
     prepared.then((finalItems: BiliVideo[]): void => {
       this.stampFavSource(finalItems);
-      this.controller.loadPlaylistAndPlay(finalItems, 0, insertAfterCurrent)
+      this.controller.loadPlaylistAndPlay(finalItems, 0, insertAfterCurrent, favPath)
         .then((result: EnqueueResult): void => {
           this.getUIContext().getPromptAction().showToast({ message: PlayerController.enqueueToast(result) });
-          this.exitSelectMode();
+          this.enqueueInFlight = false;
         })
         .catch((): void => {
-          this.exitSelectMode();
+          this.enqueueInFlight = false;
         });
     }).catch((): void => {
-      this.exitSelectMode();
+      this.enqueueInFlight = false;
     });
   }
 
@@ -670,11 +679,13 @@ struct SourcePage {
 
   // 入队 + toast 分型反馈（queue-redesign：已加入队列/开始播放/已在队列中）；
   // 单击路径插入位置受「单集插入位置」设置控制（US3，点击时实时读取生效，
-  // 多选按钮为显式参/添加订阅/历史面板不受影响）
+  // 多选按钮为显式参/添加订阅/历史面板不受影响）；
+  // 收藏夹源互动稿豁免拦截（修订⑩）：单击/+ 均随源类型放行
   private enqueueAndToast(items: BiliVideo[]): void {
     this.stampFavSource(items);
     const insertAfterCurrent: boolean = AppStore.getNumber(Constants.KEY_SINGLE_INSERT_NEXT, 0) === 1;
-    this.controller.loadPlaylistAndPlay(items, 0, insertAfterCurrent)
+    this.controller.loadPlaylistAndPlay(items, 0, insertAfterCurrent,
+      this.sub.type === Subscription.TYPE_FAV)
       .then((result: EnqueueResult): void => {
         this.getUIContext().getPromptAction().showToast({ message: PlayerController.enqueueToast(result) });
       })

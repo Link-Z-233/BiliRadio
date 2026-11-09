@@ -48,9 +48,9 @@
     { "name": "vip_badge_bg", "value": "#FB7299" },
     { "name": "vip_badge_text", "value": "#FFFFFF" },
     { "name": "duration_badge_scrim", "value": "#99000000" },
-    { "name": "upower_pill_bg", "value": "#D9B8860B" },
-    { "name": "interactive_pill_bg", "value": "#D99C6BFF" },
-    { "name": "paid_pill_bg", "value": "#D9FF9500" },
-    { "name": "vip_pill_bg", "value": "#D9FB7299" }
+    { "name": "upower_pill_bg", "value": "#FFB8860B" },
+    { "name": "interactive_pill_bg", "value": "#FF9C6BFF" },
+    { "name": "paid_pill_bg", "value": "#FFFF9500" },
+    { "name": "vip_pill_bg", "value": "#FFFB7299" }
   ]
 }
