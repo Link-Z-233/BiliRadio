@@ -633,19 +633,39 @@ export struct HomePage {
     })
   }
 
+  // 订阅类型色点（US6）：按源类型映射四色（UP=蓝/收藏夹=黄/合集=紫/系列=绿）
+  private subTypeDotColor(type: string): Resource {
+    if (type === Subscription.TYPE_FAV) {
+      return $r('app.color.sub_type_fav');
+    }
+    if (type === Subscription.TYPE_SEASON) {
+      return $r('app.color.sub_type_season');
+    }
+    if (type === Subscription.TYPE_SERIES) {
+      return $r('app.color.sub_type_series');
+    }
+    return $r('app.color.sub_type_up');
+  }
+
   // 行内容内核（v0.6-part3 US1）：封面 + 文字列 + 新集徽标，layoutWeight(1) 给行首恒挂载把手真实让位
   @Builder
   private subRowCore(row: SubRow) {
     Row() {
       CoverThumb({ cover: row.sub.cover, thumbSize: 52, radius: 12 })
       Column() {
-        // 订阅列表条目剥「合集·」前缀（US4 FR-011 展示层，与详情页/导航标题同源）
-        Text(row.sub.displayTitle())
-          .fontSize(Constants.TOKEN_FONT_TITLE)
-          .fontWeight(FontWeight.Medium)
-          .fontColor($r('app.color.text_primary'))
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
+        Row({ space: Constants.TOKEN_SPACE_XS }) {
+          Circle({ width: Constants.SUB_TYPE_DOT_SIZE, height: Constants.SUB_TYPE_DOT_SIZE })
+            .fill(this.subTypeDotColor(row.sub.type))
+          // 订阅列表条目剥「合集·」前缀（US4 FR-011 展示层，与详情页/导航标题同源）
+          Text(row.sub.displayTitle())
+            .fontSize(Constants.TOKEN_FONT_TITLE)
+            .fontWeight(FontWeight.Medium)
+            .fontColor($r('app.color.text_primary'))
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .layoutWeight(1)
+        }
+        .width('100%')
         Text(row.latestTitle)
           .fontSize(Constants.TOKEN_FONT_BODY)
           .fontColor($r('app.color.text_secondary'))

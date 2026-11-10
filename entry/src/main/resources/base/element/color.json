@@ -51,6 +51,14 @@
     { "name": "upower_pill_bg", "value": "#FFB8860B" },
     { "name": "interactive_pill_bg", "value": "#FF9C6BFF" },
     { "name": "paid_pill_bg", "value": "#FFFF9500" },
-    { "name": "vip_pill_bg", "value": "#FFFB7299" }
+    { "name": "vip_pill_bg", "value": "#FFFB7299" },
+    { "name": "sub_type_up", "value": "#007AFF" },
+    { "name": "sub_type_fav", "value": "#FFB027" },
+    { "name": "sub_type_season", "value": "#AF52DE" },
+    { "name": "sub_type_series", "value": "#34C759" },
+    { "name": "sub_type_up_tint", "value": "#1F007AFF" },
+    { "name": "sub_type_fav_tint", "value": "#1FFFB027" },
+    { "name": "sub_type_season_tint", "value": "#1FAF52DE" },
+    { "name": "sub_type_series_tint", "value": "#1F34C759" }
   ]
 }

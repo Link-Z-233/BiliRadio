@@ -268,6 +268,8 @@ export class Constants {
   // —— 订阅源详情页「更多」菜单文案（v0.7-part2 US6）——
   static readonly MENU_LABEL_REFRESH: string = '刷新';
   static readonly MENU_LABEL_UNSUBSCRIBE: string = '取消订阅';
+  // 会话级排序开关菜单项（fav/season/series 显示，UP 时间序即获取语义不显示）
+  static readonly MENU_LABEL_SORT_BY_TIME: string = '按时间排序';
   // 下拉刷新自定义提示区文案（US6 真机反馈修正，refreshingContent 承载，onStateChange 全状态机切换）
   static readonly REFRESH_HINT_PULL: string = '下拉刷新';
   static readonly REFRESH_HINT_RELEASE: string = '释放刷新';
@@ -427,6 +429,9 @@ export class Constants {
 
   // —— fav 批量入队详情补全（v0.7-part4 R2）：并行拉详情的有界并发上限（条），保守初值待真机校准 ——
   static readonly TOKEN_FAV_ENQUEUE_DETAIL_CONCURRENCY: number = 3;
+
+  // —— 首页订阅行类型色点（v0.7-part5 US6）——
+  static readonly SUB_TYPE_DOT_SIZE: number = 8;
 }
 
 // 延时工具：全库唯一实现，供各处「等待固定时长」复用。

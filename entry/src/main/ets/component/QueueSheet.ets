@@ -316,6 +316,9 @@ export struct QueueSheet {
     const latest: PlayHistoryItem | null = this.controller.latestHistoryOf(head.bvid);
     const targetPage: number = latest !== null ? latest.page : this.minEntryPage(entry);
     const idx: number = this.indexOfQueueItem(head.bvid, targetPage);
+    if (BiliVideo.itemKeyOf(head.bvid, targetPage) === this.currentKey) {
+      return;
+    }
     if (idx >= 0) {
       this.controller.playIndex(idx, 0);
       return;
@@ -991,6 +994,9 @@ export struct QueueSheet {
       if (this.selectMode.value) {
         this.toggleSelect(entry.key);
       } else {
+        if (BiliVideo.itemKeyOf(part.bvid, part.page) === this.currentKey) {
+          return;
+        }
         const idx: number = this.indexOfQueueItem(part.bvid, part.page);
         if (idx >= 0) {
           this.controller.playIndex(idx, 0);
@@ -1132,7 +1138,10 @@ export struct QueueSheet {
       if (this.selectMode.value) {
         this.toggleSelect(entry.key);
       } else {
-        // 仅切换歌曲，不跳转播放页
+        // 点击正在播放条目无操作（不打断播放）；其余仅切换歌曲，不跳转播放页
+        if (BiliVideo.itemKeyOf(entry.videos[0].bvid, entry.videos[0].page) === this.currentKey) {
+          return;
+        }
         const idx: number = this.indexOfQueueItem(entry.videos[0].bvid, entry.videos[0].page);
         if (idx >= 0) {
           this.controller.playIndex(idx, 0);

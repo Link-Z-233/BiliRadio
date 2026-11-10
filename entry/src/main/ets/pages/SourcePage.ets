@@ -1,4 +1,4 @@
-import { componentUtils, ComponentContent } from '@kit.ArkUI';
+import { componentUtils, ComponentContent, SymbolGlyphModifier } from '@kit.ArkUI';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { Subscription } from '../model/Subscription';
 import { BiliVideo } from '../model/BiliVideo';
@@ -11,7 +11,6 @@ import { AppStore } from '../service/AppStore';
 import { Constants } from '../service/Constants';
 import { dismissOverlaysForBack } from '../service/BackHandler';
 import { SelectLogic, LongPressGuard, SweepSession, RowDragSession, EdgeAutoScroller } from '../service/SelectLogic';
-import { Appearance } from '../service/Appearance';
 import { connectNum, connectStr, NumState, StrState } from '../service/V2State';
 import { CoverThumb } from '../component/CoverThumb';
 import { SelectCheckbox } from '../component/SelectCheckbox';
@@ -86,7 +85,9 @@ struct SourcePage {
     connectStr(Constants.AS_ACCENT_COLOR, Constants.ACCENT_DEFAULT);
   @Local navBarHeight: NumState = connectNum(Constants.AS_NAV_BAR_HEIGHT, 0);
   @Local navTitle: string = '';
-  @Local episodes: BiliVideo[] = [];      // 展示序：倒序（新在上，与缓存一致）
+  @Local episodes: BiliVideo[] = [];      // 展示序：UP=发布时间倒序，fav/season/series=接口返回序（会话开关可重排）
+  @Local sortByTime: boolean = false;     // 会话级「按时间排序」开关（不持久化，重进源页复位）
+  private fetchOrder: string[] = [];      // 获取顺序行序基准（bvid 序列，开关关闭时按键索引还原）
   @Local refreshing: boolean = false;
   @Local canLoadOlder: boolean = false;
   @Local loadingOlder: boolean = false;
@@ -143,6 +144,32 @@ struct SourcePage {
       return '合集';
     }
     return '系列';
+  }
+
+  private typeColor(): Resource {
+    if (this.sub.type === Subscription.TYPE_UP) {
+      return $r('app.color.sub_type_up');
+    }
+    if (this.sub.type === Subscription.TYPE_FAV) {
+      return $r('app.color.sub_type_fav');
+    }
+    if (this.sub.type === Subscription.TYPE_SEASON) {
+      return $r('app.color.sub_type_season');
+    }
+    return $r('app.color.sub_type_series');
+  }
+
+  private typeTintColor(): Resource {
+    if (this.sub.type === Subscription.TYPE_UP) {
+      return $r('app.color.sub_type_up_tint');
+    }
+    if (this.sub.type === Subscription.TYPE_FAV) {
+      return $r('app.color.sub_type_fav_tint');
+    }
+    if (this.sub.type === Subscription.TYPE_SEASON) {
+      return $r('app.color.sub_type_season_tint');
+    }
+    return $r('app.color.sub_type_series_tint');
   }
 
   // 源内总集数（接口 total/count 真值）优先；未知回退已加载数（近期一页 + 滚动追加）
@@ -436,9 +463,17 @@ struct SourcePage {
   }
 
   private loadFromCache(): void {
-    // 缓存本身即新→旧（SubscriptionStore 刷新时按 pubdate 倒序落盘），直接按缓存顺序渲染
+    // 缓存序即获取序（SubscriptionStore 刷新时 UP 按发布时间倒序落盘，其余保留接口返回序），
+    // 直接按缓存顺序渲染；开关在途刷新时保持时间序不变式
     const cached: BiliVideo[] = SubscriptionStore.loadEpisodes(this.sub.id);
     this.episodes = cached.slice();
+    this.fetchOrder = [];
+    for (let i = 0; i < cached.length; i++) {
+      this.fetchOrder.push(cached[i].bvid);
+    }
+    if (this.sortByTime) {
+      this.applySortByTime(true);
+    }
     this.episodeCount = this.episodes.length;
     this.olderPage = 1;
     this.upWebLastPage = 0;
@@ -546,6 +581,30 @@ struct SourcePage {
     this.playedSet = played;
   }
 
+  // 会话级排序开关切换（纯内存 0 请求）：开启=episodes 按发布时间降序重排，
+  // 关闭=按 fetchOrder 键索引还原接口返回顺序
+  private applySortByTime(on: boolean): void {
+    this.sortByTime = on;
+    const next: BiliVideo[] = this.episodes.slice();
+    if (on) {
+      next.sort((a: BiliVideo, b: BiliVideo): number => b.pubdate - a.pubdate);
+    } else {
+      const order: Map<string, number> = new Map<string, number>();
+      for (let i = 0; i < this.fetchOrder.length; i++) {
+        order.set(this.fetchOrder[i], i);
+      }
+      next.sort((a: BiliVideo, b: BiliVideo): number =>
+        (order.get(a.bvid) ?? this.fetchOrder.length) - (order.get(b.bvid) ?? this.fetchOrder.length));
+    }
+    this.episodes = next;
+  }
+
+  private sortToggleEndIcon(): SymbolGlyphModifier {
+    const m: SymbolGlyphModifier = new SymbolGlyphModifier($r('sys.symbol.checkmark'));
+    m.fontColor([this.accentColor.value]);
+    return m;
+  }
+
   private refreshSource(): void {
     this.refreshing = true;
     SubscriptionStore.refreshSubscription(this.sub).then((): void => {
@@ -595,9 +654,15 @@ struct SourcePage {
       }
       this.olderPage = nextPage;
       if (fresh.length > 0) {
-        // 翻页链与缓存链排序基准可能漂移，追加后整体按发布时间降序重排，防乱序跳条
+        // fetchOrder 与 episodes 追加必须同步：漏记导致关闭排序开关无法还原获取顺序
+        for (let i = 0; i < fresh.length; i++) {
+          this.fetchOrder.push(fresh[i].bvid);
+        }
         this.episodes = this.episodes.concat(fresh);
-        this.episodes.sort((a: BiliVideo, b: BiliVideo): number => b.pubdate - a.pubdate);
+        // UP（双链合并漂移防乱序）或开关开启时追加后整体按发布时间降序重排，否则直接追加尾部
+        if (this.sub.type === Subscription.TYPE_UP || this.sortByTime) {
+          this.episodes.sort((a: BiliVideo, b: BiliVideo): number => b.pubdate - a.pubdate);
+        }
         this.episodeCount = this.episodes.length;
       }
       if (this.sub.type === Subscription.TYPE_FAV) {
@@ -947,7 +1012,7 @@ struct SourcePage {
   // 页头（US3 FR-008/009/010）：List 首个 ListItem 随列表滚动离屏/回顶再现；
   // 水平 padding 与剧集行同令牌（List S + 行 M），封面左缘与剧集缩略图对齐；
   // 名称大字（displayTitle，合集·前缀已剥）+ 集数同行右对齐 + 标签行（类型胶囊 + UP 主）；
-  // 收藏夹不渲染 UP 主行（FR-009），胶囊为 accent 淡底内联实现（单使用点不抽组件）
+  // 收藏夹不渲染 UP 主行（FR-009），胶囊为类型四色淡底内联实现（单使用点不抽组件）
   @Builder
   private headerRow() {
     Row() {
@@ -971,14 +1036,14 @@ struct SourcePage {
         Row({ space: Constants.TOKEN_SPACE_S }) {
           Text(this.typeLabel())
             .fontSize(Constants.TOKEN_FONT_BODY_S)
-            .fontColor(this.accentColor.value)
+            .fontColor(this.typeColor())
             .padding({
               left: Constants.TOKEN_SPACE_S,
               right: Constants.TOKEN_SPACE_S,
               top: Constants.TOKEN_SPACE_XXS,
               bottom: Constants.TOKEN_SPACE_XXS
             })
-            .backgroundColor(Appearance.hexWithAlpha(this.accentColor.value, 0.12))
+            .backgroundColor(this.typeTintColor())
             .borderRadius(Constants.TOKEN_RADIUS_S)
           if ((this.sub.type === Subscription.TYPE_SEASON || this.sub.type === Subscription.TYPE_SERIES) &&
             this.sub.upperName !== '') {
@@ -1095,6 +1160,15 @@ struct SourcePage {
   @Builder
   private moreMenuBuilder() {
     Menu() {
+      if (this.sub.type !== Subscription.TYPE_UP) {
+        MenuItem({
+          content: Constants.MENU_LABEL_SORT_BY_TIME,
+          symbolEndIcon: this.sortByTime ? this.sortToggleEndIcon() : undefined
+        })
+          .onClick(() => {
+            this.applySortByTime(!this.sortByTime);
+          })
+      }
       MenuItem({ content: Constants.MENU_LABEL_REFRESH })
         .onClick(() => {
           this.refreshSource();

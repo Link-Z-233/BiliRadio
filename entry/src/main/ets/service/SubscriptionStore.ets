@@ -174,7 +174,8 @@ export class SubscriptionStore {
     SubscriptionStore.saveSubscriptions(alive);
   }
 
-  // 刷新单个订阅：按类型分发拉取，统一存为新集在前，并更新刷新时间与最新发布时间
+  // 刷新单个订阅：按类型分发拉取（UP 合并双链后按发布时间倒序，fav/season/series 保留接口返回序），
+  // 更新刷新时间与最新发布时间
   // ponytail: 契约——四类源统一「近期一页」语义（up=30/fav=20/season=20/series=30），
   // saveEpisodes 整体覆盖写，sub_cache 只存近期条目；单集播放按需 fetchVideoInfo+取流；
   // 超过页大小的新集会少计（播客语义可接受）；SourcePage 滚动追加更老条目时只进内存不写缓存
@@ -200,6 +201,7 @@ export class SubscriptionStore {
       } catch (webErr) {
         hilog.warn(Constants.LOG_DOMAIN, Constants.LOG_TAG, 'UP Web补稠失败: %{public}s', sub.id);
       }
+      items.sort((a: BiliVideo, b: BiliVideo): number => b.pubdate - a.pubdate);
     } else if (sub.type === Subscription.TYPE_FAV) {
       // 只取最新一页（20 条）：播客「近期节目」语义，超大收藏夹不做全量刷新
       const result: FolderFetchResult = await BiliService.fetchFolderVideos(sub.sourceId, 0, undefined, 1);
@@ -215,10 +217,15 @@ export class SubscriptionStore {
     } else {
       throw new Error(`未知订阅类型: ${sub.type}`);
     }
-    items.sort((a: BiliVideo, b: BiliVideo): number => b.pubdate - a.pubdate);
     sub.lastRefreshAt = Date.now();
-    if (items.length > 0 && items[0].pubdate > 0) {
-      sub.latestPubAt = items[0].pubdate;
+    let maxPubdate: number = 0;
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].pubdate > maxPubdate) {
+        maxPubdate = items[i].pubdate;
+      }
+    }
+    if (maxPubdate > 0) {
+      sub.latestPubAt = maxPubdate;
     }
     // 收藏夹/合集列表接口不返回封面与 UP 名，用最新一集回填
     if (sub.cover === '' && items.length > 0 && items[0].cover !== '') {
