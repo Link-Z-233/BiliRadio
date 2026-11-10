@@ -74,7 +74,7 @@ entry/src/main/ets/
 - **Rationale**: FR-004/005/006 直接落地；返回优先级与既有浮层返回链一致。
 - **Alternatives considered**: 页头内放退出按钮（放弃——页头会滚出视口，退出入口不可达）。
 
-**D6**（已移出：见 spec/charging-archive.md）
+**D6**（已移出：见 spec/archive/charging-archive.md）
 
 **D7 留白收窄档位**
 - **Decision**: 页头与剧集列表外边距统一收窄为 `TOKEN_SPACE_S`（8vp）：List 左右 padding `TOKEN_SPACE_M`→`TOKEN_SPACE_S`，页头容器左右 `TOKEN_SPACE_L`→`TOKEN_SPACE_S`；行内 padding 不动（卡片内文字边距维持，仅卡片整体变宽）。

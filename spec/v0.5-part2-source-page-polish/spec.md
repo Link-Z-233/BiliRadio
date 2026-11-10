@@ -64,7 +64,7 @@
 
 ---
 
-### User Story 4 - 充电视频标记 (Priority: P2)（已移出：见 spec/charging-archive.md）
+### User Story 4 - 充电视频标记 (Priority: P2)（已移出：见 spec/archive/charging-archive.md）
 
 ---
 
@@ -139,7 +139,7 @@
 - **FR-006**: 多选模式 MUST 可被系统返回键退出（优先于页面返回）
 - **FR-007**: 页头 MUST 随列表滚动（不固定），滚回顶部完整再现
 - **FR-008**: 页头封面与右侧文字块高度 MUST 一致
-- **FR-009**:（已移出：见 spec/charging-archive.md）
+- **FR-009**:（已移出：见 spec/archive/charging-archive.md）
 - **FR-010**: 页面左右留白 MUST 较现状收窄一档（数值统一经 Constants 令牌，禁裸数字）
 - **FR-011**: 上轮既有功能 MUST 全部回归：NEW 徽标、已播标记、触底加载更早（四类翻页链路）、退订二次确认、空态、按压态、行封面与时长角标
 - **FR-012**: 根目录 MUST 新建 `BILI_API.md`，含三部分：本项目 API 探索汇总（在用端点/坑/对策）、biliRelay API 探索内容迁移（剔除非 API 内容）、本轮充电实测结论
@@ -158,7 +158,7 @@
 - **SC-001**: 顶栏收纳后页面常驻操作元素只剩「···」一个，页头无任何图标按钮（多选按钮除外）
 - **SC-002**: 用户从进入多选到完成批量入队 ≤ 4 步（多选→选集→全选可选→加入队列）
 - **SC-003**: 7 项调整全部落地且 FR-011 回归清单零缺失（构建验证 + 真机自查）
-- **SC-004**:（已移出：见 spec/charging-archive.md）
+- **SC-004**:（已移出：见 spec/archive/charging-archive.md）
 - **SC-005**: `BILI_API.md` 三部分内容齐全（FR-012），biliRelay API 相关内容迁移无遗漏
 
 ## Assumptions

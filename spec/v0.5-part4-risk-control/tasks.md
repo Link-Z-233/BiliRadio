@@ -73,7 +73,7 @@
 
 - [X] T010 Build：arkts_check 预检本轮全部改动 .ets 后 devecocli build，编译错误修复循环直至成功（一次通过，零错误）
 - [ ] T011 Deploy：devecocli run --skip-build --device 192.168.11.122:43719（真机无线调试；设备未连接时跳过并报告）（跳过：设备离线，devecocli device list 空 + hdc tconn 连接失败）
-- [ ] T012 hilog 判定与终态登记：真机开调试模式后触发刷新（冷启动或手动），hdc 拉 hilog 判 WBI 轮结果——判据：`[net] UP投稿列表 | 第N轮WBI成功`（过墙）vs `第N轮WBI失败 ... Bili API error -403`（仍拦截）；按结果登记：成功→回写 spec/charging-archive.md 终态；失败/同栈跳过→补录 BILI_API.md §3 实验终态（hdc 路径：`D:\Program Files\Huawei\DevEco Studio\sdk\default\openharmony\toolchains\hdc.exe`）（跳过：依赖 T011 部署，设备离线 hilog 不可得；BILI_API.md §3.4 登记维持前置检查结论，真机观测待设备可达后补）
+- [ ] T012 hilog 判定与终态登记：真机开调试模式后触发刷新（冷启动或手动），hdc 拉 hilog 判 WBI 轮结果——判据：`[net] UP投稿列表 | 第N轮WBI成功`（过墙）vs `第N轮WBI失败 ... Bili API error -403`（仍拦截）；按结果登记：成功→回写 spec/archive/charging-archive.md 终态；失败/同栈跳过→补录 BILI_API.md §3 实验终态（hdc 路径：`D:\Program Files\Huawei\DevEco Studio\sdk\default\openharmony\toolchains\hdc.exe`）（跳过：依赖 T011 部署，设备离线 hilog 不可得；BILI_API.md §3.4 登记维持前置检查结论，真机观测待设备可达后补）
 
 ---
 

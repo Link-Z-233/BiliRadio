@@ -1,6 +1,6 @@
 # Tasks: v0.5-part3（订阅详情交互打磨 + 反馈完善与登记）
 
-**Input**: Design documents from `spec/v0.5-part3-registry/`（spec.md / plan.md / spec/charging-archive.md）
+**Input**: Design documents from `spec/v0.5-part3-registry/`（spec.md / plan.md / spec/archive/charging-archive.md）
 **Prerequisites**: plan.md（required）、spec.md（required）——均已在位
 **Tests**: 未要求测试任务，不含。
 
@@ -75,7 +75,7 @@
 - [X] T014 [P] [US7] Constants HISTORY_MAX 200→300（共享常量一升俱升，不拆分）— entry/src/main/ets/service/Constants.ets
 - [X] T015 [US7] HistorySheet 列表尾容量提示行（居中小字「仅保留最近 N 条播放记录」N 动态引用 HISTORY_MAX；不可交互、空态不渲染、多选/删除后仍居队尾、位于面板底部渐隐带之上）— entry/src/main/ets/component/HistorySheet.ets
 
-## Phase 8: US8 - 充电视频 (Priority: P3，探针门控组)（已移出：见 spec/charging-archive.md）
+## Phase 8: US8 - 充电视频 (Priority: P3，探针门控组)（已移出：见 spec/archive/charging-archive.md）
 
 ## Phase 9: Polish（跨故事清账）
 

@@ -117,7 +117,7 @@
 
 ---
 
-### User Story 8 - 充电视频（条件项） (Priority: P3)（已移出：见 spec/charging-archive.md）
+### User Story 8 - 充电视频（条件项） (Priority: P3)（已移出：见 spec/archive/charging-archive.md）
 
 ---
 
@@ -152,8 +152,8 @@
 - **FR-015**: 播放链路静默吞错点 MUST 全量梳理，错误路径不得无痕失败
 - **FR-016**: 播放历史本地保留上限 MUST 升至 300（新记录超限截断、最新在前），既有数据无缝兼容
 - **FR-017**: 历史列表尾 MUST 恒显居中提示「仅保留最近 300 条播放记录」（列表非空；不可交互；多选/删除后仍居队尾；空态不显示；提示数字与上限同源）
-- **FR-018**:（已移出：见 spec/charging-archive.md）
-- **FR-019**:（已移出：见 spec/charging-archive.md）
+- **FR-018**:（已移出：见 spec/archive/charging-archive.md）
+- **FR-019**:（已移出：见 spec/archive/charging-archive.md）
 - **FR-020**: 队列整行拖选中残留的宽屏门禁（对应多列布局已移除）MUST 梳理：确认为死逻辑则摘除且行为不变；若承担实际手势冲突职责则保留并登记原因
 
 ### Key Entities
@@ -170,7 +170,7 @@
 - **SC-002**: 四类订阅详情页头信息完整（对齐/名称/UP 主规则/类型标签），「合集·」前缀在三个展示位均不可见
 - **SC-003**: 播放错误路径抽样 100% 有用户可见提醒且日志可查
 - **SC-004**: 历史上限 300 生效、尾注提示显示、既有数据零丢失
-- **SC-005**:（已移出：见 spec/charging-archive.md）
+- **SC-005**:（已移出：见 spec/archive/charging-archive.md）
 
 ## Assumptions
 

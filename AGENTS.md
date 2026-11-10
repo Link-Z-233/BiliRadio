@@ -99,7 +99,7 @@ BiliRadio — HarmonyOS NEXT 单模块 B 站电台应用。本文件是 AI 代�
 - **仓库根** — 门面 + 每轮必读：`README.md`、`AGENTS.md`（本文件）、`LICENSE`、`BILI_NOTES.md`
 - **`docs/`** — 活文档：架构与模块边界（`architecture.md`）、登记（`token-exemptions.md`）、操作手册（`SECURITY.md`）、已知问题（`PROJECT_NOTES.md`）
 - **`docs/agents/`** — AI 指令文档（调用声明见下）
-- **`spec/`** — 轮次仓库（历轮 spec/plan/tasks 工件，历史文档不得改动）+ 轮次强绑定存档（`charging-archive.md`）；`feature.json` 指向活跃目录
+- **`spec/`** — 轮次仓库（历轮 spec/plan/tasks 工件，历史文档不得改动）+ 结档收容（`spec/archive/`，已终态调查档案）；`feature.json` 指向活跃目录
 - **文档引用一律相对路径**：文档中引用仓库内路径相对仓库根（如 `entry/src/main/ets/`），引用仓库外路径相对仓库根（如 `../../bili/PiliPlus`），禁绝对路径
 - **活文档随代码同步**：源码结构变化（文件增删/职责变更）须同步 `docs/architecture.md` 对应表；模块边界/耦合点、导航层序、状态管理机制变化同步其对应章节
 - **同一事实一处维护**：活文档间禁止重复记载同一事实，重复处以指针代替；整合或删除文档时同步更新全部活文档引用，历史 spec 引用按归档语义不动（先例：architecture-boundary.md 整合入 architecture.md）

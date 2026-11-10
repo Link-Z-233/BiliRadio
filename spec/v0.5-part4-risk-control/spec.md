@@ -64,7 +64,7 @@ Web 补稠链被风控拦截后进入冷却：冷却期内刷新只走 APP 签�
 
 ---
 
-### User Story 4 - 过墙实验（单方案） (Priority: P2)（已移出：见 spec/charging-archive.md）
+### User Story 4 - 过墙实验（单方案） (Priority: P2)（已移出：见 spec/archive/charging-archive.md）
 
 ### Edge Cases
 
@@ -84,7 +84,7 @@ Web 补稠链被风控拦截后进入冷却：冷却期内刷新只走 APP 签�
 - **FR-005**: 手动刷新结束 MUST toast 结果（成功提示已更新 / 失败带原因）
 - **FR-006**: 首页静默刷新失败 MUST toast（复用时间窗去重）；CD 跳过 MUST NOT 提示
 - **FR-007**: 过墙实验 MUST 先做前置检查（rcp 与 `@ohos.net.http` TLS 栈异同）；同栈无差异可试则登记后按失败分支收尾
-- **FR-008**:（已移出：见 spec/charging-archive.md）
+- **FR-008**:（已移出：见 spec/archive/charging-archive.md）
 - **FR-009**: 全程 APP 签名链供数 MUST 无行为回归（红线——四类源数据可用性不因本轮改动受损）
 
 ### Key Entities *(include if feature involves data)*
@@ -101,7 +101,7 @@ Web 补稠链被风控拦截后进入冷却：冷却期内刷新只走 APP 签�
 - **SC-002**: 被拦状态下单次刷新失败请求 6→0（Web 冷却生效后）
 - **SC-003**: 重试全程 buvid 非空且身份不变
 - **SC-004**: 手动刷新 100% 有结果 toast；CD 跳过零 toast；连续失败不弹串
-- **SC-005**:（已移出：见 spec/charging-archive.md）
+- **SC-005**:（已移出：见 spec/archive/charging-archive.md）
 
 ## Assumptions
 

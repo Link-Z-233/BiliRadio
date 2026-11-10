@@ -28,7 +28,7 @@
 ## Phase 2: Foundational（阻塞前置）
 
 - [X] T004 `Constants` 新增 `SOURCE_HEADER_H = 56` 令牌（页头等高基准，收敛现有 56 裸数字），落在 `entry/src/main/ets/service/Constants.ets`
-- [X] T005（已移出：见 spec/charging-archive.md）
+- [X] T005（已移出：见 spec/archive/charging-archive.md）
 
 ---
 
@@ -70,7 +70,7 @@
 
 ---
 
-## Phase 6: User Story 4 - 充电视频标记（实测定夺） (Priority: P2)（已移出：见 spec/charging-archive.md）
+## Phase 6: User Story 4 - 充电视频标记（实测定夺） (Priority: P2)（已移出：见 spec/archive/charging-archive.md）
 
 ---
 

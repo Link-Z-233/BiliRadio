@@ -116,7 +116,7 @@ entry/src/main/ets/
 - **Rationale**: 共用无功能影响（跳转栈历史本就该同容量）；拆分徒增常量违省事原则
 - **Alternatives considered**: 拆 PLAY_HISTORY_MAX / JUMP_STACK_MAX（无实际差异）
 
-### D11（已移出：见 spec/charging-archive.md）
+### D11（已移出：见 spec/archive/charging-archive.md）
 
 ### D12 FR-020 = 宽屏残骸摘除，滚动保护语义保留
 
