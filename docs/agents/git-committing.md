@@ -56,8 +56,8 @@ feat: v0.6-part3-sub-manage（订阅源管理：长按菜单/排序编辑态/导
 
 ## 五、签名材料绝不入 git
 
-- 三层防护：`signing.local.json5`（.gitignore 隔离）、pre-commit 特征拦截（`.githooks` 随仓库传播，hvigorfile.ts 首次构建激活）、调试签名恢复流程
-- pre-commit 拒绝时：把签名材料移回 `signing.local.json5`、根 `build-profile.json5` 的 `signingConfigs` 恢复空数组 `[]` 后重新提交
+- 两层防护：`signing.local.json5`（.gitignore 隔离）、根 `build-profile.json5` 基线空数组、调试签名恢复流程
+- 发现签名材料在暂存区时：把签名材料移回 `signing.local.json5`、根 `build-profile.json5` 的 `signingConfigs` 恢复空数组 `[]` 后重新提交
 - 详见 docs/SECURITY.md
 
 ## 六、推送

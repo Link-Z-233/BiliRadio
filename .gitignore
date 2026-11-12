@@ -32,7 +32,7 @@ signing/
 # 根 build-profile.json5 为 git 追踪文件（signingConfigs 恒为空数组）：
 # 签名材料只写入被上方 *.local.json5 规则忽略的外置文件（signing.local.json5 /
 # build-profile.local.json5），由 hvigorfile.ts 构建时动态加载；
-# .git/hooks/pre-commit 会拦截任何把签名材料写入根文件的提交。
+# 材料误入根文件时须提交前手动移出（docs/SECURITY.md）。
 
 # 本地配置与敏感环境变量
 .env

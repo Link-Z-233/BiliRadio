@@ -80,7 +80,7 @@ BiliRadio — HarmonyOS NEXT 单模块 B 站电台应用。本文件是 AI 代�
 ## Git 提交
 
 - **任何 commit/push 前读 `docs/agents/git-committing.md`**——提交时机与前置自查、提交粒度（默认按轮次一提交）、提交信息格式与范例、暂存纪律（git mv / git rm -f / 签名检查）、推送
-- **签名材料绝不入 git**：三层防护、pre-commit 拦截、调试签名恢复，详见 `docs/SECURITY.md`
+- **签名材料绝不入 git**：两层防护（`.gitignore` 外置隔离、根文件基线空数组）、调试签名恢复，详见 `docs/SECURITY.md`
 
 ## 技术基线与架构
 

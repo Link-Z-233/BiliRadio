@@ -87,7 +87,7 @@ BiliRadio
 
 ## 贡献指引
 
-欢迎提交 Issue 或 Pull Request。注意：把签名材料写入根 `build-profile.json5` 的提交会被 pre-commit 钩子拒绝（钩子随仓库传播，详见 [SECURITY.md](docs/SECURITY.md)）；不要在 Issue/PR 中粘贴真实 Cookie 或签名口令。
+欢迎提交 Issue 或 Pull Request。注意：签名材料写入根 `build-profile.json5` 会随git提交（可放在被 `.gitignore` 忽略的 `signing.local.json5`，详见 [SECURITY.md](docs/SECURITY.md)）；不要在 Issue/PR 中粘贴真实 Cookie 或签名口令。
 
 ## License
 
