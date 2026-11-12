@@ -673,6 +673,19 @@ export class PlayerController {
       this.mediaSession.updateState(false, this.currentTime);
       this.setPlaying(false);
     } else if (state === 'completed') {
+      // 提前 EOF 守卫：断网连接重置/截断流会被内核当流结束上报 completed——进度远未达完播阈值时
+      // 不标 -1 不跳歌（瞬时失败停等人工），isPrepared 复位使点播放走 playIndex 从断点重取流；
+      // duration 未知（=0）无从判定，维持既有完播语义
+      if (this.duration > 0 && this.currentTime < this.duration * Constants.PLAY_COMPLETE_RATIO) {
+        Logger.log('player', 'premature completed',
+          `bvid=${this.currentBvid()} pos=${this.currentTime} duration=${this.duration}`);
+        this.persistProgress();
+        this.isPrepared = false;
+        this.stopFailedPlayback(Constants.TOAST_PLAYBACK_ERROR);
+        this.playbackError('play', 0, this.currentBvid());
+        this.emitUi();
+        return;
+      }
       this.setPlaying(false);
       this.mediaSession.updateState(false, this.currentTime);
       // 完播标记（plan R5①）：自然播完 → 当前条目 progress=-1 即时写盘
@@ -1602,9 +1615,14 @@ export class PlayerController {
           return;
         }
         const error2 = err2 as BusinessError;
-        this.isPreparing = false;
-        this.statusMsg = `切换音质失败: ${error2.message}`;
         Logger.log('player', 'quality restore failed', error2.message);
+        // 恢复失败停口（镜像 stopFailedPlayback 语义）：旧流已释放、新流未起——isPrepared 陈旧 true
+        // 会令点播放走 player.play() 空操作卡死，须复位使点播放走 playIndex 从断点重取流
+        this.isPreparing = false;
+        this.isPrepared = false;
+        this.persistProgress();
+        this.stopFailedPlayback('切换音质失败');
+        this.playbackError('play', 0, this.currentBvid(), '切换音质失败');
         this.emitUi();
       }
     }
